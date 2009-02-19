@@ -1,7 +1,7 @@
-/*  zpaq v0.01 archiver and file compressor.
+/*  zpaq v0.02 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 15, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 17, 2009.
 
     LICENSE
 
@@ -56,6 +56,9 @@ Options for development:
       output is omitted, write to stdout. If input is omitted, read
       from stdin.
 
+  sconfig - Compile config and output in the format of a C array
+      initialization list.
+
 The configuration file has the following format:
 
   COMP hh hm ph pm n
@@ -73,7 +76,7 @@ case sensitive. Numeric values are mod 256. For example:
   comp 0 0 0 0 1
     0 cm 20 12
   hcomp
-    *d<>a a+=*d a*=192 *d=a
+    *d<>a a+=*d a*= 192 *d=a
     halt
   post
     pass
@@ -108,25 +111,29 @@ Instructions have the forms:
   - where R is A B C D *B *C *D (0...255)
 - AxR
   - where x is += -= *= /= %= &= &~ |= ^= <<= >>= == < >
-  - R as before
 - Ly
-  - L as before
   - where y is <>A ++ -- ! =0
   - except A<>A is not valid.
 - J Z
   - where J is JT JF JMP
   - where Z is a number in (-128...127)
-- S.=N
-  - where S is A B C D *D
-  - where N is a number in (0...255)
+- LJ M
+  - where M is in (0...65535) (2 bytes, LSB first).
+- S=R N
+  - where S is A B C D
+- R=A N
 - ERROR
 - HALT
 - OUT
-- JMP
 - HASH
 - HASHD
 
-The only POST command is PASS, which does no post-processing.
+Numeric operands for 2 byte instructions must be separated by
+a space, as in "A= 3". Note that "L=0" is a 1 byte instruction,
+and "L= 0" is a 2 byte instruction. "LJ M" is a 3 byte instruction
+with M coded as 2 bytes, LSB first. Negative operands to JT, JF, and
+JMP are coded mod 256.
+
 
 To compile: g++ -O3 -march=pentiumpro -fomit-frame-pointer -s zpaq.cpp -o zpaq
 To turn off assertion checking (faster), compile with -DNDEBUG
@@ -209,15 +216,15 @@ static const int compsize[256]={0,2,3,2,2,4,6,6,6,6};
 static const char* compname[]=
   {"","const","cm","icm","match","avg","mix2","mix","imix2","sse",0};
 
-// Opcodes from ZPAQ spec, table 1, with "X=0" replaced with "X=".
+// Opcodes from ZPAQ spec, table 1, without operands (N, M)".
 static const char* opcodelist[258]={
-"error","a++",  "a--",  "a!",   "a=",   "",     "",     "a.=",
-"b<>a", "b++",  "b--",  "b!",   "b=",   "",     "",     "b.=",
-"c<>a", "c++",  "c--",  "c!",   "c=",   "",     "",     "c.=",
-"d<>a", "d++",  "d--",  "d!",   "d=",   "",     "",     "d.=",
-"*b<>a","*b++", "*b--", "*b!",  "*b=",  "",     "",     "jt",
-"*c<>a","*c++", "*c--", "*c!",  "*c=",  "",     "",     "jf",
-"*d<>a","*d++", "*d--", "*d!",  "*d=",  "",     "",     "*d.=",
+"error","a++",  "a--",  "a!",   "a=0",  "",     "",     "a=r",
+"b<>a", "b++",  "b--",  "b!",   "b=0",  "",     "",     "b=r",
+"c<>a", "c++",  "c--",  "c!",   "c=0",  "",     "",     "c=r",
+"d<>a", "d++",  "d--",  "d!",   "d=0",  "",     "",     "d=r",
+"*b<>a","*b++", "*b--", "*b!",  "*b=0", "",     "",     "jt",
+"*c<>a","*c++", "*c--", "*c!",  "*c=0", "",     "",     "jf",
+"*d<>a","*d++", "*d--", "*d!",  "*d=0", "",     "",     "r=a",
 "halt", "out",  "",     "hash", "hashd","",     "",     "jmp",
 "a=a",  "a=b",  "a=c",  "a=d",  "a=*b", "a=*c", "a=*d", "a=",
 "b=a",  "b=b",  "b=c",  "b=d",  "b=*b", "b=*c", "b=*d", "b=",
@@ -242,7 +249,7 @@ static const char* opcodelist[258]={
 "a<a",  "a<b",  "a<c",  "a<d",  "a<*b", "a<*c", "a<*d", "a<",
 "a>a",  "a>b",  "a>c",  "a>d",  "a>*b", "a>*c", "a>*d", "a>",
 "",     "",     "",     "",     "",     "",     "",     "",
-"",     "",     "",     "",     "",     "",     "",     "",
+"",     "",     "",     "",     "",     "",     "",     "lj",
 "post", 0};
 
 // A ZPAQL machine HCOMP or PCOMP.
@@ -251,16 +258,18 @@ public:
   ZPAQL();
   void read(FILE* in);    // Read header from archive
   void write(FILE* out);  // Write header to archive
-  void compile(FILE* in); // Create header from config file
+  const char* compile(FILE* in); // Create header from config file
   void list();            // Display header contents
   void inith();           // Initialize as HCOMP
   void initp();           // Initialize as PCOMP
   void run(U32 input);    // Execute with input
   void step(U32 input);   // Execute while displaying progress
+  void prints();          // Print HCOMP as an array initialization
   double memory();        // Return memory requirement in bytes
   FILE* output;           // Destination for OUT instruction, or 0 to suppress
   bool verbose;           // Show config file during compile?
   friend class Predictor;
+  friend class PostProcessor;
 private:
 
   // ZPAQ1 block header
@@ -272,6 +281,7 @@ private:
   // Machine state for executing HCOMP
   Array<U8> m;        // memory array M for HCOMP
   Array<U32> h;       // hash array H for HCOMP
+  Array<U32> r;       // 256 element register array
   U32 a, b, c, d;     // machine registers
   int f;              // condition flag
   int pc;             // program counter
@@ -356,7 +366,8 @@ void ZPAQL::write(FILE* out) {
 }
 
 // Compile a configuration file and store the result in header
-void ZPAQL::compile(FILE* in) {
+// Return the string after POST (preprocessing command)
+const char* ZPAQL::compile(FILE* in) {
 
   // Allocate header
   header.resize(0x11000); // includes hsize
@@ -391,12 +402,15 @@ void ZPAQL::compile(FILE* in) {
     int op=rtoken(in, opcodelist);
     if (op==256) break;  // POST
     int operand=-1; // 0...255 if 2 bytes
-    if (op<56 && (op&7)==4) { // "L=0" (1 byte) or "L=(1...255)" 2 bytes
-      int n=rtoken(in, 0, 255);
-      if (n>0) operand=n, op+=67;
-    }
-    else if ((op&7)==7) { // 2 byte operand, read N
-      if (op==39 || op==47 || op==63) { // JT, JF, JMP
+    int operand2=-1;  // 0...255 if 3 bytes
+    if ((op&7)==7) { // 2 byte operand, read N
+      if (op==255) {  // LJ
+        operand=rtoken(in, 0, 65535);
+        operand2=operand>>8;
+        operand&=255;
+        if (verbose) printf("(to %d) ", operand+256*operand2);
+      }
+      else if (op==39 || op==47 || op==63) { // JT, JF, JMP
         operand=rtoken(in, -128, 127);
         if (verbose) printf("(to %d) ", hend-hbegin+2+operand);
         operand&=255;
@@ -405,7 +419,9 @@ void ZPAQL::compile(FILE* in) {
         operand=rtoken(in, 0, 255);
     }
     if (verbose) {
-      if (operand>=0)
+      if (operand2>=0)
+        printf("(%d %d %d)\n", op, operand, operand2);
+      else if (operand>=0)
         printf("(%d %d)\n", op, operand);
       else
         printf("(%d)\n", op);
@@ -413,6 +429,8 @@ void ZPAQL::compile(FILE* in) {
     header[hend++]=op;
     if (operand>=0)
       header[hend++]=operand;
+    if (operand2>=0)
+      header[hend++]=operand2;
   }
   header[hend++]=0; // END
   if (hend>=0x10000) printf("\nProgram too big\n"), exit(1);
@@ -425,6 +443,7 @@ void ZPAQL::compile(FILE* in) {
     printf("(cend=%d hbegin=%d hend=%d hsize=%d Memory=%1.3f MB)\n\n", 
       cend, hbegin, hend, hsize, memory()/1000000);
   }
+  return token(in);
 }
 
 // Display header contents. Assume it is constructed correctly.
@@ -433,7 +452,6 @@ void ZPAQL::list() {
   assert(hbegin==cend+128 && hbegin<header.size());
   assert(hend>hbegin && hend<header.size());
   assert(hsize==header[0]+256*header[1]);
-  assert(hsize==cend-2+hend-hbegin);
 
   // Display COMP section
   printf("comp %d %d %d %d %d (hh hm ph pm n, header size=%d)\n",
@@ -462,8 +480,12 @@ void ZPAQL::list() {
     assert(h<header.size()-2);
     int op=header[h];
     printf("(%4d) %s", h++-hbegin, opcodelist[op]);
-    if (op<56 && (op&7)==4) printf("0");
-    if ((op&7)==7) {
+    if (op==255) { // LJ
+      printf(" %d %d (to %d)", header[h], header[h+1],
+          header[h]+256*header[h+1]);
+      h+=2;
+    }
+    else if ((op&7)==7) {
       printf(" %d", header[h++]);
       if (op==39 || op==47 || op==63) // JT, JF, JMP
         printf(" (to %d) ", h-hbegin+(int(header[h-1])<<24>>24));
@@ -492,6 +514,7 @@ void ZPAQL::init(int hbits, int mbits) {
   assert(m.size()==0);
   h.resize(1, hbits);
   m.resize(1, mbits);
+  r.resize(256);
   a=b=c=d=pc=f=0;
 }
 
@@ -528,10 +551,10 @@ void ZPAQL::step(U32 input) {
     int op=header[pc];
     printf("%5d ", pc-hbegin);
     char inst[16];
-    if ((op&7)==7)
+    if (op==255)
+      sprintf(inst, "%s %d", opcodelist[op], header[pc+1]+256*header[pc+2]);
+    else if ((op&7)==7)
       sprintf(inst, "%s %d", opcodelist[op], header[pc+1]);
-    else if (op<56 && (op&7)==4)
-      sprintf(inst, "%s0", opcodelist[op]);
     else
       sprintf(inst, "%s", opcodelist[op]);
     printf("%-8s", inst);
@@ -551,7 +574,28 @@ void ZPAQL::step(U32 input) {
     if (i%10==0) printf("\n%8d:", i);
     printf(" %3d", m[i]);
   }
+  int rsize=r.size(); // don't print trailing zeros
+  while (rsize>5 && r[rsize-1]==0) --rsize;
+  printf("\n\nR (size %d) =", r.size());
+  for (int i=0; i<rsize; ++i) {
+    if (i%5==0) printf("\n%8d:", i);
+    printf(" %10u", r[i]);
+  }
   printf("\n\n");
+}
+
+// Print HCOMP as an array initialization in C
+void ZPAQL::prints() {
+  assert(header.size()>hend);
+  assert(hend>=hbegin);
+  assert(hbegin>=0);
+  printf("\n[%d]={1,%d,%d", hend-hbegin+3, hend-hbegin&255, hend-hbegin>>8);
+  for (int i=hbegin; i<hend; ++i) {
+    printf(",");
+    if ((i-hbegin)%19==15) printf("\n");
+    printf("%d", header[i]);
+  }
+  printf("}\n");
 }
 
 // Return memory requirement in bytes
@@ -578,7 +622,8 @@ double ZPAQL::memory() {
 }
 
 // Read a token and return it, or return 0 at EOF. Skip (comments).
-// Convert to lower case. Print the token read.
+// Convert to lower case. Tokens are separated by white space.
+// In verbose mode, print the token.
 const char* ZPAQL::token(FILE* in) {
   static char s[16];  // result
   int len=0;  // length of s
@@ -592,17 +637,12 @@ const char* ZPAQL::token(FILE* in) {
     if (c==EOF) return 0;
   }
 
-  // read token
-  if (isupper(c)) c=tolower(c);
-  s[len++]=c;
-  while (len<15 && (c=getc(in))!=EOF && c>' ') {
+  // read token separated by whitespace
+  do {
     if (isupper(c)) c=tolower(c);
-    if (c>='0' && c<='9' && len>1 && !isalnum(s[len-1]) && s[len-1]!='-') {
-      ungetc(c, in);  // A number is a separate token
-      break;
-    }
     s[len++]=c;
   }
+  while (len<15 && (c=getc(in))!=EOF && c>' ');
   s[len++]=0;
   if (verbose) printf("%s ", s);
   return s;
@@ -664,6 +704,7 @@ inline int ZPAQL::execute() {
    with one opcode per line.
 
 #!/usr/bin/perl
+# Generate ZPAQL interpreter from ZPAQ1.PDF table 1
 $go="pc+=(header[pc]+128&255)-127";
 $code=-1;
 print"  switch(header[pc++]) {\n";
@@ -672,7 +713,10 @@ while (<>) {
  $code++;
  if ($_ ne "") {
   $comment=$_;
-  if   (/^(\*?[ABCD])(\W*)(\*[ABCDN0])$/) {($a,$op,$b)=($1,$2,$3);}
+  s/ N$/N/;
+  if    (/^([ABCD])(=)(R)/) {($a,$op,$b)=($1,$2,$3);}
+  elsif (/^(R)(=)(A)/) {($a,$op,$b)=($1,$2,$3);}
+  elsif (/^(\*?[ABCD])(\W*)(\*[ABCDN0])$/) {($a,$op,$b)=($1,$2,$3);}
   elsif (/^(\*?[ABCD])(\W*)([ABCDN0])$/) {($a,$op,$b)=($1,$2,$3);}
   elsif (/^(\*?[ABCD])(\W*)$/) {($a,$op,$b)=($1,$2);}
   else {($a,$op,$b)=($_);}
@@ -687,9 +731,10 @@ while (<>) {
   $a=~s/error//;
   $a=~s/halt/return 0/;
   print("    case $code: ");
-  if ($a eq "jt n") {print"if (f) $go; else ++pc;";}
-  elsif ($a eq "jf n") {print"if (!f) $go; else ++pc;";}
-  elsif ($a eq "jmp n") {print"$go;";}
+  if ($a eq "jtn") {print"if (f) $go; else ++pc;";}
+  elsif ($a eq "lj n m") {print"if((pc=hbegin+header[pc]+256*header[pc+1])>=hend)err();";}
+  elsif ($a eq "jfn") {print"if (!f) $go; else ++pc;";}
+  elsif ($a eq "jmpn") {print"$go;";}
   elsif ($a eq "out") {print"if (output) putc(a, output);";}
   elsif ($a eq "hash") {print"a = (a+m(b)+512)*773;"}
   elsif ($a eq "hashd") {print"h(d) = (h(d)+a+512)*773;"}
@@ -700,41 +745,43 @@ while (<>) {
   elsif ($op eq ".=") {print"$a = ($a<<8)+$b;";}
   elsif ($op eq "/=") {print"div($b);";}
   elsif ($op eq "%=") {print"mod($b);";}
+  elsif ($b eq "r") {print"$a = r[header[pc++]];";}
+  elsif ($a eq "r") {print"r[header[pc++]] = $b;";}
   elsif ($a) {print("$a $op $b;");}
   else {print"err();";}
-  if ($a ne "return") {print" break;"}
+  if ($a ne "return 0") {print" break;"}
   if ($comment eq "") {$comment="undefined";}
   print" // $comment\n";
  }
 }
 print"    default: err();\n  }\n";
-*/
 
+*/
   switch(header[pc++]) {
     case 0: err(); break; // ERROR
     case 1: ++a; break; // A++
     case 2: --a; break; // A--
     case 3: a = ~a; break; // A!
     case 4: a = 0; break; // A=0
-    case 7: a = (a<<8)+header[pc++]; break; // A.=N
+    case 7: a = r[header[pc++]]; break; // A=R N
     case 8: swap(b); break; // B<>A
     case 9: ++b; break; // B++
     case 10: --b; break; // B--
     case 11: b = ~b; break; // B!
     case 12: b = 0; break; // B=0
-    case 15: b = (b<<8)+header[pc++]; break; // B.=N
+    case 15: b = r[header[pc++]]; break; // B=R N
     case 16: swap(c); break; // C<>A
     case 17: ++c; break; // C++
     case 18: --c; break; // C--
     case 19: c = ~c; break; // C!
     case 20: c = 0; break; // C=0
-    case 23: c = (c<<8)+header[pc++]; break; // C.=N
+    case 23: c = r[header[pc++]]; break; // C=R N
     case 24: swap(d); break; // D<>A
     case 25: ++d; break; // D++
     case 26: --d; break; // D--
     case 27: d = ~d; break; // D!
     case 28: d = 0; break; // D=0
-    case 31: d = (d<<8)+header[pc++]; break; // D.=N
+    case 31: d = r[header[pc++]]; break; // D=R N
     case 32: swap(m(b)); break; // *B<>A
     case 33: ++m(b); break; // *B++
     case 34: --m(b); break; // *B--
@@ -752,8 +799,8 @@ print"    default: err();\n  }\n";
     case 50: --h(d); break; // *D--
     case 51: h(d) = ~h(d); break; // *D!
     case 52: h(d) = 0; break; // *D=0
-    case 55: h(d) = (h(d)<<8)+header[pc++]; break; // *D.=N
-    case 56: return 0; // HALT
+    case 55: r[header[pc++]] = a; break; // R=A N
+    case 56: return 0  ; // HALT
     case 57: if (output) putc(a, output); break; // OUT
     case 59: a = (a+m(b)+512)*773; break; // HASH
     case 60: h(d) = (h(d)+a+512)*773; break; // HASHD
@@ -765,7 +812,7 @@ print"    default: err();\n  }\n";
     case 68: a = m(b); break; // A=*B
     case 69: a = m(c); break; // A=*C
     case 70: a = h(d); break; // A=*D
-    case 71: a = header[pc++]; break; // A=N
+    case 71: a = header[pc++]; break; // A= N
     case 72: b = a; break; // B=A
     case 73: b = b; break; // B=B
     case 74: b = c; break; // B=C
@@ -773,7 +820,7 @@ print"    default: err();\n  }\n";
     case 76: b = m(b); break; // B=*B
     case 77: b = m(c); break; // B=*C
     case 78: b = h(d); break; // B=*D
-    case 79: b = header[pc++]; break; // B=N
+    case 79: b = header[pc++]; break; // B= N
     case 80: c = a; break; // C=A
     case 81: c = b; break; // C=B
     case 82: c = c; break; // C=C
@@ -781,7 +828,7 @@ print"    default: err();\n  }\n";
     case 84: c = m(b); break; // C=*B
     case 85: c = m(c); break; // C=*C
     case 86: c = h(d); break; // C=*D
-    case 87: c = header[pc++]; break; // C=N
+    case 87: c = header[pc++]; break; // C= N
     case 88: d = a; break; // D=A
     case 89: d = b; break; // D=B
     case 90: d = c; break; // D=C
@@ -789,7 +836,7 @@ print"    default: err();\n  }\n";
     case 92: d = m(b); break; // D=*B
     case 93: d = m(c); break; // D=*C
     case 94: d = h(d); break; // D=*D
-    case 95: d = header[pc++]; break; // D=N
+    case 95: d = header[pc++]; break; // D= N
     case 96: m(b) = a; break; // *B=A
     case 97: m(b) = b; break; // *B=B
     case 98: m(b) = c; break; // *B=C
@@ -797,7 +844,7 @@ print"    default: err();\n  }\n";
     case 100: m(b) = m(b); break; // *B=*B
     case 101: m(b) = m(c); break; // *B=*C
     case 102: m(b) = h(d); break; // *B=*D
-    case 103: m(b) = header[pc++]; break; // *B=N
+    case 103: m(b) = header[pc++]; break; // *B= N
     case 104: m(c) = a; break; // *C=A
     case 105: m(c) = b; break; // *C=B
     case 106: m(c) = c; break; // *C=C
@@ -805,7 +852,7 @@ print"    default: err();\n  }\n";
     case 108: m(c) = m(b); break; // *C=*B
     case 109: m(c) = m(c); break; // *C=*C
     case 110: m(c) = h(d); break; // *C=*D
-    case 111: m(c) = header[pc++]; break; // *C=N
+    case 111: m(c) = header[pc++]; break; // *C= N
     case 112: h(d) = a; break; // *D=A
     case 113: h(d) = b; break; // *D=B
     case 114: h(d) = c; break; // *D=C
@@ -813,7 +860,7 @@ print"    default: err();\n  }\n";
     case 116: h(d) = m(b); break; // *D=*B
     case 117: h(d) = m(c); break; // *D=*C
     case 118: h(d) = h(d); break; // *D=*D
-    case 119: h(d) = header[pc++]; break; // *D=N
+    case 119: h(d) = header[pc++]; break; // *D= N
     case 128: a += a; break; // A+=A
     case 129: a += b; break; // A+=B
     case 130: a += c; break; // A+=C
@@ -821,7 +868,7 @@ print"    default: err();\n  }\n";
     case 132: a += m(b); break; // A+=*B
     case 133: a += m(c); break; // A+=*C
     case 134: a += h(d); break; // A+=*D
-    case 135: a += header[pc++]; break; // A+=N
+    case 135: a += header[pc++]; break; // A+= N
     case 136: a -= a; break; // A-=A
     case 137: a -= b; break; // A-=B
     case 138: a -= c; break; // A-=C
@@ -829,7 +876,7 @@ print"    default: err();\n  }\n";
     case 140: a -= m(b); break; // A-=*B
     case 141: a -= m(c); break; // A-=*C
     case 142: a -= h(d); break; // A-=*D
-    case 143: a -= header[pc++]; break; // A-=N
+    case 143: a -= header[pc++]; break; // A-= N
     case 144: a *= a; break; // A*=A
     case 145: a *= b; break; // A*=B
     case 146: a *= c; break; // A*=C
@@ -837,7 +884,7 @@ print"    default: err();\n  }\n";
     case 148: a *= m(b); break; // A*=*B
     case 149: a *= m(c); break; // A*=*C
     case 150: a *= h(d); break; // A*=*D
-    case 151: a *= header[pc++]; break; // A*=N
+    case 151: a *= header[pc++]; break; // A*= N
     case 152: div(a); break; // A/=A
     case 153: div(b); break; // A/=B
     case 154: div(c); break; // A/=C
@@ -845,7 +892,7 @@ print"    default: err();\n  }\n";
     case 156: div(m(b)); break; // A/=*B
     case 157: div(m(c)); break; // A/=*C
     case 158: div(h(d)); break; // A/=*D
-    case 159: div(header[pc++]); break; // A/=N
+    case 159: div(header[pc++]); break; // A/= N
     case 160: mod(a); break; // A%=A
     case 161: mod(b); break; // A%=B
     case 162: mod(c); break; // A%=C
@@ -853,7 +900,7 @@ print"    default: err();\n  }\n";
     case 164: mod(m(b)); break; // A%=*B
     case 165: mod(m(c)); break; // A%=*C
     case 166: mod(h(d)); break; // A%=*D
-    case 167: mod(header[pc++]); break; // A%=N
+    case 167: mod(header[pc++]); break; // A%= N
     case 168: a &= a; break; // A&=A
     case 169: a &= b; break; // A&=B
     case 170: a &= c; break; // A&=C
@@ -861,7 +908,7 @@ print"    default: err();\n  }\n";
     case 172: a &= m(b); break; // A&=*B
     case 173: a &= m(c); break; // A&=*C
     case 174: a &= h(d); break; // A&=*D
-    case 175: a &= header[pc++]; break; // A&=N
+    case 175: a &= header[pc++]; break; // A&= N
     case 176: a &= ~ a; break; // A&~A
     case 177: a &= ~ b; break; // A&~B
     case 178: a &= ~ c; break; // A&~C
@@ -869,7 +916,7 @@ print"    default: err();\n  }\n";
     case 180: a &= ~ m(b); break; // A&~*B
     case 181: a &= ~ m(c); break; // A&~*C
     case 182: a &= ~ h(d); break; // A&~*D
-    case 183: a &= ~ header[pc++]; break; // A&~N
+    case 183: a &= ~ header[pc++]; break; // A&~ N
     case 184: a |= a; break; // A|=A
     case 185: a |= b; break; // A|=B
     case 186: a |= c; break; // A|=C
@@ -877,7 +924,7 @@ print"    default: err();\n  }\n";
     case 188: a |= m(b); break; // A|=*B
     case 189: a |= m(c); break; // A|=*C
     case 190: a |= h(d); break; // A|=*D
-    case 191: a |= header[pc++]; break; // A|=N
+    case 191: a |= header[pc++]; break; // A|= N
     case 192: a ^= a; break; // A^=A
     case 193: a ^= b; break; // A^=B
     case 194: a ^= c; break; // A^=C
@@ -885,7 +932,7 @@ print"    default: err();\n  }\n";
     case 196: a ^= m(b); break; // A^=*B
     case 197: a ^= m(c); break; // A^=*C
     case 198: a ^= h(d); break; // A^=*D
-    case 199: a ^= header[pc++]; break; // A^=N
+    case 199: a ^= header[pc++]; break; // A^= N
     case 200: a <<= a; break; // A<<=A
     case 201: a <<= b; break; // A<<=B
     case 202: a <<= c; break; // A<<=C
@@ -893,7 +940,7 @@ print"    default: err();\n  }\n";
     case 204: a <<= m(b); break; // A<<=*B
     case 205: a <<= m(c); break; // A<<=*C
     case 206: a <<= h(d); break; // A<<=*D
-    case 207: a <<= header[pc++]; break; // A<<=N
+    case 207: a <<= header[pc++]; break; // A<<= N
     case 208: a >>= a; break; // A>>=A
     case 209: a >>= b; break; // A>>=B
     case 210: a >>= c; break; // A>>=C
@@ -901,7 +948,7 @@ print"    default: err();\n  }\n";
     case 212: a >>= m(b); break; // A>>=*B
     case 213: a >>= m(c); break; // A>>=*C
     case 214: a >>= h(d); break; // A>>=*D
-    case 215: a >>= header[pc++]; break; // A>>=N
+    case 215: a >>= header[pc++]; break; // A>>= N
     case 216: f = (a == a); break; // A==A
     case 217: f = (a == b); break; // A==B
     case 218: f = (a == c); break; // A==C
@@ -909,7 +956,7 @@ print"    default: err();\n  }\n";
     case 220: f = (a == m(b)); break; // A==*B
     case 221: f = (a == m(c)); break; // A==*C
     case 222: f = (a == h(d)); break; // A==*D
-    case 223: f = (a == header[pc++]); break; // A==N
+    case 223: f = (a == header[pc++]); break; // A== N
     case 224: f = (a < a); break; // A<A
     case 225: f = (a < b); break; // A<B
     case 226: f = (a < c); break; // A<C
@@ -917,7 +964,7 @@ print"    default: err();\n  }\n";
     case 228: f = (a < m(b)); break; // A<*B
     case 229: f = (a < m(c)); break; // A<*C
     case 230: f = (a < h(d)); break; // A<*D
-    case 231: f = (a < header[pc++]); break; // A<N
+    case 231: f = (a < header[pc++]); break; // A< N
     case 232: f = (a > a); break; // A>A
     case 233: f = (a > b); break; // A>B
     case 234: f = (a > c); break; // A>C
@@ -925,7 +972,8 @@ print"    default: err();\n  }\n";
     case 236: f = (a > m(b)); break; // A>*B
     case 237: f = (a > m(c)); break; // A>*C
     case 238: f = (a > h(d)); break; // A>*D
-    case 239: f = (a > header[pc++]); break; // A>N
+    case 239: f = (a > header[pc++]); break; // A> N
+    case 255: if((pc=hbegin+header[pc]+256*header[pc+1])>=hend)err();break;//LJ
     default: err();
   }
   return 1;
@@ -1416,19 +1464,65 @@ int Decoder::decompress() {
 /////////////////////////// PostProcessor ////////////////////
 
 class PostProcessor {
-  int state;
+  int state;   // input parse state
+  int ph, pm;  // sizes of H and M in z
+  ZPAQL z;     // holds PCOMP
 public:
-  PostProcessor(): state(-2) {}
-  void write(int c, FILE* out);
+  PostProcessor(ZPAQL& hz);
+  void set(FILE* out) {z.output=out;}  // Set output
+  void write(int c);  // Input a byte
 };
 
-void PostProcessor::write(int c, FILE* out) {
-  assert(out);
-  if (state<0) state=c;
-  else if (state==0)  // PASS
-    putc(c, out);
-  else
-    error("post processing not implemented");
+// Copy ph, pm from block header
+PostProcessor::PostProcessor(ZPAQL& hz) {
+  state=0;
+  ph=hz.header[4];
+  pm=hz.header[5];
+}
+
+// (PASS=0 | PROG=1 psize[0..1] pcomp[0..psize-1]) data... EOB=-1
+void PostProcessor::write(int c) {
+  assert(c>=-1 && c<=255);
+  switch (state) {
+    case 0:  // initial state
+      if (c<0) error("Unexpected EOS");
+      state=c+1;  // 1=PASS, 2=PROG
+      if (state>2) error("unknown post processing type");
+      break;
+    case 1:  // PASS
+      if (z.output && c>=0) putc(c, z.output);  // data
+      break;
+    case 2: // PROG
+      if (c<0) error("Unexpected EOS");
+      z.hsize=c;  // low byte of psize
+      state=3;
+      break;
+    case 3:  // PROG psize[0]
+      if (c<0) error("Unexpected EOS");
+      z.hsize+=c*256+1;  // high byte of psize
+      z.header.resize(z.hsize+300);
+      z.cend=8;
+      z.hbegin=z.hend=136;
+      z.header[0]=z.hsize&255;
+      z.header[1]=z.hsize>>8;
+      z.header[4]=ph;
+      z.header[5]=pm;
+      state=4;
+      break;
+    case 4:  // PROG psize[0..1] pcomp[0...]
+      if (c<0) error("Unexpected EOS");
+      assert(z.hend<z.header.size());
+      z.header[z.hend++]=c;  // one byte of pcomp
+      if (z.hend-z.hbegin==z.hsize-1) {  // last byte of pcomp?
+        z.header[z.hend++]=0;
+        z.initp();
+        state=5;
+      }
+      break;
+    case 5:  // PROG ... data
+      z.run(c);
+      break;
+  }
 }
 
 /////////////////////////// Decompress ///////////////////////
@@ -1436,6 +1530,7 @@ void PostProcessor::write(int c, FILE* out) {
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
 void decompress(int argc, char** argv) {
   assert(argc>=3);
+  assert(argv[1][0]=='x' || argv[1][0]=='t');
 
   // Open archive
   FILE* in=fopen(argv[2], "rb");
@@ -1447,15 +1542,15 @@ void decompress(int argc, char** argv) {
   // Read the archive
   int c;
   while ((c=getc(in))=='z') {
-    if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL)
-      error("missing ZPAQ level 0 block header");
+    if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
+      error("Not ZPAQ");
 
     // Read block header
     ZPAQL z;
     z.read(in);
 
     // PostProcessor and Decoder is created and and destroyed for each block
-    PostProcessor pp;
+    PostProcessor pp(z);
     Decoder dec(in, z);
 
     // Read segments
@@ -1510,13 +1605,15 @@ void decompress(int argc, char** argv) {
       }
 
       // Decompress
-      assert(out);
-      if (argv[1][0]=='t')  // don't postprocess
+      if (argv[1][0]=='t') { // don't postprocess
         while ((c=dec.decompress())!=EOF)
-          putc(c, out);
+          if (out) putc(c, out);
+      }
       else {
+        pp.set(out);
         while ((c=dec.decompress())!=EOF)
-          pp.write(c, out);
+          pp.write(c);
+        pp.write(-1);
       }
       ++filecount;
 
@@ -1567,9 +1664,10 @@ inline void Encoder::encode(int y, int p) {
 }
 
 void Encoder::compress(int c) {
-  if (c==EOF)
+  if (c==-1)
     encode(1, 0);
   else {
+    assert(c>=0 && c<=255);
     encode(0, 0);
     for (int i=7; i>=0; --i) {
       int p=pr.predict()*2+1;
@@ -1583,23 +1681,113 @@ void Encoder::compress(int c) {
 
 //////////////////////////// PreProcessor ////////////////////////
 
+const U32 EOS=U32(-1);
+
 class PreProcessor {
   Encoder* encp;
-  int state;
+  int state; // 0=init, 1=normal
+  const char* cmd;  // command
+  U32 b, c;  // state for EXE transform (head, tail of queue m)
+  Array<U8> m;  // rotating buffer with at most 4 bytes
 public:
-  PreProcessor(Encoder* p);
-  void compress(int c);
+  PreProcessor(Encoder* p, const char* cm);
+  void compress(U32 a);
 };
 
-PreProcessor::PreProcessor(Encoder* p): encp(p), state(0) {}
+PreProcessor::PreProcessor(Encoder* p, const char* cm):
+    encp(p), state(0), cmd(cm) {
+  b=c=0;
+  m.resize(8);
+}
 
-// Implement PASS by appending a 0 to the front of the input
-void PreProcessor::compress(int c) {
-  if (state==0) {
-    encp->compress(0);  // PASS
-    state=1;
+// Compress one byte (0...255), EOS (-2), or EOB (-1)
+void PreProcessor::compress(U32 a) {
+  assert(encp);
+  assert(state==0 || state==1);
+  assert(cmd);
+  assert(a<=255 || a==EOS);
+
+  /* EXE transform. Assume ph=0, pm=3. Decoding is as follows:
+
+  (e8e9 transform. M=queue with C tail and B at head,
+   max size 4. If size < 4 then add to buffer. Else if
+   *C is xE8 or xE9 then add B to next 4 bytes LSB first
+   and output all 5 bytes. Otherwise output *C only.)
+  a> 255 jt 65 (EOS)
+  *b=a (save input)
+  a=b a-=c a== 4 jt 2
+    b++ halt (buffer not full)
+  a=*c a&= 254 a== 232 jt 5
+    a=*c out c++ b++ halt (buffer full and not E8/E9)
+  a=*b b-- a<<= 8 a+=*b b-- a<<= 8 a+=*b b-- a<<= 8 a+=*b (load addr)
+  a-=c (convert to relative)
+  *b=a a>>= 8 b++ *b=a a>>= 8 b++ *b=a a>>= 8 b++ *b=a (save addr)
+  a=*c out c++  a=*c out c++  a=*c out c++  a=*c out c++  a=*c out c++
+  b++ 
+  halt
+  (flush buffer at EOS)
+  a=b a==c jt 5
+    a=*c out c++
+  jmp -9 b=0 c=0 halt
+  */
+  if (cmd[0]=='x') {
+    if (state==0) {  // Initialize
+      static const U8 prog[85]={  // Generated by "zpaq s" from above program
+        1,82,0,239,255,39,65,96,65,138,223,4,39,2,9,56,69,175,
+        254,223,232,39,5,69,57,17,9,56,68,10,207,8,132,10,207,8,132,
+        10,207,8,132,138,96,215,8,9,96,215,8,9,96,215,8,9,96,69,
+        57,17,69,57,17,69,57,17,69,57,17,69,57,17,9,56,65,218,39,
+        5,69,57,17,63,247,12,20,56,0};
+      for (int i=0; i<85; ++i)
+        encp->compress(prog[i]);
+      state=1;
+    }
+
+    // EXE transform, exactly like the ZPAQL program above except
+    // for replacing "a-=c" with "a+=c" (convert address to absolute).
+    assert(b-c<=4);
+    if (a==EOS) {
+      while (c!=b)
+        encp->compress(m(c++));  // flush buffer
+      encp->compress(EOS);
+      b=c=0;
+    }
+    else {
+      m(b)=a;
+      if (b-c!=4)
+        ++b;
+      else if ((m(c)&254)!=232)
+        encp->compress(m(c++)), ++b;
+      else {
+        a=m(b--)<<8;  // read relative address, LSB first
+        a=a+m(b--)<<8;
+        a=a+m(b--)<<8;
+        a+=m(b);
+        a+=c; // convert to absolute address (opposite of above)
+        m(b++)=a;  // put it back
+        a>>=8;
+        m(b++)=a;
+        a>>=8;
+        m(b++)=a;
+        a>>=8;
+        m(b++)=a;
+        encp->compress(m(c++));  // compress it, empty buffer
+        encp->compress(m(c++));
+        encp->compress(m(c++));
+        encp->compress(m(c++));
+        encp->compress(m(c++));
+      }
+    }
   }
-  encp->compress(c);
+
+  // 0 = no transform
+  else if (cmd[0]=='0') {
+    if (state==0)
+      encp->compress(0), state=1;
+    encp->compress(a);
+  }
+  else
+    error("unknown POST command");
 }
 
 //////////////////////////// Compress ////////////////////////////
@@ -1610,12 +1798,13 @@ void compress(int argc, char** argv) {
   assert(argv[1][0]=='a' || argv[1][0]=='c');
 
   // Compile config file
-  FILE* cfg=0;
-  ZPAQL z;
+  FILE* cfg=0;        // config file
+  const char* cmd=0;  // postprocessor command
+  ZPAQL z;            // HCOMP
   if (argv[1][1]) {
     cfg=fopen(argv[1]+1, "rb");
     if (!cfg) perror(argv[1]+1), exit(1);
-    z.compile(cfg);
+    cmd=z.compile(cfg);
   }
   else
     error("no config file");
@@ -1625,14 +1814,14 @@ void compress(int argc, char** argv) {
   if (!out) perror(argv[2]), exit(1);
 
   // Write block header
-  long mark=ftell(out)-1;  // last reported size (-1 byte for trailer)
-  fprintf(out, "zPQ%c", LEVEL);
+  fprintf(out, "zPQ%c%c", LEVEL, 1);
+  long mark=ftell(out)-6;  // last reported size (adjusted for header/trailer)
   z.write(out);
 
   // Create PreProcessor chain that writes to Encoder
   assert(out);
   Encoder enc(out, z);
-  PreProcessor pp(&enc);
+  PreProcessor pp(&enc, cmd);
 
   // Compress files argv[3..argc-1]
   for (int i=3; i<argc; ++i) {
@@ -1651,9 +1840,9 @@ void compress(int argc, char** argv) {
       int c;
       while ((c=getc(in))!=EOF)
         pp.compress(c);
-      pp.compress(EOF);
+      pp.compress(EOS);
 
-      // Write trailer
+      // Write segment trailer
       fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
       fclose(in);
       printf("%s %ld -> %ld\n", argv[i], size, ftell(out)-mark);
@@ -1681,8 +1870,8 @@ void list(int argc, char** argv) {
   while ((c=getc(in))=='z') {
 
     // Read block header
-    if (getc(in)!='P' || getc(in)!='Q' || getc(in)!=LEVEL)
-      error("not ZPAQ level 0");
+    if (getc(in)!='P' || getc(in)!='Q' || getc(in)!=LEVEL || getc(in)!=1)
+      error("not ZPAQ");
     ZPAQL z;
     z.read(in);
     printf("Block %d: requires %1.3f MB memory\n",
@@ -1693,7 +1882,7 @@ void list(int argc, char** argv) {
     // Read segments
     while ((c=getc(in))==1) {
 
-      // Print filename and private data
+      // Print filename and comments
       printf("  ");
       while ((c=getc(in))!=EOF && c) putchar(c);
       printf("  ");
@@ -1747,14 +1936,25 @@ void prun(int argc, char** argv) {
   int c;
   while ((c=getc(in))!=EOF)
     z.run(c);
+  z.run(U32(-1));
+}
+
+// Compile HCOMP to a C array initialization list
+void scompile(int argc, char** argv) {
+  ZPAQL z;
+  FILE* in=fopen(argv[1]+1, "r");
+  if (!in) perror(argv[1]+1), exit(1);
+  z.compile(in);
+  z.prints();
+  fclose(in);
 }
 
 ///////////////////////////// Main ///////////////////////////
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.01 archiver.\n"
-    "(C) 2009, Ocarina Networks Inc. Written by Matt Mahoney, Feb. 15, 2009.\n"
+  printf("ZPAQ v0.02 archiver, (C) 2009, Ocarina Networks Inc.\n"
+    "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
     "Usage: zpaq command archive files...  Commands are:\n"
@@ -1769,7 +1969,8 @@ void usage() {
     "For debugging:\n"
     "  t                 Extract without postprocessing (for debugging).\n"
     "  hconfig args...   Run HCOMP in config with numeric args (no archive).\n"
-    "  pconfig in out    Run PCOMP on files (default stdin/stdout).\n"); 
+    "  pconfig in out    Run PCOMP on files (default stdin/stdout).\n"
+    "  sconfig           To compile HCOMP to a list of bytes to stdout.\n");
   exit(0);
 }
 
@@ -1802,6 +2003,8 @@ int main(int argc, char** argv) {
     hstep(argc, argv);
   else if (cmd=='p')
     prun(argc, argv);
+  else if (cmd=='s')
+    scompile(argc, argv);
   else
     usage();
   return 0;
