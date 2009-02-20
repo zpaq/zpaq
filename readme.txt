@@ -1,4 +1,4 @@
-README for ZPAQ v0.02.
+README for ZPAQ v0.03.
 Matt Mahoney - Feb. 19, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
@@ -6,9 +6,9 @@ is a high compression ratio in an open format without loss of
 compatibility between versions as advanced compression techniques
 are discovered.
 
-ZPAQ v. 0.02 is an experimental pre-release (level 0) implementation
+ZPAQ v. 0.03 is an experimental pre-release (level 0) implementation
 of the proposed ZPAQ open standard for highly compressed data.
-It implements version 0.31 of the ZPAQ standard, dated Feb. 19, 2009.
+It implements version 0.32 of the ZPAQ standard, dated Feb. 19, 2009.
 It is not intended to be compatible with other versions of ZPAQ
 or the upcoming level 1 standard. When the level 1 standard
 is released, all versions will be compatible with one another.
@@ -25,7 +25,7 @@ supplied:
 
   min.cfg - Fast, minimal compression with an order 4 context
             model - requires 4 MB memory.
-  max.cfg - Slow but good compression. Requires 93 MB.
+  max.cfg - Slow but good compression. Requires 315 MB.
 
 To create an archive:
 
@@ -36,28 +36,29 @@ file to create, and files... are the files to compress. There
 should be no space between the "c" command and the file name. For
 example:
 
-  zpaq cmax.cfg calgary.zpaq calgary/*
+  zpaq cmax.cfg calgary.zpaq calgary\*
 
 will display the contents of max.cfg and then
-compress the Calgary corpus (14 files) to 660,576 bytes
+compress the Calgary corpus (14 files) to 658,501 bytes
 in 36 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-calgary\BIB 111261 -> 23362
-calgary\BOOK1 768771 -> 202943
-calgary\BOOK2 610856 -> 127307
-calgary\GEO 102400 -> 47532
-calgary\NEWS 377109 -> 92596
-calgary\OBJ1 21504 -> 9035
-calgary\OBJ2 246814 -> 58183
-calgary\PAPER1 53161 -> 11534
-calgary\PAPER2 82199 -> 17666
-calgary\PIC 513216 -> 29383
-calgary\PROGC 39611 -> 9357
-calgary\PROGL 71646 -> 11316
-calgary\PROGP 49379 -> 8238
-calgary\TRANS 93695 -> 12124
-Used 36.00 seconds
+calgary\BIB 111261 -> 23337
+calgary\BOOK1 768771 -> 203307
+calgary\BOOK2 610856 -> 127386
+calgary\GEO 102400 -> 47120
+calgary\NEWS 377109 -> 92542
+calgary\OBJ1 21504 -> 8896
+calgary\OBJ2 246814 -> 56985
+calgary\PAPER1 53161 -> 11563
+calgary\PAPER2 82199 -> 17708
+calgary\PIC 513216 -> 28942
+calgary\PROGC 39611 -> 9347
+calgary\PROGL 71646 -> 11282
+calgary\PROGP 49379 -> 8119
+calgary\TRANS 93695 -> 11967
+-> 658501
+Used 36.60 seconds
 
 To append to an existing archive:
 
@@ -174,8 +175,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq032.pdf -Version 0.32 of the ZPAQ specification, valid only
-               for zpaq v0.02.
+  zpaq033.pdf -Version 0.33 of the ZPAQ specification, valid only
+               for zpaq v0.03.
 
   zpaq.cpp -   Source code.
 
@@ -208,4 +209,22 @@ v0.02 - Feb. 18, 2009. Adds R=X, X=R, and LJ
         language. Not compatible with v0.01. Conforms to v0.32 of spec.
         Current max.cfg does poorly with maximumcompression.com.
         Expect more changes.
+
+v0.03 - Feb. 19, 2009. Fixed MIX, MIX2, and IMIX to reduce overflow,
+        which resulted in poor compression of large files. Modified
+        stretch function for better compression.
+
+Block 1: requires 314.476 MB memory (with POST X to turn on E8E9)
+  maxcomp\a10.jpg  842468 -> 829159
+  maxcomp\acrord32.exe  3870784 -> 1154882
+  maxcomp\english.dic  4067439 -> 476099
+  maxcomp\FlashMX.pdf  4526946 -> 3649140
+  maxcomp\fp.log  20617071 -> 432826
+  maxcomp\mso97.dll  3782416 -> 1545417
+  maxcomp\ohs.doc  4168192 -> 757538
+  maxcomp\rafale.bmp  4149414 -> 763314
+  maxcomp\vcfiu.hlp  4121418 -> 499321
+  maxcomp\world95.txt  2988578 -> 441130
+53,134,726 -> 10,548,826
+
 
