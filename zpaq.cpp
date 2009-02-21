@@ -1,7 +1,7 @@
-/*  zpaq v0.03 archiver and file compressor.
+/*  zpaq v0.04 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 19, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 21, 2009.
 
     LICENSE
 
@@ -1050,9 +1050,10 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
 
   // Initialize tables
   for (int i=0; i<1024; ++i)
-    dt[i]=(1<<19)/(i*2+3);
+    dt[i]=128+(1<<19)/(i*2+3)>>8;
+//    dt[i]=1+2048/(i*2+3)>>1;
   for (int i=0; i<4096; ++i) {
-    squasht[i]=int(0.5+4095.5/(1+exp((i-2048)*(-1.0/256))));
+    squasht[i]=int(4096.0/(1+exp((i-2048)*(-1.0/256))));
     stretcht[i]=int(log((i+0.5)/(4095.5-i))*256+0.5+10000)-10000;
   }
 
@@ -1063,7 +1064,7 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
     sq=sq*3+squash(i-2048);
   }
   assert(st==1625980894u);
-  assert(sq==1032925551u);
+  assert(sq==1955773538u);
 
   // Initialize context hash function
   z.inith();
@@ -1381,8 +1382,9 @@ inline void Predictor::train(Component& cr, int y) {
   assert(y==0 || y==1);
   U32& pn=cr.cm(cr.cxt);
   int count=pn&0x3ff;
-  int error=(y<<12)-(cr.cm(cr.cxt)>>20);
-  pn+=(error*(128+dt[count]>>8)<<10)+(count<cr.limit);
+  int error=y*4095-(cr.cm(cr.cxt)>>20);
+//  pn+=(error*(128+dt[count]>>8)<<10)+(count<cr.limit);
+  pn+=(error*dt[count]<<10)+(count<cr.limit);
 }
 
 // Find cxt row in hash table ht. ht has rows of 16 indexed by the
@@ -1957,7 +1959,7 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.03 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v0.04 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
