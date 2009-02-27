@@ -1,5 +1,5 @@
-README for ZPAQ v0.04.
-Matt Mahoney - Feb. 21, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.05.
+Matt Mahoney - Feb. 26, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -25,7 +25,7 @@ supplied:
 
   min.cfg - Fast, minimal compression with an order 4 context
             model - requires 4 MB memory.
-  max.cfg - Slow but good compression. Requires 322 MB.
+  max.cfg - Slow but good compression. Requires 278 MB.
 
 To create an archive:
 
@@ -38,27 +38,25 @@ example:
 
   zpaq cmax.cfg calgary.zpaq calgary\*
 
-will display the contents of max.cfg and then
-compress the Calgary corpus (14 files) to 655,162 bytes
-in 37 seconds on a 2 GHz Pentium T3200. The file names are
+will compress the Calgary corpus (14 files) as follows
+in 45 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-calgary\BIB 111261 -> 23082
-calgary\BOOK1 768771 -> 201796
-calgary\BOOK2 610856 -> 126387
-calgary\GEO 102400 -> 46839
-calgary\NEWS 377109 -> 92230
-calgary\OBJ1 21504 -> 9044
-calgary\OBJ2 246814 -> 57231
-calgary\PAPER1 53161 -> 11449
-calgary\PAPER2 82199 -> 17537
-calgary\PIC 513216 -> 28924
-calgary\PROGC 39611 -> 9315
-calgary\PROGL 71646 -> 11253
-calgary\PROGP 49379 -> 8174
-calgary\TRANS 93695 -> 11891
--> 655152
-Used 37.45 seconds
+calgary\BIB  111261 -> 23700
+calgary\BOOK1  768771 -> 198987
+calgary\BOOK2  610856 -> 123978
+calgary\GEO  102400 -> 46862
+calgary\NEWS  377109 -> 90755
+calgary\OBJ1  21504 -> 8827
+calgary\OBJ2  246814 -> 56333
+calgary\PAPER1  53161 -> 11190
+calgary\PAPER2  82199 -> 17121
+calgary\PIC  513216 -> 28722
+calgary\PROGC  39611 -> 9136
+calgary\PROGL  71646 -> 11061
+calgary\PROGP  49379 -> 7979
+calgary\TRANS  93695 -> 11637
+-> 646288
 
 To append to an existing archive:
 
@@ -175,8 +173,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq034.pdf -Version 0.34 of the ZPAQ specification, valid only
-               for zpaq v0.04.
+  zpaq035.pdf -Version 0.35 of the ZPAQ specification, valid only
+               for zpaq v0.05.
 
   zpaq.cpp -   Source code.
 
@@ -231,3 +229,9 @@ v0.04 - Feb. 21, 2009. Fixed train() spec. to fix poor compression with
         SSE and possibly other components. Modifed squash() for better
         compression. New max.cfg.
 
+v0.05 - Feb. 26, 2009. Changed representation of squashed probabilities
+        to 15 bits (0..32767) and stretched to 6 bit scale in (-2048..2047),
+	and mixer weights to 20 bit signed numbers. Mixers are now guaranteed
+	not to overflow. The higher resolution improves compression on highly
+	redundant files. MIX2 now has weights constrained to add to 1 which
+	also improves compression.
