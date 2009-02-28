@@ -1,7 +1,7 @@
-/*  zpaq v0.05 archiver and file compressor.
+/*  zpaq v0.06 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 26, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 27, 2009.
 
     LICENSE
 
@@ -23,7 +23,9 @@ Usage: zpaq command [archive [files...]]  Commands are:
 
   c - Create, overwriting archive.
 
-  aconfig, cconfig - Use compression options in file config
+  b - Append without storing SHA1 checksum.
+
+  aconfig, cconfig, bconfig - Use compression options in file config
 
   x - Extract and uncompress files. If no file names are given, then
       extract all files using the stored names. Skips (does not overwrite)
@@ -208,13 +210,392 @@ void Array<T>::resize(int sz, int ex) {
   data=(T*)((char*)data+offset);
 }
 
+//////////////////////////// SHA-1 //////////////////////////////
+
+// SHA-1 code modified from RFC 3174.
+// http://www.faqs.org/rfcs/rfc3174.html
+// The SHA1 class is used to compute segment checksums.
+
+enum
+{
+    shaSuccess = 0,
+    shaNull,            /* Null pointer parameter */
+    shaInputTooLong,    /* input data too long */
+    shaStateError       /* called Input after Result */
+};
+const int SHA1HashSize=20;
+
+class SHA1 {
+  U32 Intermediate_Hash[SHA1HashSize/4]; /* Message Digest  */
+  U32 Length_Low;            /* Message length in bits      */
+  U32 Length_High;           /* Message length in bits      */
+  int Message_Block_Index;   /* Index into message block array */
+  U8 Message_Block[64];      /* 512-bit message blocks      */
+  int Computed;              /* Is the digest computed?         */
+  int Corrupted;             /* Is the message digest corrupted? */
+  U8 result_buf[20];         // Place to put result
+  void SHA1PadMessage();
+  void SHA1ProcessMessageBlock();
+  U32 SHA1CircularShift(int bits, U32 word) {
+     return (((word) << (bits)) | ((word) >> (32-(bits))));
+  }
+  int SHA1Reset();   // Initalize
+  int SHA1Input(const U8 *, unsigned int n);  // Hash n bytes
+  int SHA1Result(U8 Message_Digest[SHA1HashSize]);  // Store result
+public:
+  SHA1() {SHA1Reset();}  // Begin hash
+  void put(int c) {  // Hash 1 byte
+    U8 ch=c;
+    SHA1Input(&ch, 1);
+  }
+  int result(int i);  // Finish and return byte i (0..19) of SHA1 hash
+};
+
+int SHA1::result(int i) {
+  assert(i>=0 && i<20);
+  if (!Computed && shaSuccess != SHA1Result(result_buf))
+    error("SHA1 failed\n");
+  return result_buf[i];
+}
+
+/*
+ *  SHA1Reset
+ *
+ *  Description:
+ *      This function will initialize the SHA1Context in preparation
+ *      for computing a new SHA1 message digest.
+ *
+ *  Parameters: none
+ *
+ *  Returns:
+ *      sha Error Code.
+ *
+ */
+int SHA1::SHA1Reset()
+{
+    Length_Low             = 0;
+    Length_High            = 0;
+    Message_Block_Index    = 0;
+
+    Intermediate_Hash[0]   = 0x67452301;
+    Intermediate_Hash[1]   = 0xEFCDAB89;
+    Intermediate_Hash[2]   = 0x98BADCFE;
+    Intermediate_Hash[3]   = 0x10325476;
+    Intermediate_Hash[4]   = 0xC3D2E1F0;
+
+    Computed   = 0;
+    Corrupted  = 0;
+
+    return shaSuccess;
+}
+
+/*
+ *  SHA1Result
+ *
+ *  Description:
+ *      This function will return the 160-bit message digest into the
+ *      Message_Digest array  provided by the caller.
+ *      NOTE: The first octet of hash is stored in the 0th element,
+ *            the last octet of hash in the 19th element.
+ *
+ *  Parameters:
+ *      Message_Digest: [out]
+ *          Where the digest is returned.
+ *
+ *  Returns:
+ *      sha Error Code.
+ *
+ */
+int SHA1::SHA1Result(U8 Message_Digest[SHA1HashSize])
+{
+    int i;
+
+    if (!Message_Digest)
+    {
+        return shaNull;
+    }
+
+    if (Corrupted)
+    {
+        return Corrupted;
+    }
+
+    if (!Computed)
+    {
+        SHA1PadMessage();
+        for(i=0; i<64; ++i)
+        {
+            /* message may be sensitive, clear it out */
+            Message_Block[i] = 0;
+        }
+        Length_Low = 0;    /* and clear length */
+        Length_High = 0;
+        Computed = 1;
+
+    }
+
+    for(i = 0; i < SHA1HashSize; ++i)
+    {
+        Message_Digest[i] = Intermediate_Hash[i>>2]
+                            >> 8 * ( 3 - ( i & 0x03 ) );
+    }
+
+    return shaSuccess;
+}
+
+/*
+ *  SHA1Input
+ *
+ *  Description:
+ *      This function accepts an array of octets as the next portion
+ *      of the message.
+ *
+ *  Parameters:
+ *      message_array: [in]
+ *          An array of characters representing the next portion of
+ *          the message.
+ *      length: [in]
+ *          The length of the message in message_array
+ *
+ *  Returns:
+ *      sha Error Code.
+ *
+ */
+int SHA1::SHA1Input(const U8  *message_array, unsigned length)
+{
+    if (!length)
+    {
+        return shaSuccess;
+    }
+
+    if (!message_array)
+    {
+        return shaNull;
+    }
+
+    if (Computed)
+    {
+        Corrupted = shaStateError;
+
+        return shaStateError;
+    }
+
+    if (Corrupted)
+    {
+         return Corrupted;
+    }
+    while(length-- && !Corrupted)
+    {
+    Message_Block[Message_Block_Index++] =
+                    (*message_array & 0xFF);
+
+    Length_Low += 8;
+    if (Length_Low == 0)
+    {
+        Length_High++;
+        if (Length_High == 0)
+        {
+            /* Message is too long */
+            Corrupted = 1;
+        }
+    }
+
+    if (Message_Block_Index == 64)
+    {
+        SHA1ProcessMessageBlock();
+    }
+
+    message_array++;
+    }
+
+    return shaSuccess;
+}
+
+/*
+ *  SHA1ProcessMessageBlock
+ *
+ *  Description:
+ *      This function will process the next 512 bits of the message
+ *      stored in the Message_Block array.
+ *
+ *  Parameters:
+ *      None.
+ *
+ *  Returns:
+ *      Nothing.
+ *
+ *  Comments:
+
+ *      Many of the variable names in this code, especially the
+ *      single character names, were used because those were the
+ *      names used in the publication.
+ *
+ *
+ */
+void SHA1::SHA1ProcessMessageBlock()
+{
+    const U32 K[] =    {       /* Constants defined in SHA-1   */
+                            0x5A827999,
+                            0x6ED9EBA1,
+                            0x8F1BBCDC,
+                            0xCA62C1D6
+                            };
+    int      t;                 /* Loop counter                */
+    U32      temp;              /* Temporary word value        */
+    U32      W[80];             /* Word sequence               */
+    U32      A, B, C, D, E;     /* Word buffers                */
+
+    /*
+     *  Initialize the first 16 words in the array W
+     */
+    for(t = 0; t < 16; t++)
+    {
+        W[t] = Message_Block[t * 4] << 24;
+        W[t] |= Message_Block[t * 4 + 1] << 16;
+        W[t] |= Message_Block[t * 4 + 2] << 8;
+        W[t] |= Message_Block[t * 4 + 3];
+    }
+
+    for(t = 16; t < 80; t++)
+    {
+       W[t] = SHA1CircularShift(1,W[t-3] ^ W[t-8] ^ W[t-14] ^ W[t-16]);
+    }
+
+    A = Intermediate_Hash[0];
+    B = Intermediate_Hash[1];
+    C = Intermediate_Hash[2];
+    D = Intermediate_Hash[3];
+    E = Intermediate_Hash[4];
+
+    for(t = 0; t < 20; t++)
+    {
+        temp =  SHA1CircularShift(5,A) +
+                ((B & C) | ((~B) & D)) + E + W[t] + K[0];
+        E = D;
+        D = C;
+        C = SHA1CircularShift(30,B);
+
+        B = A;
+        A = temp;
+    }
+
+    for(t = 20; t < 40; t++)
+    {
+        temp = SHA1CircularShift(5,A) + (B ^ C ^ D) + E + W[t] + K[1];
+        E = D;
+        D = C;
+        C = SHA1CircularShift(30,B);
+        B = A;
+        A = temp;
+    }
+
+    for(t = 40; t < 60; t++)
+    {
+        temp = SHA1CircularShift(5,A) +
+               ((B & C) | (B & D) | (C & D)) + E + W[t] + K[2];
+        E = D;
+        D = C;
+        C = SHA1CircularShift(30,B);
+        B = A;
+        A = temp;
+    }
+
+    for(t = 60; t < 80; t++)
+    {
+        temp = SHA1CircularShift(5,A) + (B ^ C ^ D) + E + W[t] + K[3];
+        E = D;
+        D = C;
+        C = SHA1CircularShift(30,B);
+        B = A;
+        A = temp;
+    }
+
+    Intermediate_Hash[0] += A;
+    Intermediate_Hash[1] += B;
+    Intermediate_Hash[2] += C;
+    Intermediate_Hash[3] += D;
+    Intermediate_Hash[4] += E;
+
+    Message_Block_Index = 0;
+}
+
+/*
+ *  SHA1PadMessage
+ *
+
+ *  Description:
+ *      According to the standard, the message must be padded to an even
+ *      512 bits.  The first padding bit must be a '1'.  The last 64
+ *      bits represent the length of the original message.  All bits in
+ *      between should be 0.  This function will pad the message
+ *      according to those rules by filling the Message_Block array
+ *      accordingly.  It will also call the ProcessMessageBlock function
+ *      provided appropriately.  When it returns, it can be assumed that
+ *      the message digest has been computed.
+ *
+ *  Parameters:
+ *      ProcessMessageBlock: [in]
+ *          The appropriate SHA*ProcessMessageBlock function
+ *  Returns:
+ *      Nothing.
+ *
+ */
+
+void SHA1::SHA1PadMessage()
+{
+    /*
+     *  Check to see if the current message block is too small to hold
+     *  the initial padding bits and length.  If so, we will pad the
+     *  block, process it, and then continue padding into a second
+     *  block.
+     */
+    if (Message_Block_Index > 55)
+    {
+        Message_Block[Message_Block_Index++] = 0x80;
+        while(Message_Block_Index < 64)
+        {
+            Message_Block[Message_Block_Index++] = 0;
+        }
+
+        SHA1ProcessMessageBlock();
+
+        while(Message_Block_Index < 56)
+        {
+            Message_Block[Message_Block_Index++] = 0;
+        }
+    }
+    else
+    {
+        Message_Block[Message_Block_Index++] = 0x80;
+        while(Message_Block_Index < 56)
+        {
+
+            Message_Block[Message_Block_Index++] = 0;
+        }
+    }
+
+    /*
+     *  Store the message length as the last 8 octets
+     */
+    Message_Block[56] = Length_High >> 24;
+    Message_Block[57] = Length_High >> 16;
+    Message_Block[58] = Length_High >> 8;
+    Message_Block[59] = Length_High;
+    Message_Block[60] = Length_Low >> 24;
+    Message_Block[61] = Length_Low >> 16;
+    Message_Block[62] = Length_Low >> 8;
+    Message_Block[63] = Length_Low;
+
+    SHA1ProcessMessageBlock();
+}
+
 //////////////////////////// ZPAQL //////////////////////////////
 
 // Symbolic constants, instruction size, and names
-typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,IMIX2,SSE} CompType;
-static const int compsize[256]={0,2,3,2,2,4,6,6,6,6};
+typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE} CompType;
+static const int compsize[256]={0,2,3,2,2,4,6,6,5,6};
 static const char* compname[]=
-  {"","const","cm","icm","match","avg","mix2","mix","imix2","sse",0};
+  {"","const","cm","icm","match","avg","mix2","mix","isse","sse",0};
 
 // Opcodes from ZPAQ spec, table 1, without operands (N, M)".
 static const char* opcodelist[258]={
@@ -266,7 +647,10 @@ public:
   void step(U32 input);   // Execute while displaying progress
   void prints();          // Print HCOMP as an array initialization
   double memory();        // Return memory requirement in bytes
+  int ph() {return header[4];}  // ph
+  int pm() {return header[5];}  // pm
   FILE* output;           // Destination for OUT instruction, or 0 to suppress
+  SHA1* sha1;             // Points to checksum computer
   bool verbose;           // Show config file during compile?
   friend class Predictor;
   friend class PostProcessor;
@@ -305,6 +689,7 @@ ZPAQL::ZPAQL() {
   hsize=cend=hbegin=hend=0;
   verbose=true;
   output=0;
+  sha1=0;
 }
 
 // Read header
@@ -611,9 +996,9 @@ double ZPAQL::memory() {
       case CM: mem+=4*size; break;
       case ICM: mem+=64*size+1024; break;
       case MATCH:
-      case MIX2: mem+=8*size; break;
+      case MIX2: mem+=4*size; break;
       case MIX: mem+=4*size*header[cp+3]; break; // m
-      case IMIX2: mem+=64*size+2048; break;
+      case ISSE: mem+=64*size+2048; break;
       case SSE: mem+=128*size; break;
     }
     cp+=compsize[header[cp]];
@@ -735,7 +1120,7 @@ while (<>) {
   elsif ($a eq "lj n m") {print"if((pc=hbegin+header[pc]+256*header[pc+1])>=hend)err();";}
   elsif ($a eq "jfn") {print"if (!f) $go; else ++pc;";}
   elsif ($a eq "jmpn") {print"$go;";}
-  elsif ($a eq "out") {print"if (output) putc(a, output);";}
+  elsif ($a eq "out") {print"if (output) putc(a, output); if (sha1) sha1->put(a);";}
   elsif ($a eq "hash") {print"a = (a+m(b)+512)*773;"}
   elsif ($a eq "hashd") {print"h(d) = (h(d)+a+512)*773;"}
   elsif ($op eq "<>") {print"swap($a);";}
@@ -801,7 +1186,7 @@ print"    default: err();\n  }\n";
     case 52: h(d) = 0; break; // *D=0
     case 55: r[header[pc++]] = a; break; // R=A N
     case 56: return 0  ; // HALT
-    case 57: if (output) putc(a, output); break; // OUT
+    case 57: if (output) putc(a, output); if (sha1) sha1->put(a); break; // OUT
     case 59: a = (a+m(b)+512)*773; break; // HASH
     case 60: h(d) = (h(d)+a+512)*773; break; // HASHD
     case 63: pc+=(header[pc]+128&255)-127; break; // JMP N
@@ -1153,14 +1538,13 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
           cr.cm[j]=65536/(m+(cp[0]==MIX2));
         break;
       }
-      case IMIX2:  // sizebits j k wt rate
+      case ISSE:  // sizebits j c rate
         if (cp[2]>=i) error("ISSE j >= i");
-        if (cp[3]>=i) error("ISSE k >= i");
         cr.ht.resize(64, cp[1]);
         cr.cm.resize(512);
         for (int j=0; j<512; j+=2) {
-          cr.cm[j]=256*cp[4];
-          cr.cm[j+1]=256*(256-cp[4]);
+          cr.cm[j]=(1<<15);
+          cr.cm[j+1]=0;
         }
         break;
       case SSE: // sizebits j start limit mask
@@ -1239,13 +1623,13 @@ int Predictor::predict() {
         p[i]=clamp2k(p[i]>>8);
       }
         break;
-      case IMIX2:  // sizebits j k wt rate -- c=hi, cxt=bh
+      case ISSE:  // sizebits j c rate -- c=hi, cxt=bh
         assert((hmap4&15)>0);
         if (c8==1 || (c8&0xf0)==16)
           cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];  // bit history
         int *wt=(int*)&cr.cm[cr.cxt*2];
-        p[i]=clamp2k(wt[0]*p[cp[2]]+wt[1]*p[cp[3]]>>16);
+        p[i]=clamp2k(wt[0]*p[cp[2]]+wt[1]*cp[3]*4>>16);
         break;
       case SSE: { // sizebits j start limit mask
         cr.cxt=(z.h(i)+(c8&cp[5]))*32;
@@ -1381,13 +1765,13 @@ static const U8 next[256][2]={
           wt[j]=clamp512k(wt[j]+(err*p[cp[2]+j]+(1<<12)>>13));
       }
         break;
-      case IMIX2: { // sizebits j k wt rate -- c=hi, cxt=bh
+      case ISSE: { // sizebits j c rate -- c=hi, cxt=bh
         assert(cr.cxt==cr.ht[cr.c+(hmap4&15)]);
         cr.ht[cr.c+(hmap4&15)]=next[cr.cxt][y];
-        int err=(y*32767-squash(p[i]))*cp[5]>>4;
+        int err=(y*32767-squash(p[i]))*cp[4]>>4;
         int *wt=(int*)&cr.cm[cr.cxt*2];
         wt[0]=clamp512k(wt[0]+(err*p[cp[2]]+(1<<12)>>13));
-        wt[1]=clamp512k(wt[1]+(err*p[cp[3]]+(1<<12)>>13));
+        wt[1]=clamp512k(wt[1]+(err*cp[3]+(1<<10)>>11));
       }
         break;
       case SSE:  // sizebits j start limit mask
@@ -1511,7 +1895,7 @@ class PostProcessor {
   ZPAQL z;     // holds PCOMP
 public:
   PostProcessor(ZPAQL& hz);
-  void set(FILE* out) {z.output=out;}  // Set output
+  void set(FILE* out, SHA1* p) {z.output=out; z.sha1=p;}  // Set output
   void write(int c);  // Input a byte
 };
 
@@ -1533,6 +1917,7 @@ void PostProcessor::write(int c) {
       break;
     case 1:  // PASS
       if (z.output && c>=0) putc(c, z.output);  // data
+      if (z.sha1 && c>=0) z.sha1->put(c);
       break;
     case 2: // PROG
       if (c<0) error("Unexpected EOS");
@@ -1618,10 +2003,10 @@ void decompress(int argc, char** argv) {
           out=fopen(argv[filecount+3], "wb");
           if (!out) {
             perror(argv[filecount+3]);
-            printf("skipping %s -> %s ...\n", filename, argv[filecount+3]);
+            printf("skipping %s -> %s ... ", filename, argv[filecount+3]);
           }
           else
-            printf("Decompressing %s -> %s\n", filename, argv[filecount+3]);
+            printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
         }
         else {
           printf("Skipping %s and remaining files\n", filename);
@@ -1633,26 +2018,29 @@ void decompress(int argc, char** argv) {
       else {
         out=fopen(filename, "rb");
         if (out) {
-          printf("Won't overwrite %s, skipping...\n", filename);
+          printf("Won't overwrite %s, skipping... ", filename);
           fclose(out);
           out=0;
         }
         out=fopen(filename, "wb");
         if (!out) {
           perror(filename);
-          printf("skipping %s ...\n", filename);
+          printf("skipping %s ... ", filename);
         }
         else
-          printf("Decompressing %s\n", filename);
+          printf("Decompressing %s ... ", filename);
       }
 
       // Decompress
+      SHA1 sha1;
       if (argv[1][0]=='t') { // don't postprocess
-        while ((c=dec.decompress())!=EOF)
+        while ((c=dec.decompress())!=EOF) {
           if (out) putc(c, out);
+          sha1.put(c);
+        }
       }
       else {
-        pp.set(out);
+        pp.set(out, &sha1);
         while ((c=dec.decompress())!=EOF)
           pp.write(c);
         pp.write(-1);
@@ -1660,7 +2048,31 @@ void decompress(int argc, char** argv) {
       ++filecount;
 
       // Check for end of segment and block markers
-      if (getc(in)!=254) error("missing end of segment marker");
+      int eos=getc(in);  // 253=SHA1 follows, 254=EOS
+      if (eos==253) {
+        U8 hash[20];
+        bool match=true;
+        for (int i=0; i<20; ++i) {
+          hash[i]=getc(in);
+          if (hash[i]!=sha1.result(i))
+            match=false;
+        }
+        if (match)
+          printf("Checksum OK");
+        else {
+          printf("CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
+          for (int i=0; i<20; ++i)
+            printf("%02x", hash[i]);
+          printf("\n  File SHA1:    ");
+          for (int i=0; i<20; ++i)
+            printf("%02x", sha1.result(i));
+        }
+      }
+      else if (eos!=254)
+        error("missing end of segment marker");
+      else
+        printf("OK, no checksum");
+      printf("\n");
     }
     if (c!=255) error("missing end of block marker");
   }
@@ -1730,16 +2142,17 @@ class PreProcessor {
   Encoder* encp;
   int state; // 0=init, 1=normal
   const char* cmd;  // command
+  int ph, pm; // memory sizes for H, M from config file
   U32 b, c;  // state for EXE transform (head, tail of queue m)
   Array<U8> m;  // rotating buffer with at most 4 bytes
   void exe(U32 a);  // EXE transform
 public:
-  PreProcessor(Encoder* p, const char* cm);
+  PreProcessor(Encoder* p, const char* cm, int ph_, int pm_);
   void compress(U32 a);
 };
 
-PreProcessor::PreProcessor(Encoder* p, const char* cm):
-    encp(p), state(0), cmd(cm) {
+PreProcessor::PreProcessor(Encoder* p, const char* cm, int ph_, int pm_):
+    encp(p), state(0), cmd(cm), ph(ph_), pm(pm_) {
   b=c=0;
   m.resize(8);
 }
@@ -1750,6 +2163,8 @@ PreProcessor::PreProcessor(Encoder* p, const char* cm):
 // the beginning of the file to the address. Append a program to
 // reverse the transform.
 void PreProcessor::exe(U32 a) {
+  if (pm<3) error("x transform requires at least ph=0, pm=3");
+
   /* EXE transform. Assume ph=0, pm=3. Decoding is as follows:
   (e8e9 transform. M=queue with C tail and B at head,
    max size 4. If size < 4 then add to buffer. Else if
@@ -1843,9 +2258,11 @@ void PreProcessor::compress(U32 a) {
 //////////////////////////// Compress ////////////////////////////
 
 // Compress files in argv[3..argc-1] to argv[2]
+// argv[1][0]: a=append, b=append without checksum, c=create archive
+// argv[1]+1: config file
 void compress(int argc, char** argv) {
   assert(argc>=3);
-  assert(argv[1][0]=='a' || argv[1][0]=='c');
+  assert(argv[1][0]=='a' || argv[1][0]=='b' || argv[1][0]=='c');
 
   // Compile config file
   FILE* cfg=0;        // config file
@@ -1862,7 +2279,7 @@ void compress(int argc, char** argv) {
     error("no config file");
 
   // Open archive
-  FILE* out=fopen(argv[2], argv[1][0]=='a' ? "ab" : "wb");
+  FILE* out=fopen(argv[2], argv[1][0]=='c' ? "wb" : "ab");
   if (!out) perror(argv[2]), exit(1);
 
   // Write block header
@@ -1873,7 +2290,7 @@ void compress(int argc, char** argv) {
   // Create PreProcessor chain that writes to Encoder
   assert(out);
   Encoder enc(out, z);
-  PreProcessor pp(&enc, cmd);
+  PreProcessor pp(&enc, cmd, z.ph(), z.pm());
 
   // Compress files argv[3..argc-1]
   for (int i=3; i<argc; ++i) {
@@ -1890,12 +2307,21 @@ void compress(int argc, char** argv) {
 
       // Compress 
       int c;
-      while ((c=getc(in))!=EOF)
+      SHA1 sha1;
+      while ((c=getc(in))!=EOF) {
+        if (argv[1][0]!='b') sha1.put(c);
         pp.compress(c);
+      }
       pp.compress(EOS);
 
       // Write segment trailer
-      fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
+      if (argv[1][0]=='b')
+        fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
+      else {
+        fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 253);
+        for (int j=0; j<20; ++j)
+          putc(sha1.result(j), out);
+      }
       fclose(in);
       printf("%s %ld -> %ld\n", argv[i], size, ftell(out)-mark);
       mark=ftell(out);
@@ -1949,7 +2375,18 @@ void list(int argc, char** argv) {
       while ((c=getc(in))!=EOF && (c4=c4<<8|c)!=0);
       if (c==EOF) error("unexpected end of file");
       while ((c=getc(in))==0);
-      if (c!=254) error("missing end of segment marker");
+      if (c==253) {  // print SHA1 in verbose mode
+        if (argv[1][0]=='v') {
+          printf(" SHA1=");
+          for (int i=0; i<20; ++i)
+            printf("%02x", getc(in));
+        }
+        else {
+          for (int i=0; i<20; ++i)  // skip SHA1
+            getc(in);
+        }
+      }
+      else if (c!=254) error("missing end of segment marker");
       printf(" -> %ld\n", 1+ftell(in)-mark);
       mark=1+ftell(in);
     }
@@ -2008,15 +2445,15 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.05 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v0.06 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
     "Usage: zpaq command archive files...  Commands are:\n"
-    "  c        Create new archive (or overwrite existing archive).\n"
-    "  cconfig  Create using compression options in file config.\n"
-    "  a        Append to archive.\n"
-    "  aconfig  Append using compression options in file config.\n"
+    "  cconfig  Create new archive (or overwrite existing archive)\n"
+    "           using compression options in file config.\n"
+    "  aconfig  Append to archive.\n"
+    "  bconfig  Append without storing checksums (saves 20 bytes).\n"
     "  x        Extract all files using stored names (does not clobber).\n"
     "           Or if file names are given, rename in that order (clobbers).\n"
     "  l        List contents of archive.\n"
@@ -2044,7 +2481,7 @@ int main(int argc, char** argv) {
 
   // Do the command
   char cmd=argv[1][0];
-  if ((cmd=='a' || cmd=='c') && argc>=3) {
+  if ((cmd=='a' || cmd=='b' || cmd=='c') && argc>=3) {
     compress(argc, argv);
     printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
   }
