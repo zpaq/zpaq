@@ -1,5 +1,5 @@
-README for ZPAQ v0.05.
-Matt Mahoney - Feb. 26, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.06.
+Matt Mahoney - Feb. 27, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -42,25 +42,34 @@ will compress the Calgary corpus (14 files) as follows
 in 45 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-calgary\BIB  111261 -> 23700
-calgary\BOOK1  768771 -> 198987
-calgary\BOOK2  610856 -> 123978
-calgary\GEO  102400 -> 46862
-calgary\NEWS  377109 -> 90755
-calgary\OBJ1  21504 -> 8827
-calgary\OBJ2  246814 -> 56333
-calgary\PAPER1  53161 -> 11190
-calgary\PAPER2  82199 -> 17121
-calgary\PIC  513216 -> 28722
-calgary\PROGC  39611 -> 9136
-calgary\PROGL  71646 -> 11061
-calgary\PROGP  49379 -> 7979
-calgary\TRANS  93695 -> 11637
--> 646288
+261.697 MB memory required.
+calgary\BIB 111261 -> 23506
+calgary\BOOK1 768771 -> 198795
+calgary\BOOK2 610856 -> 123871
+calgary\GEO 102400 -> 46810
+calgary\NEWS 377109 -> 90760
+calgary\OBJ1 21504 -> 8832
+calgary\OBJ2 246814 -> 56266
+calgary\PAPER1 53161 -> 11209
+calgary\PAPER2 82199 -> 17137
+calgary\PIC 513216 -> 28612
+calgary\PROGC 39611 -> 9145
+calgary\PROGL 71646 -> 11074
+calgary\PROGP 49379 -> 7982
+calgary\TRANS 93695 -> 11649
+-> 645648
 
 To append to an existing archive:
 
   zpaq aconfig archive files...
+
+To append without saving a SHA1 checksum (saves 20 bytes per file):
+
+  zpaq bconfig archive files...
+
+If a checksum is present, the decompressor will compute the SHA1
+hash of the extracted file and compare it with the stored checksum
+and report a warning if they don't match.
 
 To list the contents of an archive:
 
@@ -173,8 +182,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq035.pdf -Version 0.35 of the ZPAQ specification, valid only
-               for zpaq v0.05.
+  zpaq036.pdf -Version 0.36 of the ZPAQ specification, valid only
+               for zpaq v0.06.
 
   zpaq.cpp -   Source code.
 
@@ -235,3 +244,8 @@ v0.05 - Feb. 26, 2009. Changed representation of squashed probabilities
 	not to overflow. The higher resolution improves compression on highly
 	redundant files. MIX2 now has weights constrained to add to 1 which
 	also improves compression.
+
+v0.06 - Feb. 27, 2009. Optionally appends a SHA1 hash of the input file
+	for each segment, which is checked by the decompressor. Added
+	"b" command to append without a checksum. Replaced IMIX2 with
+	ISSE. Compression prints memory usage by component.
