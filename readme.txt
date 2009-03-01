@@ -1,5 +1,5 @@
-README for ZPAQ v0.06.
-Matt Mahoney - Feb. 27, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.07.
+Matt Mahoney - Feb. 28, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -25,7 +25,7 @@ supplied:
 
   min.cfg - Fast, minimal compression with an order 4 context
             model - requires 4 MB memory.
-  max.cfg - Slow but good compression. Requires 278 MB.
+  max.cfg - Slow but good compression. Requires 261 MB.
 
 To create an archive:
 
@@ -43,21 +43,21 @@ in 45 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
 261.697 MB memory required.
-calgary\BIB 111261 -> 23506
-calgary\BOOK1 768771 -> 198795
-calgary\BOOK2 610856 -> 123871
-calgary\GEO 102400 -> 46810
-calgary\NEWS 377109 -> 90760
-calgary\OBJ1 21504 -> 8832
-calgary\OBJ2 246814 -> 56266
-calgary\PAPER1 53161 -> 11209
-calgary\PAPER2 82199 -> 17137
-calgary\PIC 513216 -> 28612
-calgary\PROGC 39611 -> 9145
-calgary\PROGL 71646 -> 11074
-calgary\PROGP 49379 -> 7982
-calgary\TRANS 93695 -> 11649
--> 645648
+calgary\BIB 111261 -> 23082
+calgary\BOOK1 768771 -> 198364
+calgary\BOOK2 610856 -> 123840
+calgary\GEO 102400 -> 46785
+calgary\NEWS 377109 -> 90758
+calgary\OBJ1 21504 -> 8842
+calgary\OBJ2 246814 -> 56268
+calgary\PAPER1 53161 -> 11193
+calgary\PAPER2 82199 -> 17123
+calgary\PIC 513216 -> 28623
+calgary\PROGC 39611 -> 9144
+calgary\PROGL 71646 -> 11067
+calgary\PROGP 49379 -> 7986
+calgary\TRANS 93695 -> 11652
+-> 644727
 
 To append to an existing archive:
 
@@ -182,8 +182,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq036.pdf -Version 0.36 of the ZPAQ specification, valid only
-               for zpaq v0.06.
+  zpaq037.pdf -Version 0.37 of the ZPAQ specification, valid only
+               for zpaq v0.07.
 
   zpaq.cpp -   Source code.
 
@@ -249,3 +249,9 @@ v0.06 - Feb. 27, 2009. Optionally appends a SHA1 hash of the input file
 	for each segment, which is checked by the decompressor. Added
 	"b" command to append without a checksum. Replaced IMIX2 with
 	ISSE. Compression prints memory usage by component.
+
+v0.07 - Feb. 28, 2009. Modified ISSE to use decreasing learning rate
+        on the fixed size inversely proportional to a count. ISSE drops the
+        c and rate parameters. SSE drops the mask parameter. Bit history
+        next-state tables are updated by removing some of the n0=0 or n1=0
+        states and adding other states.
