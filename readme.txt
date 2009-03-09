@@ -1,5 +1,5 @@
-README for ZPAQ v0.07.
-Matt Mahoney - Feb. 28, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.08.
+Matt Mahoney - Mar. 8, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -23,9 +23,9 @@ http://cs.fit.edu/~mmahoney/compression/
 Compression requires a configuration file. Two examples are
 supplied:
 
-  min.cfg - Fast, minimal compression with an order 4 context
-            model - requires 4 MB memory.
-  max.cfg - Slow but good compression. Requires 261 MB.
+  min.cfg - Fast, minimal compression (LZP + order 3). Requires 4 MB memory.
+  mid.cfg - Average compression and speed. Requires 111 MB.
+  max.cfg - Slow but good compression. Requires 278 MB.
 
 To create an archive:
 
@@ -39,11 +39,11 @@ example:
   zpaq cmax.cfg calgary.zpaq calgary\*
 
 will compress the Calgary corpus (14 files) as follows
-in 45 seconds on a 2 GHz Pentium T3200. The file names are
+in 43 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-261.697 MB memory required.
-calgary\BIB 111261 -> 23082
+278.477 MB memory required.
+calgary\BIB 111261 -> 23083
 calgary\BOOK1 768771 -> 198364
 calgary\BOOK2 610856 -> 123840
 calgary\GEO 102400 -> 46785
@@ -57,7 +57,7 @@ calgary\PROGC 39611 -> 9144
 calgary\PROGL 71646 -> 11067
 calgary\PROGP 49379 -> 7986
 calgary\TRANS 93695 -> 11652
--> 644727
+-> 644728
 
 To append to an existing archive:
 
@@ -169,10 +169,6 @@ The hconfig command runs the program in the HCOMP section using
 arrays H and M with sizes 2^hh and 2^hm respectively. The pconfig
 command uses 2^ph and 2^pm respectively.
 
-The only POST commands currently implemented are 0, which does
-no post-processing, and x, which performs an E8E9 transform
-to improve compression of x86 .exe and .dll files.
-
 When developing a config file, it is useful to run with the
 hconfig command without arguments to check for compilation
 errors and check the targets of relative jump instructions
@@ -180,24 +176,61 @@ errors and check the targets of relative jump instructions
 be run again with arguments so that you can check if the program
 is behaving correctly.
 
+The following POST commands are accepted:
+
+  0 (no preprocessing)
+  x (E8E9 transform for better .exe and .dll compression)
+  p esc minlen hmul (LZP transform)
+
+The 0 transform compresses the file unchanged. Set ph=0, pm=0 to
+save memory.
+
+The x transform improves x86 compression by replacing the relative
+addresses of the CALL and JMP instructions (0xE8 and 0xE9) with
+absolute addresses by adding the offset from the start of the file
+to the 4 byte number (LSB first) that follows the instruction.
+When used, set ph=0, pm=3.
+
+The p transform performs a simple, fast compression that improves
+speed by replacing duplicate, consecutive strings that occur in the
+same context with a code to indicate the length of the match. The
+sequence (esc len), len > 0, codes a match of length len+minlen.
+The sequence (esc 0) codes esc. The context hash is updated for
+each byte C by: hash := hash * hmul + C (mod 2^ph). The match
+must be found in a rotating buffer of size 2^pm. For example:
+
+  comp x x 18 20 x (ph=18, pm=20)
+    ...
+  post
+    p 127 3 40
+  end
+
+says to code matches using escape bytes with the value 127. Match
+lengths are in the range (4...258). This uses an order 6 context hash
+because 40 = 5*2^3 effectively shifts the context hash left by 3 bits
+and ph/3 = 18/3 = 6.
+
+LZP helps speed at the expense of compression for all but the fastest
+configurations (e.g. min.cfg). It is recommended to use esc = any
+value that rarely occurs in the input, minlen = 3 or more, hmul to
+select a context of order < minlen, pm = ph + 2 and pm > 8. Allowed
+values are (0...255).
+
 Contents:
 
-  zpaq037.pdf -Version 0.37 of the ZPAQ specification, valid only
-               for zpaq v0.07.
+  zpaq037.pdf -Version 0.38 of the ZPAQ specification, valid only
+               for zpaq v0.08.
 
   zpaq.cpp -   Source code.
 
   zpaq.exe -   32 bit Windows executable, compiled as follows:
-               g++ -O3 -s -fomit-frame-pointer -march=pentiumpro \
+               g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
                    -DNDEBUG zpaq.cpp -o zpaq.exe
                upx zpaq.exe
 
-  zpaqd.exe -  Slower executable with assertions turned on.
-               If zpaq.exe crashes, try this program instead
-               and let me know what happened. Compiled as above
-               without -DNDEBUG
-
   min.cfg -    Config file for fast compression.
+
+  mid.cfg -    Config file for average compression.
 
   max.cfg -    Config file for good compression.
 
@@ -255,3 +288,8 @@ v0.07 - Feb. 28, 2009. Modified ISSE to use decreasing learning rate
         c and rate parameters. SSE drops the mask parameter. Bit history
         next-state tables are updated by removing some of the n0=0 or n1=0
         states and adding other states.
+
+v0.08 - Mar. 8, 2009. Added LZP preprocessor. Improved memory utilization
+        reporting. Minor speed improvements. Added mid.cfg. Changed
+        MATCH so that the buffer and hash table sizes are specified
+        separately. Clarified role of comment field. Removed zpaqd.exe.
