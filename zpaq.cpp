@@ -1,7 +1,7 @@
-/*  zpaq v0.08 archiver and file compressor.
+/*  zpaq v0.09 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Mar. 8, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Mar. 9, 2009.
 
     LICENSE
 
@@ -1000,7 +1000,7 @@ void ZPAQL::prints() {
   printf("\n[%d]={1,%d,%d", hend-hbegin+3, hend-hbegin&255, hend-hbegin>>8);
   for (int i=hbegin; i<hend; ++i) {
     printf(",");
-    if ((i-hbegin)%19==15) printf("\n");
+    if ((i-hbegin)%16==15) printf("\n");
     printf("%d", header[i]);
   }
   printf("}\n");
@@ -1021,7 +1021,7 @@ double ZPAQL::memory() {
       case MATCH: mem+=4*size+pow(2, header[cp+2]); break; // bufbits
       case MIX2: mem+=2*size; break;
       case MIX: mem+=4*size*header[cp+3]; break; // m
-      case ISSE: mem+=64*size+2560; break;
+      case ISSE: mem+=64*size+2048; break;
       case SSE: mem+=128*size; break;
     }
     cp+=compsize[header[cp]];
@@ -1545,6 +1545,53 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   assert(sizeof(int)==4);
   assert(sizeof(long)==sizeof(char*));  // 4 or 8
 
+  // Bit history -> (n1+0.5)/(n0+n1+1) * 2^23
+  static const int cminit[256]={
+  4194304,2097152,6291456,1398101,4194304,4194304, // 0-5
+  6990506,1048576,3145728,3145728,3145728,5242880, // 6-11
+  5242880,5242880,7340032, 838860,2516582,2516582, // 12-17
+  2516582,2516582,4194304,4194304,4194304,4194304, // 18-23
+  4194304,4194304,5872025,5872025,5872025,5872025, // 24-29
+  7549747, 699050,2097152,2097152,3495253,3495253, // 30-35
+  4893354,4893354,6291456,6291456,7689557, 599186, // 36-41
+  1797558,1797558,2995931,2995931,4194304,4194304, // 42-47
+  5392676,5392676,6591049,6591049,7789421, 524288, // 48-53
+  1572864,1572864,2621440,2621440,3670016,3670016, // 54-59
+  4718592,4718592,5767168,5767168,6815744,6815744, // 60-65
+  7864320, 466033,1398101,1398101,2330168,2330168, // 66-71
+  3262236,3262236,4194304,4194304,5126371,5126371, // 72-77
+  6058439,6058439,6990506,6990506,7922574, 419430, // 78-83
+  1258291,1258291,2097152,2097152,2936012,2936012, // 84-89
+  3774873,3774873,4613734,4613734,5452595,5452595, // 90-95
+  6291456,6291456,7130316,7130316,7969177, 381300, // 96-101
+  1143901,1143901,1906501,1906501,6482106,6482106, // 102-107
+  7244706,7244706,8007307, 349525,1048576,1048576, // 108-113
+  1747626,1747626,6640981,6640981,7340032,7340032, // 114-119
+  8039082, 322638, 967916, 967916,1613193,1613193, // 120-125
+  6775414,6775414,7420691,7420691,8065969, 299593, // 126-131
+   898779, 898779,1497965,1497965,6890642,6890642, // 132-137
+  7489828,7489828,8089014, 279620, 838860, 838860, // 138-143
+  1398101,1398101,6990506,6990506,7549747,7549747, // 144-149
+  8108987, 262144, 786432, 786432,1310720,1310720, // 150-155
+  7077888,7077888,7602176,7602176,8126464, 246723, // 156-161
+   740171, 740171,7648436,7648436,8141884, 233016, // 162-167
+   699050,7689557,8155591, 220752, 662258,7726349, // 168-173
+  8167855, 209715, 629145,7759462,8178892, 599186, // 174-179
+  7789421, 571950,7816657, 547083,7841524, 524288, // 180-185
+  7864320, 503316,7885291, 483958,7904649, 466033, // 186-191
+  7922574, 449389,7939218, 433893,7954714, 419430, // 192-197
+  7969177, 405900,7982707, 393216,7995392, 381300, // 198-203
+  8007307, 370085,8018522, 359511,8029096, 349525, // 204-209
+  8039082, 340078,8048529, 331129,8057478, 322638, // 210-215
+  8065969, 314572,8074035, 306900,8081707, 299593, // 216-221
+  8089014, 292625,8095982, 285975,8102632, 279620, // 222-227
+  8108987, 273541,8115066, 267721,8120886, 262144, // 228-233
+  8126464, 256794,8131813, 251658,8136949, 246723, // 234-239
+  8141884, 241979,8146628, 237413,8151194, 233016, // 240-245
+  8155591, 228780,8159827, 224694,8163913, 220752, // 246-251
+  8167855, 216946,8171661 // 252-254
+  };
+
   // Initialize tables
   for (int i=0; i<1024; ++i)
     dt[i]=(1<<17)/(i*2+3);
@@ -1591,7 +1638,7 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
         cr.cm.resize(256);
         cr.ht.resize(64, cp[1]);
         for (int j=0; j<cr.cm.size(); ++j)
-          cr.cm[j]=0x80000000;
+          cr.cm[j]=cminit[j];
         break;
       case MATCH:  // sizebits
         cr.cm.resize(1, cp[1]);  // index
@@ -1620,15 +1667,14 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
           cr.cm[j]=65536/m;
         break;
       }
-      case ISSE:  // sizebits j c rate
+      case ISSE:  // sizebits j
         if (cp[2]>=i) error("ISSE j >= i");
         cr.ht.resize(64, cp[1]);
         cr.cm.resize(512);
-        for (int j=0; j<512; j+=2) {
-          cr.cm[j]=1<<15;
-          cr.cm[j+1]=0;
+        for (int j=0; j<256; ++j) {
+          cr.cm[j*2]=1<<15;
+          cr.cm[j*2+1]=clamp512k(stretch(cminit[j]>>8)<<10);
         }
-        cr.a16.resize(256);  // learning rate
         break;
       case SSE: // sizebits j start limit
         if (cp[2]>=i) error("SSE j >= i");
@@ -1668,7 +1714,7 @@ int Predictor::predict() {
         assert((hmap4&15)>0);
         if (c8==1 || (c8&0xf0)==16) cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];
-        p[i]=stretch(cr.cm(cr.cxt)>>17);
+        p[i]=stretch(cr.cm(cr.cxt)>>8);
         break;
       case MATCH: // sizebits bufbits: a=len, b=offset, c=bit, cxt=256/len,
                   //                   ht=buf, limit=8*pos+bp
@@ -1706,7 +1752,7 @@ int Predictor::predict() {
         p[i]=clamp2k(p[i]>>8);
       }
         break;
-      case ISSE: { // sizebits j c rate -- c=hi, cxt=bh
+      case ISSE: { // sizebits j -- c=hi, cxt=bh
         assert((hmap4&15)>0);
         if (c8==1 || (c8&0xf0)==16)
           cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
@@ -1805,9 +1851,11 @@ void Predictor::update(int y) {
       case CM:  // sizebits limit
         train(cr, y);
         break;
-      case ICM: // sizebits: cxt=ht[b]=bh, ht[c][0..15]=bh row, cxt=bh
+      case ICM: { // sizebits: cxt=ht[b]=bh, ht[c][0..15]=bh row, cxt=bh
         cr.ht[cr.c+(hmap4&15)]=next[cr.ht[cr.c+(hmap4&15)]][y];
-        train(cr, y);
+        U32& pn=cr.cm(cr.cxt);
+        pn+=int(y*32767-(pn>>8))>>2;
+      }
         break;
       case MATCH: // sizebits bufbits:
                   //   a=len, b=offset, c=bit, cm=index, cxt=256/len
@@ -1857,14 +1905,13 @@ void Predictor::update(int y) {
           wt[j]=clamp512k(wt[j]+(err*p[cp[2]+j]+(1<<12)>>13));
       }
         break;
-      case ISSE: { // sizebits j c rate -- c=hi, cxt=bh
+      case ISSE: { // sizebits j  -- c=hi, cxt=bh
         assert(cr.cxt==cr.ht[cr.c+(hmap4&15)]);
         int err=y*32767-squash(p[i]);
         int *wt=(int*)&cr.cm[cr.cxt*2];
         wt[0]=clamp512k(wt[0]+(err*p[cp[2]]+(1<<12)>>13));
-        wt[1]=clamp512k(wt[1]+(err*dt[cr.a16[cr.cxt]]+(1<<11)>>12));
+        wt[1]=clamp512k(wt[1]+(err+16>>5));
         cr.ht[cr.c+(hmap4&15)]=next[cr.cxt][y];
-        cr.a16[cr.cxt]+=(cr.a16[cr.cxt]<1023);
       }
         break;
       case SSE:  // sizebits j start limit
@@ -2115,12 +2162,14 @@ void decompress(int argc, char** argv) {
           fclose(out);
           out=0;
         }
-        out=fopen(filename, "wb");
-        if (!out) {
-          perror(filename);
-          printf("skipping %s ... ", filename);
+        else {
+          out=fopen(filename, "wb");
+          if (!out) {
+            perror(filename);
+            printf("skipping %s ... ", filename);
+          }
         }
-        else
+        if (out)
           printf("Decompressing %s ... ", filename);
       }
 
@@ -2353,7 +2402,36 @@ void PreProcessor::lzp(U32 a) {
   const int MINLEN=cmd>>16&255;
   const int HMUL=cmd>>24&255;
 
-  static const U8 prog[59]={
+/*
+  (ZPAQL code for LZP inverse transform with ESC=5, MINLEN=3, HMUL=40)
+  jf 30 (last byte was esc?)
+    a> 0
+      jf 37 (goto output esc)
+    a+= 3 r=a 0
+      c=*d
+        *d=b (top of copy loop)
+        a=*c *b=a b++ c++
+        out
+        d<>a a*= 40 a+=d d<>a
+        a=r 0 a-- r=a 0
+      a> 0 jt -20 (to top of copy loop)
+    halt
+  a== 5 jf 1
+    halt
+  a> 255 jf 4
+    a<a halt (F=0)
+
+(output esc)
+  a= 5 
+(output:)
+  *d=b
+  *b=a b++
+  out
+  d<>a a*= 40 a+=d d<>a
+  halt
+*/
+
+  static const U8 prog[59]={  // compiled from above
     1,56,0,47,30,239,0,47,37,135,0,55,0,86,113,69,96,9,
     17,57,24,151,0,131,24,7,0,2,55,0,239,0,39,236,56,223,0,
     47,1,56,239,255,47,4,224,56,71,0,113,96,9,57,24,151,0,131,
@@ -2632,7 +2710,7 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.08 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v0.09 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"

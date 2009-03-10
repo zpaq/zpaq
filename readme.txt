@@ -1,5 +1,5 @@
-README for ZPAQ v0.08.
-Matt Mahoney - Mar. 8, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.09.
+Matt Mahoney - Mar. 9, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -42,22 +42,22 @@ will compress the Calgary corpus (14 files) as follows
 in 43 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-278.477 MB memory required.
-calgary\BIB 111261 -> 23083
-calgary\BOOK1 768771 -> 198364
-calgary\BOOK2 610856 -> 123840
-calgary\GEO 102400 -> 46785
-calgary\NEWS 377109 -> 90758
+278.474 MB memory required.
+calgary\BIB 111261 -> 23008
+calgary\BOOK1 768771 -> 198477
+calgary\BOOK2 610856 -> 123852
+calgary\GEO 102400 -> 46780
+calgary\NEWS 377109 -> 90763
 calgary\OBJ1 21504 -> 8842
-calgary\OBJ2 246814 -> 56268
-calgary\PAPER1 53161 -> 11193
-calgary\PAPER2 82199 -> 17123
-calgary\PIC 513216 -> 28623
-calgary\PROGC 39611 -> 9144
-calgary\PROGL 71646 -> 11067
-calgary\PROGP 49379 -> 7986
-calgary\TRANS 93695 -> 11652
--> 644728
+calgary\OBJ2 246814 -> 56258
+calgary\PAPER1 53161 -> 11200
+calgary\PAPER2 82199 -> 17126
+calgary\PIC 513216 -> 28595
+calgary\PROGC 39611 -> 9143
+calgary\PROGL 71646 -> 11056
+calgary\PROGP 49379 -> 7977
+calgary\TRANS 93695 -> 11643
+-> 644720
 
 To append to an existing archive:
 
@@ -218,8 +218,8 @@ values are (0...255).
 
 Contents:
 
-  zpaq037.pdf -Version 0.38 of the ZPAQ specification, valid only
-               for zpaq v0.08.
+  zpaq039.pdf -Version 0.39 of the ZPAQ specification, valid only
+               for zpaq v0.09.
 
   zpaq.cpp -   Source code.
 
@@ -293,3 +293,8 @@ v0.08 - Mar. 8, 2009. Added LZP preprocessor. Improved memory utilization
         reporting. Minor speed improvements. Added mid.cfg. Changed
         MATCH so that the buffer and hash table sizes are specified
         separately. Clarified role of comment field. Removed zpaqd.exe.
+
+v0.09 - Mar. 9, 2009. Removed counters from ISSE and ICM and replaced
+        bit history map with initial estimates based on n1/(n0+n1) to
+        improve speed. Fixed a bug where x clobbers files when it says
+        it isn't.
