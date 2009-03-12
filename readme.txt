@@ -1,26 +1,25 @@
-README for ZPAQ v0.09.
-Matt Mahoney - Mar. 9, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.00
+Matt Mahoney - Mar. 12, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
 compatibility between versions as advanced compression techniques
 are discovered.
 
-ZPAQ versions before 1.00 are experimental pre-release (level 0)
-implementations of the proposed ZPAQ open standard for highly compressed
-data. They implement only the accompanying version of the ZPAQ standard.
-They are not intended to be compatible with other versions of ZPAQ
-or the upcoming level 1 standard. When the level 1 standard
-is released, all versions will be compatible with one another.
-Level 2 and higher will be backward compatible i.e. able to
-read level 1. When level 1 is released, all level 0 programs
-(including this one) and the file formats they produce
-will be obsolete.
+This a candidate for the ZPAQ standard. It will become standard
+unless superseded by a later version before Apr. 11, 2009 by
+an announcement to http://cs.fit.edu/~mmahoney/compression
+If this version becomes standard, it will be compatible with
+all other level 1 versions. It will not be compatible with
+level 0 versions released prior to version 1.00.
 
-The current version of ZPAQ can be found at
-http://cs.fit.edu/~mmahoney/compression/
+There are two programs. unzpaq1 is a reference decompressor.
+It is an integral part of the standard. zpaq is both a compressor
+and decompressor. It is not part of the standard.  Unzpaq1 works
+like zpaq except that it understands only the x (extract) and l
+(list) commands.
 
-Compression requires a configuration file. Two examples are
+Compression requires a configuration file. Three examples are
 supplied:
 
   min.cfg - Fast, minimal compression (LZP + order 3). Requires 4 MB memory.
@@ -39,25 +38,25 @@ example:
   zpaq cmax.cfg calgary.zpaq calgary\*
 
 will compress the Calgary corpus (14 files) as follows
-in 43 seconds on a 2 GHz Pentium T3200. The file names are
+in 45 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
 278.474 MB memory required.
-calgary\BIB 111261 -> 23008
-calgary\BOOK1 768771 -> 198477
-calgary\BOOK2 610856 -> 123852
-calgary\GEO 102400 -> 46780
-calgary\NEWS 377109 -> 90763
-calgary\OBJ1 21504 -> 8842
-calgary\OBJ2 246814 -> 56258
-calgary\PAPER1 53161 -> 11200
-calgary\PAPER2 82199 -> 17126
-calgary\PIC 513216 -> 28595
-calgary\PROGC 39611 -> 9143
-calgary\PROGL 71646 -> 11056
-calgary\PROGP 49379 -> 7977
-calgary\TRANS 93695 -> 11643
--> 644720
+calgary\BIB 111261 -> 23006
+calgary\BOOK1 768771 -> 198711
+calgary\BOOK2 610856 -> 123700
+calgary\GEO 102400 -> 46772
+calgary\NEWS 377109 -> 90672
+calgary\OBJ1 21504 -> 8814
+calgary\OBJ2 246814 -> 56107
+calgary\PAPER1 53161 -> 11198
+calgary\PAPER2 82199 -> 17135
+calgary\PIC 513216 -> 28726
+calgary\PROGC 39611 -> 9119
+calgary\PROGL 71646 -> 11022
+calgary\PROGP 49379 -> 7943
+calgary\TRANS 93695 -> 11623
+-> 644548
 
 To append to an existing archive:
 
@@ -74,6 +73,7 @@ and report a warning if they don't match.
 To list the contents of an archive:
 
   zpaq l archive
+  unzpaq1 l archive
 
 This shows the file names and sizes before and after compression
 and the memory required to extract. To list verbosely:
@@ -87,6 +87,7 @@ config file is not needed to extract.
 To extract files using the stored file names:
 
   zpaq x archive
+  unzpaq1 x archive
 
 If the files to be extracted already exist, then zpaq will
 refuse to clobber them and skip to the next file. If the files
@@ -97,6 +98,7 @@ not create directories.
 To extract and rename:
 
   zpaq x archive files...
+  unzpaq1 x archive files...
 
 Files are extracted in the same order they are saved and renamed.
 Unlike using stored names, if the file exists, then it is
@@ -218,15 +220,22 @@ values are (0...255).
 
 Contents:
 
-  zpaq039.pdf -Version 0.39 of the ZPAQ specification, valid only
-               for zpaq v0.09.
+  zpaq100.pdf -Version 1.00 of the ZPAQ specification, a candidate
+               for the standard unless superseded by a newer version
+               before Apr. 11, 2009.
 
-  zpaq.cpp -   Source code.
+  unzpaq1.cpp -Candidate reference standard decompressor. It is
+               part of the specification.
 
-  zpaq.exe -   32 bit Windows executable, compiled as follows:
+  unzpaq1.exe -32 bit Windows executable, compiled as follows:
                g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
                    -DNDEBUG zpaq.cpp -o zpaq.exe
                upx zpaq.exe
+
+  zpaq.cpp -   Compressor source code, not a part of the standard.
+               Compiled as above.
+
+  zpaq.exe -   32 bit Windows executable.
 
   min.cfg -    Config file for fast compression.
 
@@ -298,3 +307,9 @@ v0.09 - Mar. 9, 2009. Removed counters from ISSE and ICM and replaced
         bit history map with initial estimates based on n1/(n0+n1) to
         improve speed. Fixed a bug where x clobbers files when it says
         it isn't.
+
+v1.00 - Mar. 12, 2009. First level 1 candidate. Simplified the
+        bit history tables and replaced with code to generate them
+        in both the documentation and code. First release of the
+        reference standard unzpaq1 v1.00. Improved compression on 
+        some files.
