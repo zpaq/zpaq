@@ -1,7 +1,7 @@
-/*  unzpaq1 v1.00 ZPAQ reference decompressor
+/*  unzpaq1 v1.01 ZPAQ reference decompressor
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Mar. 12, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Apr. 27, 2009.
 
     LICENSE
 
@@ -16,21 +16,34 @@
     General Public License for more details at
     Visit <http://www.gnu.org/copyleft/gpl.html>.
 
-This program is a candidate reference decoder for the ZPAQ level 1 standard.
-It will become the standard unless superseded before Apr. 11, 2009 by
-an announcement to http://cs.fit.edu/~mmahoney/compression/
+This program is the reference decoder for the ZPAQ level 1 standard.
 
-Usage: unzpaq1 command [archive [files...]]  Commands are:
+Commands:
 
-  x - Extract and uncompress files. If no file names are given, then
-      extract all files using the stored names. Skips (does not overwrite)
-      existing files. If one or more file names are given, then extract
-      that number of files and rename them, overwriting existing files,
-      and ignoring any remaining files in the archive.
+  unzpaq1 l archive
 
-  l - List contents.
+List contents of archive.
+
+  unzpaq1 x archive
+
+Extracts archive contents using stored filenames as listed. The
+destination directory must already exist and be writable. The output
+files must not already exist.
+
+  unzpaq1 x archive files...
+
+Extracts and renames one file for each filename given on the command
+line in the order they are listed in the archive. May overwrite
+existing files.
+
+History:
+
+1.00 - Mar. 12, 2009. Original ZPAQ level 1 reference decoder.
+
+1.01 - Apr. 27, 2009. Fixed VS2005 compiler issues. Updated comments
+and help message. No functional changes.
+
 */
-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -612,17 +625,17 @@ void ZPAQL::run(U32 input) {
 
 // Return memory requirement in bytes
 double ZPAQL::memory() {
-  double mem=pow(2,header[2]+2)+pow(2,header[3])  // hh hm
-            +pow(2,header[4]+2)+pow(2,header[5])  // ph pm
+  double mem=pow(2.0,header[2]+2)+pow(2.0,header[3])  // hh hm
+            +pow(2.0,header[4]+2)+pow(2.0,header[5])  // ph pm
             +header.size();
   int cp=7;  // start of comp list
   for (int i=0; i<header[6]; ++i) {  // n
     assert(cp<cend);
-    double size=pow(2, header[cp+1]); // sizebits
+    double size=pow(2.0, header[cp+1]); // sizebits
     switch(header[cp]) {
       case CM: mem+=4*size; break;
       case ICM: mem+=64*size+1024; break;
-      case MATCH: mem+=4*size+pow(2, header[cp+2]); break; // bufbits
+      case MATCH: mem+=4*size+pow(2.0, header[cp+2]); break; // bufbits
       case MIX2: mem+=2*size; break;
       case MIX: mem+=4*size*header[cp+3]; break; // m
       case ISSE: mem+=64*size+2048; break;
@@ -867,10 +880,8 @@ void ZPAQL::err() {
 
 ///////////////////////////// Predictor ///////////////////////////
 
-// A Component is a context model, indirect context model, match model,
-// fixed weight mixer, adaptive 2 input mixer without or with current
-// partial byte as context, adaptive m input mixer (without or with),
-// or SSE (without or with).
+// A Component represents state information used to map a context
+// and other component outputs to a bit prediction.
 
 struct Component {
   int limit;      // max count for cm
@@ -884,6 +895,9 @@ struct Component {
 
 Component::Component(): limit(0), cxt(0), a(0), b(0), c(0) {}
 
+// A StateTable generates a table that maps a bit history and a bit
+// to an updated history, and maps a history to the 0,1 counts it represents.
+
 class StateTable {
   enum {B=6, N=64}; // sizes of b, t
   static U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
@@ -892,7 +906,11 @@ class StateTable {
   void discount(int& n0);  // set new value of n0 after 1 or n1 after 0
   void next_state(int& n0, int& n1, int y);  // new (n0,n1) after bit y
 public:
-  int next(int state, int y) {  // next state for bit y
+  // next(s, 0) -> next state if 0, s in (0..255), result in (0..255)
+  // next(s  1) -> next state if 1
+  // next(s, 2) -> zero count represented by s
+  // next(s, 3) -> one count represented by s
+  int next(int state, int y) {
     assert(state>=0 && state<256);
     assert(y>=0 && y<4);
     return ns[state*4+y];
@@ -990,11 +1008,17 @@ StateTable::StateTable() {
   }
 }
 
-// A predictor guesses the next bit
+// A Predictor guesses the next bit. The constructor builds a model
+// according to the instructions given in the ZPAQL code in the
+// block header. predict() returns p1 in (0..32767) such that the
+// probability that the next bit is a 1 is (p1*2+1)/65536. update(y)
+// updates the models with actual bit y (0..1) to reduce the prediction
+// errors of individual components.
+
 class Predictor {
 public:
   Predictor(ZPAQL&);    // build model
-  int predict();        // probability that next bit is a 1 (0..4095)
+  int predict();        // probability that next bit is a 1 (0..32767)
   void update(int y);   // train on bit y (0..1)
 private:
 
@@ -1151,6 +1175,7 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   }
 }
 
+// Return next bit prediction (0..32767)
 int Predictor::predict() {
   assert(c8>=1 && c8<=255);
 
@@ -1385,13 +1410,17 @@ int Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
 
 ////////////////////////////// Decoder ////////////////////////////
 
-// Decoder decompresses using an arithmetic code
+// Decoder decompresses using an arithmetic code. Decoder(f, z)
+// specifies output destination file f and a predictor model specified
+// by ZPAQL header z. decompress() returns one decompressed byte (0..255)
+// or EOF (-1) at the end of the compressed stream.
+
 class Decoder {
   FILE* in;  // destination
   U32 low, high; // range
   U32 curr;  // last 4 bytes of archive
   Predictor pr;  // to get p
-  int decode(int p); // return decoded bit (0..1) with probability p (0..8191)
+  int decode(int p); // return decoded bit (0..1) with probability p (0..65535)
 public:
   Decoder(FILE* f, ZPAQL& z);
   int decompress();  // return a byte or EOF
@@ -1400,6 +1429,10 @@ public:
 Decoder::Decoder(FILE* f, ZPAQL& z):
   in(f), low(1), high(0xFFFFFFFF), curr(0), pr(z) {}
 
+// Split the range in proportion to probability p. Decode a 1 if curr is
+// in the lower half, or 0 in the upper half. Update the range to this half.
+// Assume the input (curr) is coded so that it never contains 4 consecutive
+// 0 bytes except at the end of the segment.
 inline int Decoder::decode(int p) {
   assert(p>=0 && p<65536);
   assert(high>low && low>0);
@@ -1419,6 +1452,8 @@ inline int Decoder::decode(int p) {
   return y;
 }
 
+// Decompress 1 byte as 9 bits 0xxxxxxxx or EOF as 1. Model p(1) for
+// the first bit as 0, which codes to 32 bits.
 int Decoder::decompress() {
   if (curr==0) {  // finish initialization
     for (int i=0; i<4; ++i)
@@ -1440,6 +1475,12 @@ int Decoder::decompress() {
 }
 
 /////////////////////////// PostProcessor ////////////////////
+
+// A PostProcessor feeds the decoded output to a ZPAQL program
+// stored in the output header and executes the program with the
+// rest of the decoded output as input to the program. The
+// PostProcessor output is the output of this program. Also, compute
+// the SHA1 hash of the output and save it in an SHA1 object.
 
 class PostProcessor {
   int state;   // input parse state
@@ -1630,7 +1671,7 @@ end:
   fclose(in);
 }
 
-////////////////////////// Misc. commands //////////////////////////
+////////////////////////// list //////////////////////////
 
 // List archive contents
 void list(int argc, char** argv) {
@@ -1687,13 +1728,12 @@ void list(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("UNZPAQ1 v1.00 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
+  printf("UNZPAQ1 v1.01 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "This program will be an integral part of ZPAQ Level 1 standard for highly\n"
-    "compressed data, unless superseded by a later version before Apr. 11, 2009\n"
-    "by an announcement to http://cs.fit.edu/~mmahoney/compression/\n"
+    "This program is an integral part of ZPAQ Level 1 standard for highly\n"
+    "compressed data.\n"
     "\n"
     "To list contents: unzpaq1 l archive\n"
     "To extract files: unzpaq1 x archive  (does not clobber)\n"
