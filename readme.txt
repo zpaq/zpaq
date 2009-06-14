@@ -1,17 +1,14 @@
-README for ZPAQ v1.00
-Matt Mahoney - Mar. 12, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.02
+Matt Mahoney - June 14, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
 compatibility between versions as advanced compression techniques
 are discovered.
 
-This a candidate for the ZPAQ standard. It will become standard
-unless superseded by a later version before Apr. 11, 2009 by
-an announcement to http://cs.fit.edu/~mmahoney/compression
-If this version becomes standard, it will be compatible with
-all other level 1 versions. It will not be compatible with
-level 0 versions released prior to version 1.00.
+Versions 1.00 and higher are compatible with the ZPAQ level 1
+standard, which was first released Mar. 12, 2009.
+The latest version can be found at http://cs.fit.edu/~mmahoney/compression
 
 There are two programs. unzpaq1 is a reference decompressor.
 It is an integral part of the standard. zpaq is both a compressor
@@ -220,30 +217,31 @@ values are (0...255).
 
 Contents:
 
-  zpaq100.pdf -Version 1.00 of the ZPAQ specification, a candidate
-               for the standard unless superseded by a newer version
-               before Apr. 11, 2009.
+  zpaq100.pdf -  Version 1.00 of the ZPAQ specification. It became
+                 standard on Apr. 11, 2009 because it was not
+                 superceded by a newer version for 30 days after release.
 
-  unzpaq1.cpp -Candidate reference standard decompressor. It is
-               part of the specification.
+  unzpaq102.cpp -Reference standard decompressor. It is
+                 part of the specification.
 
-  unzpaq1.exe -32 bit Windows executable, compiled as follows:
-               g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
+  unzpaq.exe -   32 bit Windows executable, compiled as follows with
+                 MinGW g++ 4.4:
+                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
                    -DNDEBUG zpaq.cpp -o zpaq.exe
-               upx zpaq.exe
+                 upx zpaq.exe
 
-  zpaq.cpp -   Compressor source code, not a part of the standard.
-               Compiled as above.
+  zpaq.cpp -     Compressor source code, not a part of the standard.
+                 Compiled as above.
 
-  zpaq.exe -   32 bit Windows executable.
+  zpaq.exe -     32 bit Windows executable.
 
-  min.cfg -    Config file for fast compression.
+  min.cfg -      Config file for fast compression.
 
-  mid.cfg -    Config file for average compression.
+  mid.cfg -      Config file for average compression.
 
-  max.cfg -    Config file for good compression.
+  max.cfg -      Config file for good compression.
 
-  readme.txt - This file
+  readme.txt -   This file
 
 Changes:
 
@@ -313,3 +311,9 @@ v1.00 - Mar. 12, 2009. First level 1 candidate. Simplified the
         in both the documentation and code. First release of the
         reference standard unzpaq1 v1.00. Improved compression on 
         some files.
+
+v1.01 - Apr. 27, 2009. Updated unzpaq to fix VS2005 compiler issues.
+
+v1.02 - June 14, 2009. Updated zpaq and unzpaq to close files
+        immediately after extraction instead of when program exits.
+        Fixed g++ 4.4 compiler warnings.
