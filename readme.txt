@@ -1,5 +1,5 @@
-README for ZPAQ v1.02
-Matt Mahoney - June 14, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.03
+Matt Mahoney - Sept. 8, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -8,72 +8,100 @@ are discovered.
 
 Versions 1.00 and higher are compatible with the ZPAQ level 1
 standard, which was first released Mar. 12, 2009.
-The latest version can be found at http://cs.fit.edu/~mmahoney/compression
+The latest version can be found at http://mattmahoney.net/dc/
 
-There are two programs. unzpaq1 is a reference decompressor.
+There are two programs. unzpaq is a reference decoder.
 It is an integral part of the standard. zpaq is both a compressor
-and decompressor. It is not part of the standard.  Unzpaq1 works
+and decompressor. It is not part of the standard.  Unzpaq works
 like zpaq except that it understands only the x (extract) and l
-(list) commands.
+(list) commands. zpaq understand the following:
 
-Compression requires a configuration file. Three examples are
-supplied:
+  a archive files... - Compress files and append to archive.
+  c archive files... - Compress files to new archive (clobbers).
+  x archive - Extract all files using stored names (does not clobber).
+  x archive files... - Extract and rename (clobbers).
+  l archive - List archive contents.
+
+Advanced options:
+
+  v archive - List archive contents verbosely.
+  b archive files... - Compress files and append with no checksum.
+  k{a|b|c} archive file [m [n]] - {Append|no checksum|create} archive
+    from n (default all) bytes of file skipping first m (default 0).
+  [k]{a|b|c}config - Use compression options in config file.
+  r[k]{a|b|c} - Store paths.
+  t archive [files...] - extract (like x) without postprocessing.
+  hconfig args... - Run HCOMP in config with numeric args (no archive).
+  pconfig in out  - Run PCOMP on files (default stdin/stdout).
+  sconfig - Compile header to a list of bytes to stdout.
+
+By default, zpaq will create archives and store the file name
+without a path. Files will be extracted to the current directory
+using the stored name. For example:
+
+  zpaq c books.zp c:calgary\book1 /tmp/book2
+
+will create archive books.zp, compress the two named files
+and store the names as book1 and book2 with no path. Then
+
+  zpaq x books.zp
+
+will extract book1 and book2 to the current directory. If either
+of those files already exist, then zpaq will not overwrite it
+and quit. To extract elsewhere, you can rename them, for example:
+
+  zpaq x /tmp/foo book2
+
+will extract book1 to /tmp/foo (provided directory /tmp exists)
+and book2 to book2 in the current directory even if that file
+already exists. zpaq will not create directories. If you name
+less than 2 files, then it will extract only the files you named.
+
+To store path names as entered, use the command "ra" or "rc".
+However, zpaq will refuse to extract files with a drive letter
+or absolute path unless you explicitly name them during extraction, so
+
+  zpaq rc books.zp c:calgary\book1 /tmp/book2
+
+will store exactly as entered. However
+
+  zpaq x books.zp
+
+will fail because drive letters and absolute paths are not allowed, but
+
+  zpaq x books.zp c:calgary\book1 /tmp/book2
+
+will succeed provided the named directories exist. zpaq will not
+create directories.
+
+To specify compression options, append the name of a configuration
+file after the "a", "c", "ra", or "rc" command.
+Three examples are supplied:
 
   min.cfg - Fast, minimal compression (LZP + order 3). Requires 4 MB memory.
   mid.cfg - Average compression and speed. Requires 111 MB.
   max.cfg - Slow but good compression. Requires 278 MB.
 
-To create an archive:
+The default is mid.cfg. Thus, either:
 
-  zpaq cconfig archive files...
+  zpaq cmid.cfg calgary.zp calgary/*
+  zpaq c        calgary.zp calgary/*
 
-where config is a configuration file, archive is the compressed
-file to create, and files... are the files to compress. There
-should be no space between the "c" command and the file name. For
-example:
+will compress the 14 file Calgary corpus to 699474 bytes in 11 seconds
+using 111 MB memory on a 2 GHz Pentium T3200.
 
-  zpaq cmax.cfg calgary.zpaq calgary\*
+  zpaq cmax.cfg calgary.zp calgary\*
 
-will compress the Calgary corpus (14 files) as follows
-in 45 seconds on a 2 GHz Pentium T3200. The file names are
-stored in the archive as given on the command line.
-
-278.474 MB memory required.
-calgary\BIB 111261 -> 23006
-calgary\BOOK1 768771 -> 198711
-calgary\BOOK2 610856 -> 123700
-calgary\GEO 102400 -> 46772
-calgary\NEWS 377109 -> 90672
-calgary\OBJ1 21504 -> 8814
-calgary\OBJ2 246814 -> 56107
-calgary\PAPER1 53161 -> 11198
-calgary\PAPER2 82199 -> 17135
-calgary\PIC 513216 -> 28726
-calgary\PROGC 39611 -> 9119
-calgary\PROGL 71646 -> 11022
-calgary\PROGP 49379 -> 7943
-calgary\TRANS 93695 -> 11623
--> 644548
-
-To append to an existing archive:
-
-  zpaq aconfig archive files...
+will compress to 644436 bytes in 48 seconds using 278 MB. min.cfg
+will compress to 1027462 bytes in 1.5 seconds with 4 MB.
 
 To append without saving a SHA1 checksum (saves 20 bytes per file):
 
-  zpaq bconfig archive files...
+  zpaq b archive files...
 
 If a checksum is present, the decompressor will compute the SHA1
 hash of the extracted file and compare it with the stored checksum
 and report a warning if they don't match.
-
-To list the contents of an archive:
-
-  zpaq l archive
-  unzpaq1 l archive
-
-This shows the file names and sizes before and after compression
-and the memory required to extract. To list verbosely:
 
   zpaq v archive
 
@@ -81,34 +109,27 @@ This also shows the model used to compress and the ZPAQL program
 used to compute the contexts from the original config file. The
 config file is not needed to extract.
 
-To extract files using the stored file names:
+Files can be split into segments by prepending "k" to the compress
+command:
 
-  zpaq x archive
-  unzpaq1 x archive
+  zpaq [r]k{a|b|c}[config] archive file [offset [length]]
 
-If the files to be extracted already exist, then zpaq will
-refuse to clobber them and skip to the next file. If the files
-are compressed with a path (folder or directory), then that
-directory must exist when the file is extracted. zpaq will
-not create directories.
+which means to skip 'offset' bytes of the file and compress
+the next 'length' bytes to the archive. r, a, b, and c have
+their usual meaning. For example:
 
-To extract and rename:
+  zpaq kcmin.cfg book1.zp book1 0 5000
+  zpaq ka        book1.zp book1 5000 2000
+  zpaq kamax.cfg book1.zp book1 7000
 
-  zpaq x archive files...
-  unzpaq1 x archive files...
+will compress book1 to 3 blocks of size 5000, 2000, and the rest
+of the file using 3 different compression options. If the offset
+is not 0, then the file name is not stored, which signals the
+decompressor to append the block to the previous file. Thus
 
-Files are extracted in the same order they are saved and renamed.
-Unlike using stored names, if the file exists, then it is
-overwritten (clobbered). Only files named on the command line
-are extracted. Any additional files in the archive are ignored.
-For example:
+  zpaq x book1.zp
 
-  zpaq x calgary.zpaq foo bar
-
-will extract BIB to foo, BOOK1 to bar, and then stop.
-
-The following commands are useful for debugging or developing
-config files:
+will extract book1 as usual.
 
   zpaq t archive [files...]
 
@@ -135,7 +156,7 @@ input and standard output.
 
   zpaq sconfig
 
-Compiles config and outputs HCOMP as a list of numbers suitable
+Compiles config and outputs header as a list of numbers suitable
 for initializing an array in C/C++
 
 A config file has the format:
@@ -221,23 +242,23 @@ Contents:
                  standard on Apr. 11, 2009 because it was not
                  superceded by a newer version for 30 days after release.
 
-  unzpaq102.cpp -Reference standard decompressor. It is
+  unzpaq103.cpp -Reference standard decompressor. It is
                  part of the specification.
 
   unzpaq.exe -   32 bit Windows executable, compiled as follows with
                  MinGW g++ 4.4:
                  g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
-                   -DNDEBUG zpaq.cpp -o zpaq.exe
-                 upx zpaq.exe
+                   -DNDEBUG unzpaq103.cpp -o unzpaq.exe
+                 upx unzpaq.exe
 
-  zpaq.cpp -     Compressor source code, not a part of the standard.
+  zpaq103.cpp -  Compressor source code, not a part of the standard.
                  Compiled as above.
 
   zpaq.exe -     32 bit Windows executable.
 
   min.cfg -      Config file for fast compression.
 
-  mid.cfg -      Config file for average compression.
+  mid.cfg -      Config file for average compression (default).
 
   max.cfg -      Config file for good compression.
 
@@ -317,3 +338,22 @@ v1.01 - Apr. 27, 2009. Updated unzpaq to fix VS2005 compiler issues.
 v1.02 - June 14, 2009. Updated zpaq and unzpaq to close files
         immediately after extraction instead of when program exits.
         Fixed g++ 4.4 compiler warnings.
+
+v1.03 - Sept. 8, 2009. unzpaq and zpaq: added support for appending
+        unnamed segments to the previous file. In unzpaq 1.02 and earlier
+        you would need to extract each segment to a different file
+        and concatenate them manually. Also, unzpaq will refuse
+        to extract filenames stored with an absolute path, drive letter,
+        or that have upward links "../" or "..\" or that have
+        control characters (ASCII 0-31) in the file name unless
+        a filename is given on the command line (in which case
+        any name is allowed). Quits on the first error rather
+        than skipping files. zpaq only: made mid.cfg the default
+        configuration. Also added the k command
+        to create segmented files. When the offset is not 0 the
+        segment is stored with no name to signal the decompressor
+        to append to the previous file (which may be in a different
+        ZPAQ block). Added the r command to store full paths.
+        1.02 and earlier always did this. By default, 1.03 stores
+        only the file name. Updated the s command to output the
+        full header as a C array.
