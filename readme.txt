@@ -1,5 +1,5 @@
 README for ZPAQ v1.03
-Matt Mahoney - Sept. 8, 2009, matmahoney (at) yahoo (dot) com.
+Matt Mahoney - Sept. 14, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -10,11 +10,13 @@ Versions 1.00 and higher are compatible with the ZPAQ level 1
 standard, which was first released Mar. 12, 2009.
 The latest version can be found at http://mattmahoney.net/dc/
 
-There are two programs. unzpaq is a reference decoder.
+There are 3 programs. unzpaq is a reference decoder.
 It is an integral part of the standard. zpaq is both a compressor
-and decompressor. It is not part of the standard.  Unzpaq works
-like zpaq except that it understands only the x (extract) and l
-(list) commands. zpaq understand the following:
+and decompressor. It is not part of the standard. zpaqsfx
+is a stub for creating self extracting archives.
+
+Unzpaq works like zpaq except that it understands only the x (extract)
+and l (list) commands. zpaq understand the following:
 
   a archive files... - Compress files and append to archive.
   c archive files... - Compress files to new archive (clobbers).
@@ -94,6 +96,20 @@ using 111 MB memory on a 2 GHz Pentium T3200.
 
 will compress to 644436 bytes in 48 seconds using 278 MB. min.cfg
 will compress to 1027462 bytes in 1.5 seconds with 4 MB.
+
+To make a self extracting archive, make a copy of zpaqsfx.exe
+and append to it with zpaq:
+
+  copy zpaqsfx.exe calgary.exe
+  zpaq amax.cfg calgary.exe calgary/*
+
+When the resulting archive is run with no arguments, it will
+list its contents. When run with argument x and optional filenames,
+it will extract like unzpaq.
+
+  calgary                (lists contents (like unzpaq l))
+  calgary x              (extracts all files (like unzpaq x))
+  calgary x file1 file2  (extracts first 2 files as file1, file2)
 
 To append without saving a SHA1 checksum (saves 20 bytes per file):
 
@@ -262,6 +278,16 @@ Contents:
 
   max.cfg -      Config file for good compression.
 
+  zpaqsfx.cpp -  Source for zpaqsfx v1.03.
+
+  zpaqsfx.tag -  16 random bytes appended to zpaqsfx.exe.
+
+  zpaqsfx.exe -  Stub for self extracting archives created as follows:
+                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro
+                   -DNDEBUG zpaqsfx.cpp
+                 upx a.exe
+                 copy/b a.exe+zpaqsfx.tag zpaqsfx.exe
+
   readme.txt -   This file
 
 Changes:
@@ -357,3 +383,5 @@ v1.03 - Sept. 8, 2009. unzpaq and zpaq: added support for appending
         1.02 and earlier always did this. By default, 1.03 stores
         only the file name. Updated the s command to output the
         full header as a C array.
+
+        Sept. 14, 2009. Added zpaqsfx 1.03.
