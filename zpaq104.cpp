@@ -1,7 +1,7 @@
-/*  zpaq v1.03 archiver and file compressor.
+/*  zpaq v1.04 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 8, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 18, 2009.
 
     LICENSE
 
@@ -57,6 +57,9 @@ Usage: zpaq command [archive [files...]]  Commands are:
 
 Each compression command appends one block with one segment per file. Archives
 are created in ZPAQ level 1 format. See http://mattmahoney.net/dc/zpaq.pdf
+
+New in version 1.04: An archive can either be a regular archive
+or a self extracting program created with zpaqsfx.
 
 Options for developers:
 
@@ -2163,6 +2166,30 @@ bool validate_filename(const char* filename) {
   return true;
 }
 
+// Position in at the start of the archive, either at the beginning
+// starting with "zPQ",LEVEL or after zpaqsfx.tag.
+// Error if not found.
+void find_start(FILE *in) {
+  U32 h1=1, h2=2, h3=3, h4=4;
+  int c=0;
+  if (ftell(in)==0 && getc(in)=='z' && getc(in)=='P' && getc(in)=='Q'
+      && (c=getc(in))>=1 && c<=LEVEL) {
+    rewind(in);
+    return;
+  }
+  rewind(in);
+  while ((c=getc(in))!=EOF) {
+    h1=h1*12+c;
+    h2=h2*20+c;
+    h3=h3*28+c;
+    h4=h4*44+c;
+    if (h1==0xBD49B113 && h2==0x29EB7F93 && h3==0x6614BE13 && h4==0xB828EB13){
+      return;
+    }
+  }
+  error("Start of archive data not found");
+}
+
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
 // If a segment has no filename, then append to the previous file.
 void decompress(int argc, char** argv) {
@@ -2172,6 +2199,7 @@ void decompress(int argc, char** argv) {
   // Open archive
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
+  find_start(in);
 
   // Read the archive
   int filecount=0;  // number of files extracted
@@ -2198,9 +2226,16 @@ void decompress(int argc, char** argv) {
       for (i=0; (c=getc(in))>0; ++i)
         if (i<511) filename[i]=c;
       if (i>0 && i<512) filename[i]=0;
+      printf("%s ", filename);
 
-      // Skip comment
-      while ((c=getc(in))!=EOF && c!=0) ;
+      // Get comment
+      char comment[20]={0};
+      i=0;
+      while ((c=getc(in))!=EOF && c!=0) {
+        if (i<19) comment[i]=c;
+        ++i;
+      }
+      printf("%s -> ", comment);
       if (getc(in)) error("reserved");  // reserved 0
 
       // If a segment is named, or no output file is open, then
@@ -2219,10 +2254,10 @@ void decompress(int argc, char** argv) {
               goto end;
             }
             else
-              printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
+              printf("%s ", argv[filecount+3]);
           }
           else {
-            printf("Skipping %s and remaining files\n", filename);
+            printf("\nSkipping %s and remaining files\n", filename);
             goto end;
           }
         }
@@ -2231,12 +2266,12 @@ void decompress(int argc, char** argv) {
         // or use suspicious filenames
         else {
           if (!validate_filename(filename)) {
-            printf("Bad filename in archive: %s\n", filename);
+            printf("Error: bad filename\n");
             goto end;
           }
           out=fopen(filename, "rb");
           if (out) {
-            printf("Error: won't overwrite %s\n", filename);
+            printf("Error: won't overwrite\n");
             goto end;
           }
           else {
@@ -2246,24 +2281,30 @@ void decompress(int argc, char** argv) {
               goto end;
             }
           }
-          if (out)
-            printf("Decompressing %s ... ", filename);
         }
         ++filecount;
       }
 
       // Decompress
       SHA1 sha1;
+      long len=0;
       if (argv[1][0]=='t') { // don't postprocess
         while ((c=dec.decompress())!=EOF) {
           if (out) putc(c, out);
           sha1.put(c);
+          if (!(len&0xffff))
+            printf("%-12ld\b\b\b\b\b\b\b\b\b\b\b\b", len);
+          ++len;
         }
       }
       else {
         pp.set(out, &sha1);
-        while ((c=dec.decompress())!=EOF)
+        while ((c=dec.decompress())!=EOF) {
           pp.write(c);
+          if (!(len&0xffff))
+            printf("%-12ld\b\b\b\b\b\b\b\b\b\b\b\b", len);
+          ++len;
+        }
         pp.write(-1);
       }
 
@@ -2278,7 +2319,7 @@ void decompress(int argc, char** argv) {
             match=false;
         }
         if (match)
-          printf("Checksum OK");
+          printf("Checksum OK ");
         else {
           printf("CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
           for (int i=0; i<20; ++i)
@@ -2700,10 +2741,18 @@ void compress(int argc, char** argv) {
       int c;
       SHA1 sha1;
       size=length;
+      printf("%s %ld ", argv[i], length);
+      if (kcmd && offset>0) printf("+%ld", offset);
+      long i=0;
       while ((c=getc(in))!=EOF) {
         if (kcmd && size--<=0) break;
         if (command[0]!='b') sha1.put(c);
         pp.compress(c);
+        if (!(++i&0xffff)) {
+          printf("%12ld -> %-12ld"
+            "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b",
+            i, ftell(out)-mark);
+        }
       }
       pp.compress(EOS);
 
@@ -2717,9 +2766,7 @@ void compress(int argc, char** argv) {
       }
       fclose(in);
       in=0;
-      printf("%s %ld", argv[i], length);
-      if (kcmd && offset>0) printf("+%ld", offset);
-      printf(" -> %ld\n", ftell(out)-mark);
+      printf("-> %ld                        \n", ftell(out)-mark);
       mark=ftell(out);
     }
   }
@@ -2738,6 +2785,7 @@ void list(int argc, char** argv) {
   // Open archive
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
+  find_start(in);
 
   // File offsets to get compressed sizes
   long mark=0;
@@ -2841,7 +2889,7 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.03 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.04 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
