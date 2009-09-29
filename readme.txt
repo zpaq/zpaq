@@ -1,304 +1,91 @@
-README for ZPAQ v1.04
-Matt Mahoney - Sept. 18, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.05
+Matt Mahoney - Sept. 28, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
-compatibility between versions as advanced compression techniques
-are discovered.
-
-Versions 1.00 and higher are compatible with the ZPAQ level 1
-standard, which was first released Mar. 12, 2009.
-The latest version can be found at http://mattmahoney.net/dc/
-
-There are 3 programs. unzpaq is a reference decoder.
-It is an integral part of the standard. zpaq is both a compressor
-and decompressor. It is not part of the standard. zpaqsfx
-is a stub for creating self extracting archives.
-
-Unzpaq works like zpaq except that it understands only the x (extract)
-and l (list) commands. zpaq understand the following:
-
-  a archive files... - Compress files and append to archive.
-  c archive files... - Compress files to new archive (clobbers).
-  x archive - Extract all files using stored names (does not clobber).
-  x archive files... - Extract and rename (clobbers).
-  l archive - List archive contents.
-
-zpaq (but not unzpaq) can read and append to self
-extracting archives. To make a Windows self-extracting archive,
-append to a copy of zpaqsfx.exe. When the appended program is
-run, it will list its contents and prompt to use the x command
-to extract its contents.
-
-Advanced options:
-
-  v archive - List archive contents verbosely.
-  b archive files... - Compress files and append with no checksum.
-  k{a|b|c} archive file [m [n]] - {Append|no checksum|create} archive
-    from n (default all) bytes of file skipping first m (default 0).
-  [k]{a|b|c}config - Use compression options in config file.
-  r[k]{a|b|c} - Store paths.
-  t archive [files...] - extract (like x) without postprocessing.
-  hconfig args... - Run HCOMP in config with numeric args (no archive).
-  pconfig in out  - Run PCOMP on files (default stdin/stdout).
-  sconfig - Compile header to a list of bytes to stdout.
-
-By default, zpaq will create archives and store the file name
-without a path. Files will be extracted to the current directory
-using the stored name. For example:
-
-  zpaq c books.zp c:calgary\book1 /tmp/book2
-
-will create archive books.zp, compress the two named files
-and store the names as book1 and book2 with no path. Then
-
-  zpaq x books.zp
-
-will extract book1 and book2 to the current directory. If either
-of those files already exist, then zpaq will not overwrite it
-and quit. To extract elsewhere, you can rename them, for example:
-
-  zpaq x /tmp/foo book2
-
-will extract book1 to /tmp/foo (provided directory /tmp exists)
-and book2 to book2 in the current directory even if that file
-already exists. zpaq will not create directories. If you name
-less than 2 files, then it will extract only the files you named.
-
-To store path names as entered, use the command "ra" or "rc".
-However, zpaq will refuse to extract files with a drive letter
-or absolute path unless you explicitly name them during extraction, so
-
-  zpaq rc books.zp c:calgary\book1 /tmp/book2
-
-will store exactly as entered. However
-
-  zpaq x books.zp
-
-will fail because drive letters and absolute paths are not allowed, but
-
-  zpaq x books.zp c:calgary\book1 /tmp/book2
-
-will succeed provided the named directories exist. zpaq will not
-create directories.
-
-To specify compression options, append the name of a configuration
-file after the "a", "c", "ra", or "rc" command.
-Three examples are supplied:
-
-  min.cfg - Fast, minimal compression (LZP + order 3). Requires 4 MB memory.
-  mid.cfg - Average compression and speed. Requires 111 MB.
-  max.cfg - Slow but good compression. Requires 278 MB.
-
-The default is mid.cfg. Thus, either:
-
-  zpaq cmid.cfg calgary.zp calgary/*
-  zpaq c        calgary.zp calgary/*
-
-will compress the 14 file Calgary corpus to 699474 bytes in 11 seconds
-using 111 MB memory on a 2 GHz Pentium T3200.
-
-  zpaq cmax.cfg calgary.zp calgary\*
-
-will compress to 644436 bytes in 48 seconds using 278 MB. min.cfg
-will compress to 1027462 bytes in 1.5 seconds with 4 MB.
-
-To make a self extracting archive, make a copy of zpaqsfx.exe
-and append to it with zpaq:
-
-  copy zpaqsfx.exe calgary.exe
-  zpaq amax.cfg calgary.exe calgary/*
-
-When the resulting archive is run with no arguments, it will
-list its contents. When run with argument x and optional filenames,
-it will extract like unzpaq.
-
-  calgary                (lists contents (like unzpaq l))
-  calgary x              (extracts all files (like unzpaq x))
-  calgary x file1 file2  (extracts first 2 files as file1, file2)
-
-To append without saving a SHA1 checksum (saves 20 bytes per file):
-
-  zpaq b archive files...
-
-If a checksum is present, the decompressor will compute the SHA1
-hash of the extracted file and compare it with the stored checksum
-and report a warning if they don't match.
-
-  zpaq v archive
-
-This also shows the model used to compress and the ZPAQL program
-used to compute the contexts from the original config file. The
-config file is not needed to extract.
-
-Files can be split into segments by prepending "k" to the compress
-command:
-
-  zpaq [r]k{a|b|c}[config] archive file [offset [length]]
-
-which means to skip 'offset' bytes of the file and compress
-the next 'length' bytes to the archive. r, a, b, and c have
-their usual meaning. For example:
-
-  zpaq kcmin.cfg book1.zp book1 0 5000
-  zpaq ka        book1.zp book1 5000 2000
-  zpaq kamax.cfg book1.zp book1 7000
-
-will compress book1 to 3 blocks of size 5000, 2000, and the rest
-of the file using 3 different compression options. If the offset
-is not 0, then the file name is not stored, which signals the
-decompressor to append the block to the previous file. Thus
-
-  zpaq x book1.zp
-
-will extract book1 as usual.
-
-  zpaq t archive [files...]
-
-Extracts files like x, but without post-processing.
-
-  zpaq hconfig [args...]
-
-Displays config, then executes the HCOMP section (a program written
-in ZPAQL; see the ZPAQ specification) as a context hash function
-once for each argument as input. args... should be decimal numbers.
-For each argument, the value is loaded into the A register and
-the program is run with each execution step displayed along
-with the contents of registers. At the end of each execution,
-the entire machine state (M and H arrays) is dumped to the
-screen.
-
-  zpaq pconfig [input [output]]
-
-Runs config as a postprocessing program. The program is run
-once for each byte of input, with output redirected to the
-named output file. At the end of input, the program is run
-with input 2^32-1 to signal EOF. The defaults are standard
-input and standard output.
-
-  zpaq sconfig
-
-Compiles config and outputs header as a list of numbers suitable
-for initializing an array in C/C++
-
-A config file has the format:
-
-  comp hh hm ph pm n
-    (numbered list of components from 0 to n-1)
-  hcomp
-    (program to compute context hashes)
-  post
-    (post-processing options)
-  end
-
-The file is case-insensitive, and free-format (all whitespace
-is equivalent). Comments may be written in parenthesis and
-may be nested. See min.cfg and max.cfg for examples. See the
-ZPAQ specification for descriptions of components and ZPAQL
-instructions. Notes:
-
-- Operands of 2 byte instructions must be separated by a space.
-  For example, "A=0" is one byte, "A= 0" is 2 bytes. "A=1" is
-  not valid because there is no 1 byte opcode for it. It must
-  be written "A= 1".
-- JT, JF, and JMP accept operands in the range (-128...127).
-- LJ (long jump) accepts an operand in the range (0...65535).
-  It is coded as 2 bytes, LSB first. This is the only 3 byte
-  instruction.
-- All other numeric operands must be in the range (0...255).
-
-The hconfig command runs the program in the HCOMP section using
-arrays H and M with sizes 2^hh and 2^hm respectively. The pconfig
-command uses 2^ph and 2^pm respectively.
-
-When developing a config file, it is useful to run with the
-hconfig command without arguments to check for compilation
-errors and check the targets of relative jump instructions
-(which are displayed as absolute). Once it is correct, it can
-be run again with arguments so that you can check if the program
-is behaving correctly.
-
-The following POST commands are accepted:
-
-  0 (no preprocessing)
-  x (E8E9 transform for better .exe and .dll compression)
-  p esc minlen hmul (LZP transform)
-
-The 0 transform compresses the file unchanged. Set ph=0, pm=0 to
-save memory.
-
-The x transform improves x86 compression by replacing the relative
-addresses of the CALL and JMP instructions (0xE8 and 0xE9) with
-absolute addresses by adding the offset from the start of the file
-to the 4 byte number (LSB first) that follows the instruction.
-When used, set ph=0, pm=3.
-
-The p transform performs a simple, fast compression that improves
-speed by replacing duplicate, consecutive strings that occur in the
-same context with a code to indicate the length of the match. The
-sequence (esc len), len > 0, codes a match of length len+minlen.
-The sequence (esc 0) codes esc. The context hash is updated for
-each byte C by: hash := hash * hmul + C (mod 2^ph). The match
-must be found in a rotating buffer of size 2^pm. For example:
-
-  comp x x 18 20 x (ph=18, pm=20)
-    ...
-  post
-    p 127 3 40
-  end
-
-says to code matches using escape bytes with the value 127. Match
-lengths are in the range (4...258). This uses an order 6 context hash
-because 40 = 5*2^3 effectively shifts the context hash left by 3 bits
-and ph/3 = 18/3 = 6.
-
-LZP helps speed at the expense of compression for all but the fastest
-configurations (e.g. min.cfg). It is recommended to use esc = any
-value that rarely occurs in the input, minlen = 3 or more, hmul to
-select a context of order < minlen, pm = ph + 2 and pm > 8. Allowed
-values are (0...255).
+compatibility between versions as new compression algorithms
+are discovered. ZPAQ includes tools to help develop and test
+new algorithms.
+
+All software is (C) 2009, Ocarina Networks Inc. and written
+by Matt Mahoney. It is open source licensed under GPL v3.
+http://www.gnu.org/copyleft/gpl.html
 
 Contents:
 
-  zpaq100.pdf -  Version 1.00 of the ZPAQ specification. It became
-                 standard on Apr. 11, 2009 because it was not
-                 superceded by a newer version for 30 days after release.
+  zpaq100.pdf -  The ZPAQ open standard format for highly compressed
+                 data. v1.00 last updated Mar. 12, 2009.
 
-  unzpaq103.cpp -Reference standard decompressor. It is
-                 part of the specification.
+  unzpaq103.cpp -Reference standard decoder (GPL). It is part of the
+                 specification. v1.03 last updated Sept. 8, 2009.
 
-  unzpaq.exe -   32 bit Windows executable, compiled as follows with
-                 MinGW g++ 4.4:
-                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro  \
-                   -DNDEBUG unzpaq103.cpp -fno-exceptions -fno-rtti \
-                   -o unzpaq.exe 
-                 upx unzpaq.exe
+  zpaq.exe -     The ZPAQ compressor, decompressor, and environment for
+                 developing new compression algorithms in the ZPAQ format.
+                 Compiled for 32 bit Windows.
 
-  zpaq104.cpp -  Compressor source code, not a part of the standard.
-                 Compiled as above.
+  zpaq105.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
 
-  zpaq.exe -     32 bit Windows executable.
-
-  min.cfg -      Config file for fast compression.
+  min.cfg -      ZPAQ config file for fast compression.
 
   mid.cfg -      Config file for average compression (default).
 
   max.cfg -      Config file for good compression.
 
-  zpaqsfx.cpp -  Source for zpaqsfx v1.03.
+  exe.cfg -      Config file for good compression of x86 .exe and .dll files.
+
+  lzppre.exe -   LZP preprocessor, required with min.cfg.
+
+  lzppre.cpp -   Source code for lzppre.exe.
+
+  exepre.cfg -   E8E9 preprocessor in ZPAQL, required with exe.cfg
+
+  zpaqsfx.exe -  Stub for making self extracting archives.
+
+  zpaqsfx.cpp -  Source (GPL) for zpaqsfx v1.03.
 
   zpaqsfx.tag -  16 random bytes appended to zpaqsfx.exe.
 
-  zpaqsfx.exe -  Stub for self extracting archives created as follows
-                 with MINGW g++ 4.4.0 and upx 3.00w:
-                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
-                   -DNDEBUG zpaqsfx.cpp -fno-exceptions -fno-rtti
-                 upx --all-methods --all-filters a.exe
-                 copy/b a.exe+zpaqsfx.tag zpaqsfx.exe
+  readme.txt -   This file.
 
-  readme.txt -   This file
+Brief usage summary:
 
-Changes:
+To create a new archive: zpaq c archive files...
+To append to an archive: zpaq a archive files...
+To list contents:        zpaq l archive
+To extract:              zpaq x archive
+To extract and rename:   zpaq x archive files...
+For help:                zpaq
+
+To make a self extracting archive, copy zpaqsfx.exe and append to it
+with the "a" command. When the copy is run, it will list its contents
+and prompt to use the x command to extract. For example:
+
+  copy zpaqsfx.exe books.exe
+  zpaq a books.exe book1 book2
+  books.exe    (will list contents)
+  books.exe x  (will create book1 and book2)
+
+Compression options are stored in config files. To use them,
+append the name after the "c" or "a" with no space, for example:
+
+  zpaq cmax.cfg archive files...  (for good but slow compression)
+  zpaq amin.cfg archive files...  (for poor but fast compression)
+
+Decompression usually requires about the same time and memory as
+compression. Some config files require external preprocessors be
+present during compression. Config files and preprocessors are not
+needed to list or extract files.
+
+A config file describes a context mixing algorithm, a program in
+a sandboxed interpreted language called ZPAQL to compute contexts,
+and an optional external preprocessor and corresponding ZPAQL
+postprocessor. See the zpaq105.cpp source code comments for guidelines
+on writing and modifying config files and preprocessors. ZPAQ has advanced
+options to support testing and debugging new compression algorithms.
+
+History: Versions prior to 1.00 are not compatible with the ZPAQ
+standard and are obsolete. All versions 1.00 and higher are forward
+and backward compatible.
 
 v0.01 - Feb. 15, 2009. Original release. Conforms to v0.29 of spec.
         except does not support postprocessing.
@@ -397,3 +184,19 @@ v1.03 - Sept. 8, 2009. unzpaq and zpaq: added support for appending
 v1.04 - Sept. 18, 2009. zpaq will extract from self extracting archives.
         Added progress meter. zpaqsfx.exe is slightly smaller. Fixed
         zpaqsfx.cpp compiler issue (replaced "and" with "&&" in main()).
+
+v1.05 - Sept. 28, 2009. Removed built in x (E8E9) and p (LZP)
+        preprocessors and made these external programs (included).
+        Config files now specify an external preprocessor command
+        line and ZPAQL code to invert the transform. The inversion
+        is verified before compression. Added structured programming
+        (if/ifnot-else-endif, do-while/until/forever) to ZPAQL.
+        Reorganized the less commonly used commands. New commands
+        to extract from single blocks, extract with paths (default
+        is now to current directory), extract unnamed blocks as
+        separate files, compress without filenames or with full paths,
+        or without comments, debug both the HCOMP and new PCOMP sections
+        of config files, and display trace in either decimal or
+        hexadecimal. Fixed detection of corrupted input in decoder.
+        unzpaq.exe not included in distribution because zpaq.exe
+        has all the same functions.
