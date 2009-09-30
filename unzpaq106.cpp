@@ -1,7 +1,7 @@
-/*  unzpaq1 v1.03 ZPAQ reference decompressor
+/*  unzpaq1 v1.06 ZPAQ reference decompressor
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 8, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2009.
 
     LICENSE
 
@@ -585,10 +585,8 @@ void ZPAQL::read(FILE* in) {
     int op=getc(in);
     if (op==EOF) error("unexpected end of file");
     header[hend++]=op;
-    if ((op&7)==7) header[hend++]=getc(in);
   }
   if ((header[hend++]=getc(in))!=0) error("missing HCOMP END");
-  if (hend!=hsize+130) error("opcode straddles end");
 
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
@@ -1080,7 +1078,6 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   assert(sizeof(U32)==4);
   assert(sizeof(short)==2);
   assert(sizeof(int)==4);
-  assert(sizeof(long)==sizeof(char*));  // 4 or 8
 
   // Initialize tables
   for (int i=0; i<1024; ++i)
@@ -1443,7 +1440,8 @@ Decoder::Decoder(FILE* f, ZPAQL& z):
 inline int Decoder::decode(int p) {
   assert(p>=0 && p<65536);
   assert(high>low && low>0);
-  assert(curr>=low && curr<=high);
+  if (curr<low) error("archive corrupted");
+  assert (curr>=low && curr<=high);
   U32 mid=low+((high-low)>>16)*p+((((high-low)&0xffff)*p)>>16); // split range
   assert(high>mid && mid>=low);
   int y=curr<=mid;
@@ -1554,17 +1552,37 @@ void PostProcessor::write(int c) {
 
 /////////////////////////// Decompress ///////////////////////
 
-// Reject archive filenames that might cause problems
-bool validate_filename(const char* filename) {
+
+// Advance 'in' past "zPQ" at its current location. If something
+// else is there, search for the following 16 byte string
+// which ends with "zPQ":
+// 37 6B 53 74  A0 31 83 D3  8C B2 28 B0  D3 7A 50 51 (hex)
+// Return true if found, false at EOF.
+bool find_start(FILE *in) {
+  U32 h1=0x3D49B113, h2=0x29EB7F93, h3=0x2614BE13, h4=0x3828EB13;
+  int c;
+  while ((c=getc(in))!=EOF) {
+    h1=h1*12+c;
+    h2=h2*20+c;
+    h3=h3*28+c;
+    h4=h4*44+c;
+    if (h1==0xB16B88F1 && h2==0xFF5376F1 && h3==0x72AC5BF1 && h4==0x2F909AF1)
+      return true;
+  }
+  return false;
+}
+
+// Remove path from filename.
+// This function is not part of the ZPAQ standard.
+const char* strip(const char* filename) {
+  assert(filename);
   int len=strlen(filename);
-  if (len<1) return true;  // No name is OK
-  if (len>511) return false;  // name too long
-  if (strstr(filename, "../")) return false; // no backward paths
-  if (strstr(filename, "..\\")) return false;
-  if (filename[0]=='/' || filename[0]=='\\') return false; // no absolute path
-  for (int i=0; i<len; ++i)  // no control chars, drive letters, or devices
-    if ((filename[i]&255)<32 || filename[i]==':') return false;
-  return true;
+  const char *result=filename;
+  for (int i=0; i<len; ++i) {
+    if (filename[i]=='/' || filename[i]=='\\' || (i==1 && filename[i]==':'))
+      result=filename+i+1;
+  }
+  return result;
 }
 
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
@@ -1580,9 +1598,8 @@ void decompress(int argc, char** argv) {
   // Read the archive
   int filecount=0;  // number of files extracted
   FILE *out=0;  // file to extract
-  int c;
-  while ((c=getc(in))=='z') {
-    if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
+  while (find_start(in)) {
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("Not ZPAQ");
 
     // Read block header
@@ -1594,6 +1611,7 @@ void decompress(int argc, char** argv) {
     Decoder dec(in, z);
 
     // Read segments
+    int c=0;
     while ((c=getc(in))==1) {
 
       // Read the filename
@@ -1631,27 +1649,24 @@ void decompress(int argc, char** argv) {
           }
         }
 
-        // Otherwise, use the names in the archive, but don't clobber
-        // or use suspicious filenames
+        // Otherwise, use the names in the archive, but don't clobber.
+        // Extract to current directory.
         else {
-          if (!validate_filename(filename)) {
-            printf("Bad filename in archive: %s\n", filename);
-            goto end;
-          }
-          out=fopen(filename, "rb");
+          const char *basename=strip(filename); // not required by standard
+          out=fopen(basename, "rb");
           if (out) {
-            printf("Error: won't overwrite %s\n", filename);
+            printf("Error: won't overwrite %s\n", basename);
             goto end;
           }
           else {
-            out=fopen(filename, "wb");
+            out=fopen(basename, "wb");
             if (!out) {
-              perror(filename);
+              perror(basename);
               goto end;
             }
           }
           if (out)
-            printf("Decompressing %s ... ", filename);
+            printf("Decompressing %s -> %s ... ", filename, basename);
         }
         ++filecount;
       }
@@ -1692,7 +1707,6 @@ void decompress(int argc, char** argv) {
     }
     if (c!=255) error("missing end of block marker");
   }
-  if (c!=EOF) error("extra data after last block");
 
   // Close the archive
 end:
@@ -1715,11 +1729,11 @@ void list(int argc, char** argv) {
   long mark=0;
 
   // Read the file
-  int c, blocks=0;
-  while ((c=getc(in))=='z') {
+  int blocks=0;
+  while (find_start(in)) {
 
     // Read block header
-    if (getc(in)!='P' || getc(in)!='Q' || getc(in)!=LEVEL || getc(in)!=1)
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("not ZPAQ");
     ZPAQL z;
     z.read(in);
@@ -1727,6 +1741,7 @@ void list(int argc, char** argv) {
      ++blocks, z.memory()/1000000);
 
     // Read segments
+    int c;
     while ((c=getc(in))==1) {
 
       // Print filename and comments
@@ -1751,14 +1766,13 @@ void list(int argc, char** argv) {
     }
     if (c!=255) error("missing end of block marker");
   }
-  if (c!=EOF) error("extra data at end");
 }
 
 ///////////////////////////// Main ///////////////////////////
 
 // Print help message and exit
 void usage() {
-  printf("UNZPAQ v1.03 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
+  printf("UNZPAQ v1.06 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
