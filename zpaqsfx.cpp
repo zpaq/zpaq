@@ -1,7 +1,7 @@
-/*  zpaqsfx v1.04 ZPAQ self extracting archive stub.
+/*  zpaqsfx v1.06 ZPAQ self extracting archive stub.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 14, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2009.
 
     LICENSE
 
@@ -1592,21 +1592,24 @@ FILE *open_self(const char* filename) {
   exit(1);
 }
 
-// Position in at the start of the archive (after zpaqsfx.tag)
-// Error if not found.
-void find_start(FILE *in) {
-  U32 h1=1, h2=2, h3=3, h4=4;
+// Advance 'in' past "zPQ" at its current location. If something
+// else is there, search for the following 16 byte string
+// which ends with "zPQ":
+// 37 6B 53 74  A0 31 83 D3  8C B2 28 B0  D3 7A 50 51 (hex)
+// Return true if found, false at EOF.
+bool find_start(FILE *in) {
+  U32 h1=0x3D49B113, h2=0x29EB7F93, h3=0x2614BE13, h4=0x3828EB13;
+  // Rolling hashes initialized to hash of first 13 bytes
   int c;
   while ((c=getc(in))!=EOF) {
     h1=h1*12+c;
     h2=h2*20+c;
     h3=h3*28+c;
     h4=h4*44+c;
-    if (h1==0xBD49B113 && h2==0x29EB7F93 && h3==0x6614BE13 && h4==0xB828EB13){
-      return;
-    }
+    if (h1==0xB16B88F1 && h2==0xFF5376F1 && h3==0x72AC5BF1 && h4==0x2F909AF1)
+      return true;  // hash of 16 byte string
   }
-  error("Start of archive data not found");
+  return false;
 }
 
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
@@ -1617,14 +1620,12 @@ void decompress(int argc, char** argv) {
 
   // Open archive
   FILE* in=open_self(argv[0]);
-  find_start(in);
 
   // Read the archive
   int filecount=0;  // number of files extracted
   FILE *out=0;  // file to extract
-  int c;
-  while ((c=getc(in))=='z') {
-    if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
+  while (find_start(in)) {
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("Not ZPAQ");
 
     // Read block header
@@ -1636,6 +1637,7 @@ void decompress(int argc, char** argv) {
     Decoder dec(in, z);
 
     // Read segments
+    int c;
     while ((c=getc(in))==1) {
 
       // Read the filename
@@ -1729,7 +1731,6 @@ void decompress(int argc, char** argv) {
     }
     if (c!=255) error("missing end of block marker");
   }
-  if (c!=EOF) error("extra data after last block");
 
   // Close the archive
 end:
@@ -1745,20 +1746,19 @@ void list(int argc, char** argv) {
 
   // Open archive
   FILE* in=open_self(argv[0]);
-  find_start(in);
 
   // File offsets to get compressed sizes
   long mark=0;
 
   // Print help message
-  printf("ZPAQSFX 1.03 self extracting archive. Contents:\n\n");
+  printf("ZPAQSFX 1.06 self extracting archive. Contents:\n\n");
 
   // Read the file
-  int c, max_memory=0;
-  while ((c=getc(in))=='z') {
+  int max_memory=0;
+  while (find_start(in)) {
 
     // Read block header
-    if (getc(in)!='P' || getc(in)!='Q' || getc(in)!=LEVEL || getc(in)!=1)
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("not ZPAQ");
     ZPAQL z;
     z.read(in);
@@ -1767,6 +1767,7 @@ void list(int argc, char** argv) {
       max_memory=mem;
 
     // Read segments
+    int c;
     while ((c=getc(in))==1) {
 
       // Print filename and comments
@@ -1791,7 +1792,6 @@ void list(int argc, char** argv) {
     }
     if (c!=255) error("missing end of block marker");
   }
-  if (c!=EOF) error("extra data at end");
   printf("\n"
     "To extract all files:  %s x\n"
     "To extract and rename: %s x new_names...\n"

@@ -1,7 +1,7 @@
-/*  zpaq v1.05 archiver and file compressor.
+/*  zpaq v1.06 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 28, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2009.
 
     LICENSE
 
@@ -26,14 +26,15 @@ at this website.
 Command summary
 ---------------
 
-To compress to new archive: zpaq [pnsiv]c[F] archive files...
-To append to archive:       zpaq [pnsiv]a[F] archive files...
+To compress to new archive: zpaq [pnsivt]c[F] archive files...
+To append to archive:       zpaq [pnsivt]a[F] archive files...
 Optional modifiers:
   p = store filename paths in archive
   n = don't store filenames (extractor will append to last named file)
   s = don't store SHA1 checksums (saves 20 bytes)
   i = don't store file sizes as comments (saves a few bytes)
   v = verbose
+  t = append locator tag to non-ZPAQ data
   F = use options in configuration file F (min.cfg, max.cfg)
 To list contents: zpaq [v]l archive
   v = verbose
@@ -144,7 +145,7 @@ in file names.
 Compression options
 -------------------
 
-  zpaq {p|n|s|i|v}*{c|a}[F] archive files...
+  zpaq {p|n|s|i|v|t}*{c|a}[F] archive files...
 
 Create or append archive with optional modifiers and an optional
 configuration file F. Three files are included:
@@ -167,10 +168,10 @@ file max.cfg. Modifiers have the following meaning:
 Store file name paths as given on the command line. The default
 is to store the name without the path. For example,
 "zpaq pc books.zpaq tmp\book1" will store the name as "tmp\book1"
-instead of "book1". During extraction, ZPAQ will attempt to
-extract book1 to the subdirectory tmp instead of the current
-directory. This will fail if tmp does not exist. ZPAQ does
-not create directories as needed.
+instead of "book1". If the p option is also given during extraction,
+then ZPAQ will attempt to extract book1 to the subdirectory tmp
+instead of the current directory. This will fail if tmp does not exist.
+ZPAQ does not create directories as needed.
 
   n
 
@@ -196,6 +197,15 @@ it is displayed by the "l" and "x" commands.
 
 Verbose. Show config file F (if present) as it is compiled.
 This is useful for error checking.
+
+  t
+
+Append a locator tag to non-ZPAQ data. The tag is a string of
+13 bytes that allows ZPAQ and UNZPAQ to find the start
+of a sequence of ZPAQ blocks embedded in other data.
+zpaqsfx.exe already has this tag at the end. However, if a
+new stub is compiled from the source then the t command should
+be used when appending the first file.
 
 
 List options
@@ -1549,10 +1559,8 @@ void ZPAQL::read(FILE* in) {
     int op=getc(in);
     if (op==EOF) error("unexpected end of file");
     header[hend++]=op;
-    if ((op&7)==7) header[hend++]=getc(in);
   }
   if ((header[hend++]=getc(in))!=0) error("missing HCOMP END");
-  if (hend!=hsize+130) error("opcode straddles end");
 
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
@@ -2657,7 +2665,6 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   assert(sizeof(U32)==4);
   assert(sizeof(short)==2);
   assert(sizeof(int)==4);
-  assert(sizeof(long)==sizeof(char*));  // 4 or 8
 
   // Initialize tables
   for (int i=0; i<1024; ++i)
@@ -3134,37 +3141,33 @@ bool validate_filename(const char* filename) {
   return true;
 }
 
-// Position in at the start of the archive, either at the beginning
-// starting with "zPQ",LEVEL or after zpaqsfx.tag.
-// Error if not found.
-void find_start(FILE *in) {
-  U32 h1=1, h2=2, h3=3, h4=4;
-  int c=0;
-  if (ftell(in)==0 && getc(in)=='z' && getc(in)=='P' && getc(in)=='Q'
-      && (c=getc(in))>=1 && c<=LEVEL) {
-    rewind(in);
-    return;
-  }
-  rewind(in);
+// Advance 'in' past "zPQ" at its current location. If something
+// else is there, search for the following 16 byte string
+// which ends with "zPQ":
+// 37 6B 53 74  A0 31 83 D3  8C B2 28 B0  D3 7A 50 51 (hex)
+// Return true if found, false at EOF.
+bool find_start(FILE *in) {
+  U32 h1=0x3D49B113, h2=0x29EB7F93, h3=0x2614BE13, h4=0x3828EB13;
+  // Rolling hashes initialized to hash of first 13 bytes
+  int c;
   while ((c=getc(in))!=EOF) {
     h1=h1*12+c;
     h2=h2*20+c;
     h3=h3*28+c;
     h4=h4*44+c;
-    if (h1==0xBD49B113 && h2==0x29EB7F93 && h3==0x6614BE13 && h4==0xB828EB13){
-      return;
-    }
+    if (h1==0xB16B88F1 && h2==0xFF5376F1 && h3==0x72AC5BF1 && h4==0x2F909AF1)
+      return true;  // hash of 16 byte string
   }
-  error("Start of archive data not found");
+  return false;
 }
 
 // Advance in to start of next block
 void skip_block(FILE *in) {
 
-  // Skip block header
+  // Find start of next block
   int c;
-  if (getc(in)!='z' || getc(in)!='P' || getc(in)!='Q' 
-      || (c=getc(in))>LEVEL || c<1 || getc(in)!=1)
+  if (!find_start(in)) return;  // EOF
+  if ((c=getc(in))>LEVEL || c<1 || getc(in)!=1)
     error("not ZPAQ");
 
   // Skip block header
@@ -3230,7 +3233,6 @@ void decompress(int argc, char** argv) {
   // Open archive
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
-  find_start(in);
 
   // Skip to specified block
   while (blocknum>1) {
@@ -3242,8 +3244,8 @@ void decompress(int argc, char** argv) {
   int filecount=0;  // number of files extracted
   FILE *out=0;  // file to extract
   int c;
-  while ((c=getc(in))=='z') {
-    if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
+  while (find_start(in)) {
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("Not ZPAQ");
 
     // Read block header
@@ -3379,7 +3381,6 @@ void decompress(int argc, char** argv) {
     if (c!=255) error("missing end of block marker");
     if (blocknum) goto end;
   }
-  if (c!=EOF) error("extra data after last block");
 
   // Close the archive
 end:
@@ -3448,8 +3449,8 @@ void compress(int argc, char** argv) {
   assert(argc>=3);
 
   // Get command options
-  bool pcmd=false, ncmd=false, scmd=false, icmd=false, vcmd=false; // options
-  bool acmd=false, ccmd=false;  // append or create
+  bool pcmd=false, ncmd=false, scmd=false, icmd=false, vcmd=false, // options
+       tcmd=false, acmd=false, ccmd=false;
   const char *cmd=argv[1];
   while (cmd && cmd[0]) {
     if (cmd[0]=='p') pcmd=true, ncmd=false;
@@ -3457,6 +3458,7 @@ void compress(int argc, char** argv) {
     else if (cmd[0]=='s') scmd=true;
     else if (cmd[0]=='i') icmd=true;
     else if (cmd[0]=='v') vcmd=true;
+    else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='a') {acmd=true; break;}
     else if (cmd[0]=='c') {ccmd=true; break;}
     else usage();
@@ -3565,6 +3567,11 @@ void compress(int argc, char** argv) {
       out=fopen(argv[2], acmd?"ab":"wb");
       if (!out) perror(argv[2]), exit(1);
 
+      // append locator tag
+      if (tcmd)
+        fprintf(out, "%s", 
+        "\x37\x6B\x53\x74\xA0\x31\x83\xD3\x8C\xB2\x28\xB0\xD3");
+
       // Write block header
       enc.setOutput(out);
       fprintf(out, "zPQ%c%c", LEVEL, 1);
@@ -3601,13 +3608,13 @@ void compress(int argc, char** argv) {
 
     // Compress 
     printf("%s %ld ", argv[i], size);
-    long i=0;
+    long j=0;
     while ((c=getc(in))!=EOF) {
       enc.compress(c);
-      if (!(++i&0xffff)) {
+      if (!(++j&0xffff)) {
         printf("%12ld -> %-12ld"
           "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b",
-          i, ftell(out)-mark);
+          j, ftell(out)-mark);
       }
     }
     enc.compress(-1);
@@ -3654,17 +3661,16 @@ void list(int argc, char** argv) {
   // Open archive
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
-  find_start(in);
 
   // File offsets to get compressed sizes
   long mark=0;
 
   // Read the file
   int c, blocks=0;
-  while ((c=getc(in))=='z') {
+  while (find_start(in)) {
 
     // Read block header
-    if (getc(in)!='P' || getc(in)!='Q' || getc(in)!=LEVEL || getc(in)!=1)
+    if (getc(in)!=LEVEL || getc(in)!=1)
       error("not ZPAQ");
     ZPAQL z;
     z.read(in);
@@ -3705,7 +3711,6 @@ void list(int argc, char** argv) {
     }
     if (c!=255) error("missing end of block marker");
   }
-  if (c!=EOF) error("extra data at end");
 }
 
 //////////////////////////// run ///////////////////////////
@@ -3770,18 +3775,19 @@ void run(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.05 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.06 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "To compress to new archive: zpaq [pnsiv]c[F] archive files...\n"
-    "To append to archive:       zpaq [pnsiv]a[F] archive files...\n"
+    "To compress to new archive: zpaq [pnsivt]c[F] archive files...\n"
+    "To append to archive:       zpaq [pnsivt]a[F] archive files...\n"
     "Optional modifiers:\n"
     "  p = store filename paths in archive\n"
     "  n = don't store filenames (extractor will append to last named file)\n"
     "  s = don't store SHA1 checksums (saves 20 bytes)\n"
     "  i = don't store file sizes as comments (saves a few bytes)\n"
     "  v = verbose\n"
+    "  t = append locator tag to non-ZPAQ data\n"
     "  F = use options in configuration file F (min.cfg, max.cfg)\n"
     "To list contents: zpaq [v]l archive\n"
     "  v = verbose\n"

@@ -1,5 +1,5 @@
-README for ZPAQ v1.05
-Matt Mahoney - Sept. 28, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.06
+Matt Mahoney - Sept. 29, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -13,17 +13,17 @@ http://www.gnu.org/copyleft/gpl.html
 
 Contents:
 
-  zpaq100.pdf -  The ZPAQ open standard format for highly compressed
-                 data. v1.00 last updated Mar. 12, 2009.
+  zpaq1.pdf -    The ZPAQ open standard format for highly compressed
+                 data. Revision 1 last updated Sept.29, 2009.
 
-  unzpaq103.cpp -Reference standard decoder (GPL). It is part of the
-                 specification. v1.03 last updated Sept. 8, 2009.
+  unzpaq106.cpp -Reference standard decoder (GPL). It is part of the
+                 specification. v1.03 last updated Sept. 29, 2009.
 
   zpaq.exe -     The ZPAQ compressor, decompressor, and environment for
                  developing new compression algorithms in the ZPAQ format.
                  Compiled for 32 bit Windows.
 
-  zpaq105.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
+  zpaq106.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
 
   min.cfg -      ZPAQ config file for fast compression.
 
@@ -41,9 +41,9 @@ Contents:
 
   zpaqsfx.exe -  Stub for making self extracting archives.
 
-  zpaqsfx.cpp -  Source (GPL) for zpaqsfx v1.03.
+  zpaqsfx.cpp -  Source (GPL) for zpaqsfx v1.06.
 
-  zpaqsfx.tag -  16 random bytes appended to zpaqsfx.exe.
+  zpaqsfx.tag -  16 byte locater tag appended to zpaqsfx.exe.
 
   readme.txt -   This file.
 
@@ -79,7 +79,7 @@ needed to list or extract files.
 A config file describes a context mixing algorithm, a program in
 a sandboxed interpreted language called ZPAQL to compute contexts,
 and an optional external preprocessor and corresponding ZPAQL
-postprocessor. See the zpaq105.cpp source code comments for guidelines
+postprocessor. See the zpaq106.cpp source code comments for guidelines
 on writing and modifying config files and preprocessors. ZPAQ has advanced
 options to support testing and debugging new compression algorithms.
 
@@ -200,3 +200,11 @@ v1.05 - Sept. 28, 2009. Removed built in x (E8E9) and p (LZP)
         hexadecimal. Fixed detection of corrupted input in decoder.
         unzpaq.exe not included in distribution because zpaq.exe
         has all the same functions.
+
+v1.06 - Sept. 29, 2009. Updated specification zpaq1.pdf to include
+        a recommendation of adding a 13 byte locater tag to mark the
+        start of a ZPAQ archive embedded in other data. Updated
+        zpaq.cpp, unzpaq.cpp, and zpaqsfx.cpp to find this tag.
+        Also added "ta" to append this tag. Some minor bug fixes
+        and porting issues fixed. Changed unzpaq to extract to current
+        directory by default.
