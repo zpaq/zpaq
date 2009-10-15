@@ -1,5 +1,5 @@
-README for ZPAQ v1.07
-Matt Mahoney - Oct. 2, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.08
+Matt Mahoney - Oct. 14, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -17,7 +17,9 @@ Contents:
                  developing new compression algorithms in the ZPAQ format.
                  Compiled for 32 bit Windows.
 
-  zpaq107.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
+  zpaq.cpp, zpaq.h - Source code (GPL) for zpaq.exe. See comments for usage.
+
+  zpaqmake.bat - Script used by ZPAQ to build optimized code.
 
   min.cfg -      ZPAQ config file for fast compression.
 
@@ -25,19 +27,9 @@ Contents:
 
   max.cfg -      Config file for good compression.
 
-  exe.cfg -      Config file for good compression of x86 .exe and .dll files.
-
   lzppre.exe -   LZP preprocessor, required with min.cfg.
 
   lzppre.cpp -   Source code for lzppre.exe.
-
-  exepre.cfg -   E8E9 preprocessor in ZPAQL, required with exe.cfg
-
-  zpaqsfx.exe -  Stub for making self extracting archives.
-
-  zpaqsfx.cpp -  Source (GPL) for zpaqsfx v1.06.
- 
-  zpaqsfx.tag -  16 byte locater tag appended to zpaqsfx.exe.
 
   readme.txt -   This file.
 
@@ -49,15 +41,6 @@ To list contents:        zpaq l archive
 To extract:              zpaq x archive
 To extract and rename:   zpaq x archive files...
 For help:                zpaq
-
-To make a self extracting archive, copy zpaqsfx.exe and append to it
-with the "a" command. When the copy is run, it will list its contents
-and prompt to use the x command to extract. For example:
-
-  copy zpaqsfx.exe books.exe
-  zpaq a books.exe book1 book2
-  books.exe    (will list contents)
-  books.exe x  (will create book1 and book2)
 
 Compression options are stored in config files. To use them,
 append the name after the "c" or "a" with no space, for example:
@@ -73,11 +56,62 @@ needed to list or extract files.
 A config file describes a context mixing algorithm, a program in
 a sandboxed interpreted language called ZPAQL to compute contexts,
 and an optional external preprocessor and corresponding ZPAQL
-postprocessor. See the zpaq106.cpp source code comments for guidelines
+postprocessor. See the zpaq.cpp source code comments for guidelines
 on writing and modifying config files and preprocessors. ZPAQ has advanced
 options to support testing and debugging new compression algorithms.
 
-History: Versions prior to 1.00 are not compatible with the ZPAQ
+Installation
+------------
+
+Put zpaq.exe and any preprocessors (like lzppre.exe) either in
+your PATH or in the current directory.
+
+Version 1.08 adds an optimizer which makes ZPAQ run about twice
+as fast. To use it, use the commands "oc", "oa", or "ox" instead of
+"c", "a", or "x", for example "zpaq ocmax.cfg archive files...".
+
+The "o" modifier will only work if you have a C++ compiler installed
+and you configure zpaqmake.bat. When you use "o", ZPAQ will check your
+temporary directory ($TMPDIR or %TEMP%) for an optimized version
+of ZPAQ tuned for the current input. This program will have a long
+name based on a hash of the config file and preprocessor name.
+If ZPAQ finds this program, it will run it. If not, then it will
+generate C++ source code in the temp directory and compile it prior
+to running it. ZPAQ will call zpaqmake to compile it. zpaqmake.bat
+is expected to take one argument (%1) which is the full path
+(in %TEMP%) of the source code without the .cpp extension. It is
+expected to create %1.exe. The source code needs to #include <zpaq.h>
+and link to zpaq.cpp or zpaq.obj. The program should be compiled
+with -DOPT and -DNDEBUG. For example, suppose that zpaq.cpp and
+zpaq.h are in C:\src
+
+  g++ -O2 -DNDEBUG -DOPT -IC:\src %1.cpp C:\src\zpaq.cpp -o %1.exe
+
+Additional compiler options should be appropriate for your computer.
+For example:
+
+  g++ -O2 -s -fomit-frame-pointer -march=pentiumpro ...
+
+-O2 optimizes (sometimes better than -O3), -s strips debugging
+symbols to save space, -fomit-frame-pointer always helps, and
+-march=pentiumpro is the oldest target that doesn't hurt speed.
+Feel free to experiment.
+
+Then put zpaq.exe and makefile.bat somewhere in your PATH.
+
+In Linux, you need to do something equivalent using a shell
+script. ZPAQ will look in $TMPDIR first, then $TEMP, then the
+current directory for $1.exe. $TMPDIR is normally /tmp but you
+might have to set it.
+
+You can delete files in the temp directory anytime you want.
+ZPAQ will generate them again as needed.
+
+
+History
+-------
+
+Versions prior to 1.00 are not compatible with the ZPAQ
 standard and are obsolete. All versions 1.00 and higher are forward
 and backward compatible.
 
@@ -208,3 +242,11 @@ v1.07 - Oct. 2, 2009. zpaq config files now accept arguments. Fixed
         mid.cfg, max.cfg accept an argument to change memory.
         min.cfg takes a second argument to change LZP minimum match.
         pcomp external preprocessor command must end with ;
+
+v1.08 - Oct. 14, 2009. Added optimization, which makes zpaq about
+        twice as fast if an external C++ compiler is available.
+        The "o" option compiles the model and creates a temporary
+        program optimized for the current input, and runs it.
+        Also changed meaning of "nx" to mean decompress all output
+        to one file. Fixed ZPAQL shift instructions to be consistent
+        with spec on non x86 machines.
