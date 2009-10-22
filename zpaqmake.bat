@@ -3,8 +3,9 @@
 : #include <zpaq.h> and link it to zpaq.cpp or zpaq.o. These files can
 : be anywhere, but this script is expected to find them.
 : The following assumes zpaq.cpp and zpaq.h are in C:\bin\src
-: and that %TMPDIR% is not set and %TEMP% is.
-: Adjust accordingly.
+: and temporary files go in %TEMP%. Adjust accordingly.
+
+@echo off
 
 : MinGW 4.4.0 (recommended)
 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro -DNDEBUG -DOPT %1.cpp -IC:\bin\src C:\bin\src\zpaq.cpp -o %1.exe

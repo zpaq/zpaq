@@ -1,7 +1,7 @@
-/*  header file for zpaq v1.08 archiver and file compressor.
+/*  header file for zpaq v1.09 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 13, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 21, 2009.
 
     LICENSE
 
@@ -116,6 +116,8 @@ public:
     SHA1Input(&ch, 1);
   }
   int result(int i);  // Finish and return byte i (0..19) of SHA1 hash
+  double size() const {  // Number of bytes hashed so far
+    return (Length_Low+4294967296.0*Length_High)/8;}
 };
 
 
@@ -130,7 +132,7 @@ public:
   int get() {  // return 1 byte or EOF
     if (in) return getc(in);
     else if (ptr && len) return --len, *ptr++;
-    else return EOF;
+    return EOF;
   }
 };
 
@@ -138,8 +140,9 @@ public:
 class ZPAQL {
 public:
   ZPAQL();
-  void read(Reader r);    // Read header from archive or array
-  void write(FILE* out);  // Write header to archive
+  int read(Reader r);     // Read header from archive or array
+  int write(FILE* out);   // Write header to archive
+  void verify();          // Compare header to zlist/pzlist
   void inith();           // Initialize as HCOMP to run
   void initp();           // Initialize as PCOMP to run
   U32 H(int i) {return h(i);}  // get element of h

@@ -1,5 +1,5 @@
-README for ZPAQ v1.08
-Matt Mahoney - Oct. 14, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.09
+Matt Mahoney - Oct. 21, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -35,77 +35,34 @@ Contents:
 
 Brief usage summary:
 
-To create a new archive: zpaq c archive files...
-To append to an archive: zpaq a archive files...
-To list contents:        zpaq l archive
-To extract:              zpaq x archive
-To extract and rename:   zpaq x archive files...
-For help:                zpaq
+To compress:      zpaq ocmax.cfg,2 archive files...
+To decompress:    zpaq ox archive files...
+To list contents: zpaq l archive
+For help:         zpaq
 
-Compression options are stored in config files. To use them,
-append the name after the "c" or "a" with no space, for example:
+For compression, "c" means compress. To append to an existing
+archive, use "a" instead, as "zpaq oamax.cfg,2 archive files...".
 
-  zpaq cmax.cfg archive files...  (for good but slow compression)
-  zpaq amin.cfg archive files...  (for poor but fast compression)
+"o" means optimize (run faster). You need a C++ compiler installed
+to use this option. If not, drop the "o". You can still use zpaq
+but it will take about twice as long to run.
 
-Decompression usually requires about the same time and memory as
-compression. Some config files require external preprocessors be
-present during compression. Config files and preprocessors are not
-needed to list or extract files.
+"max.cfg" selects maximum (but slow) compression. min.cfg selects
+minimum but fast compression. mid.cfg is in the middle.
+Decompression speed will be the same as compression.
 
-A config file describes a context mixing algorithm, a program in
-a sandboxed interpreted language called ZPAQL to compute contexts,
-and an optional external preprocessor and corresponding ZPAQL
-postprocessor. See the zpaq.cpp source code comments for guidelines
-on writing and modifying config files and preprocessors. ZPAQ has advanced
-options to support testing and debugging new compression algorithms.
+",2" means use 4 times more memory. Each increment doubles usage.
+You need the same memory to decompress.
 
-Installation
-------------
+"ox" means extract fast. You can extract more slowly with "x"
+if you don't have C++ installed. Output files are renamed in
+the same order they are stored and listed. If you don't rename the
+output files, then the files will be extracted to the current
+directory with the same names they had when stored.
 
-Put zpaq.exe and any preprocessors (like lzppre.exe) either in
-your PATH or in the current directory.
-
-Version 1.08 adds an optimizer which makes ZPAQ run about twice
-as fast. To use it, use the commands "oc", "oa", or "ox" instead of
-"c", "a", or "x", for example "zpaq ocmax.cfg archive files...".
-
-The "o" modifier will only work if you have a C++ compiler installed
-and you configure zpaqmake.bat. When you use "o", ZPAQ will check your
-temporary directory ($TMPDIR or %TEMP%) for an optimized version
-of ZPAQ tuned for the current input. This program will have a long
-name based on a hash of the config file and preprocessor name.
-If ZPAQ finds this program, it will run it. If not, then it will
-generate C++ source code in the temp directory and compile it prior
-to running it. ZPAQ will call zpaqmake to compile it. zpaqmake.bat
-is expected to take one argument (%1) which is the full path
-(in %TEMP%) of the source code without the .cpp extension. It is
-expected to create %1.exe. The source code needs to #include <zpaq.h>
-and link to zpaq.cpp or zpaq.obj. The program should be compiled
-with -DOPT and -DNDEBUG. For example, suppose that zpaq.cpp and
-zpaq.h are in C:\src
-
-  g++ -O2 -DNDEBUG -DOPT -IC:\src %1.cpp C:\src\zpaq.cpp -o %1.exe
-
-Additional compiler options should be appropriate for your computer.
-For example:
-
-  g++ -O2 -s -fomit-frame-pointer -march=pentiumpro ...
-
--O2 optimizes (sometimes better than -O3), -s strips debugging
-symbols to save space, -fomit-frame-pointer always helps, and
--march=pentiumpro is the oldest target that doesn't hurt speed.
-Feel free to experiment.
-
-Then put zpaq.exe and makefile.bat somewhere in your PATH.
-
-In Linux, you need to do something equivalent using a shell
-script. ZPAQ will look in $TMPDIR first, then $TEMP, then the
-current directory for $1.exe. $TMPDIR is normally /tmp but you
-might have to set it.
-
-You can delete files in the temp directory anytime you want.
-ZPAQ will generate them again as needed.
+See zpaq.cpp for complete descriptions, many other options,
+and how to write config files for custom compression algorithms,
+and installation instructions.
 
 
 History
@@ -250,3 +207,10 @@ v1.08 - Oct. 14, 2009. Added optimization, which makes zpaq about
         Also changed meaning of "nx" to mean decompress all output
         to one file. Fixed ZPAQL shift instructions to be consistent
         with spec on non x86 machines.
+
+v1.09 - Oct 21, 2009. Port to Linux. Preprocessor temporary files
+        now go in %TEMP% or $TEMP. TMPDIR not used. Optimized
+        decompressor now verifies header contents matches code.
+        File size display fixed for sizes over 2 GB. Added q option
+        (quiet) to suppress output. Compression shows preprocessed
+        size if different.
