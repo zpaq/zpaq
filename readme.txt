@@ -1,5 +1,5 @@
-README for ZPAQ v1.09
-Matt Mahoney - Oct. 21, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.10
+Matt Mahoney - Dec. 28, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -214,3 +214,6 @@ v1.09 - Oct 21, 2009. Port to Linux. Preprocessor temporary files
         File size display fixed for sizes over 2 GB. Added q option
         (quiet) to suppress output. Compression shows preprocessed
         size if different.
+
+v1.10 - Dec. 28, 2009. zpaq.cpp bug fix for g++ 4.4.1/Linux. Thanks to
+        Tom Hargreaves for a patch. zpaq.h is still v1.09.
