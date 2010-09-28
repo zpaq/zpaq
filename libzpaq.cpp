@@ -1,12 +1,12 @@
 /* libzpaq.cpp
 
-LIBZPAQ Version 0.01
-Written by Matt Mahoney, Sept. 27, 2010
+LIBZPAQ Version 0.02
+Written by Matt Mahoney, Sept. 28, 2010
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
 http://mattmahoney.net/dc/zpaq1.pdf
-See libzpaq.h for documentation.
+See accompanying libzpaq.txt for documentation.
 
 The LIBZPAQ software is placed in the public domain. It may be used
 without restriction. LIBZPAQ is provided "as is" with no warranty.
@@ -30,9 +30,13 @@ double log(double x) {return ::log(x);}
 double exp(double x) {return ::exp(x);}
 double pow(double x, double y) {return ::pow(x, y);}
 
-// Memory reader (no bounds check)
+// Memory reader and writer (no bounds check)
 int get(const char** r) {
   return *(*r)++&255;
+}
+
+void put(int c, char** w) {
+  *(*w)++ = c;
 }
 
 //////////////////////////// SHA1 ////////////////////////////
@@ -151,12 +155,12 @@ void Component::init() {
 
 ////////////////////////// StateTable //////////////////////////
 
-const int StateTable::bound[B]={20,48,15,8,6,5}; // n0 -> max n1, n1 -> max n0
-
 // How many states with count of n0 zeros, n1 ones (0...2)
 int StateTable::num_states(int n0, int n1) {
+  const int B=6;
+  const int bound[B]={20,48,15,8,6,5}; // n0 -> max n1, n1 -> max n0
   if (n0<n1) return num_states(n1, n0);
-  if (n0<0 || n1<0 || n0>=N || n1>=N || n1>=B || n0>bound[n1]) return 0;
+  if (n0<0 || n1<0 || n1>=B || n0>bound[n1]) return 0;
   return 1+(n1>0 && n0+n1<=17);
 }
 
@@ -200,6 +204,7 @@ void StateTable::next_state(int& n0, int& n1, int y) {
 StateTable::StateTable() {
 
   // Assign states by increasing priority
+  const int N=50;
   U8 t[N][N][2]={{{0}}}; // (n0,n1,y) -> state number
   int state=0;
   for (int i=0; i<N; ++i) {

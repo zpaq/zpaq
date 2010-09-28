@@ -47,6 +47,7 @@ namespace libzpaq {
     exit(1);
   }
 }
+
 #include "libzpaq.h"
 
 // File compressor and decompresser
