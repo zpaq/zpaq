@@ -1,6 +1,6 @@
 /* libzpaq.h 
-LIBZPAQ Version 0.01
-Written by Matt Mahoney, Sept. 27, 2010
+LIBZPAQ Version 0.02
+Written by Matt Mahoney, Sept. 28, 2010
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
@@ -9,495 +9,7 @@ http://mattmahoney.net/dc/zpaq1.pdf
 The LIBZPAQ software is placed in the public domain. It may be used
 without restriction. LIBZPAQ is provided "as is" with no warranty.
 
-The LIBZPAQ software consists of the following files.
-
-  libzpaq.h   - Header file to be included by the application developer.
-  libzpaq.cpp - Source code file to be linked by the application developer.
-  demo*.cpp   - Examples of using the library.
-
-For example, demo.cpp would have the line
-
-  #include "libzpaq.h"
-
-and might be compiled:
-
-  g++ -O2 demo.cpp libzpaq.cpp -DNDEBUG
-
-The -DNDEBUG option turns off run time checks for production code.
-
-
-SIMPLE FILE COMPRESSION
-
-The library provides functions compress() and decompress() for
-simple compression of files or arrays at 3 different compression
-levels (fast, mid, max). To support archives, checksums, custom
-error handling, and arbitrary compression models, the library
-has classes SHA1, Compressor, and Decompresser described later.
-The simple functions are:
-
-namespace libzpaq {
-
-// For simple streaming compression.
-template<typename Reader, typename Writer>
-void compress(Reader* in, Writer* out, int level);  // level=1,2,3
-
-// For simple streaming decompression
-template<typename Reader, typename Writer>
-void decompress(Reader* in, Writer* out);
-
-}  // end namespace libzpaq
-
-compress(in, out, level) will read from in until end of input
-and write compressed data to out. It will compress at level 1
-(fast), 2 (mid), or 3 (max). Higher levels compress better but
-are slower and use more memory. They correspond to fast.cfg,
-mid.cfg, and max.cfg used in the zpaq and zp programs.
-
-decompress(in, out) will decompress from in to out until end
-of input.
-
-in is type Reader, which can be any type for which defines the
-function
-
-  int get(Reader* in)
-
-in namespace libzpaq to read and return one byte (0..255) or -1
-at end of input. Writer is any type which defines
-
-  void put(int c, Writer* out)
-
-in namespace libzpaq to write one byte (the low 8 bits of c) to out.
-Also, an error handler must be defined in namespace libzpaq to
-handle errors from the library. It will be passed an English
-language string like this:
-
-  void error(const char* msg)
-
-These 3 functions must be defined before the line #include "libzpaq".
-
-A simple file compressor and decompresser might work like demo1.cpp
-below. It takes 3 command line arguments as in
-
-  demo1 cmd input output
-
-where cmd is 1, 2, 3, or d to compress at level 1-3 or decompress,
-and input and output are file names. For example:
-
-  demo1 3 book1 book1.zpaq   (compress file book1 to book1.zpaq)
-  demo1 d book1.zpaq book1   (decompress)
-
--------------------------------------------------------------------
-
-#include <stdio.h>
-#include <stdlib.h>
-
-// libzpaq required functions: get(), put(), and error()
-namespace libzpaq {
-
-  inline int get(FILE* in) {
-    int c=getc(in);
-    return c==EOF?-1:c;
-  }
-
-  inline void put(int c, FILE* out) {
-    putc(c, out);
-  }
-
-  void error(const char* msg) {
-    fprintf(stderr, "libzpaq error: %s\n", msg);
-    exit(1);
-  }
-}
-#include "libzpaq.h"
-
-// File compressor and decompresser
-int main(int argc, char** argv) {
-
-  // Print help message
-  if (argc<=3) {
-    printf("To compress or decompress files: demo1 cmd input output\n"
-      "Commands: 1=fast, 2=mid, 3=max, d=decompress\n");
-    return 1;
-  }
-
-  // Open input and output files
-  char cmd=argv[1][0];
-  FILE* in=fopen(argv[2], "rb");
-  if (!in) return perror(argv[2]), 1;
-  FILE* out=fopen(argv[3], "wb");
-  if (!out) return perror(argv[3]), 1;
-
-  // Compress
-  if (cmd>='1' && cmd<='3')
-    libzpaq::compress(in, out, cmd-'0');
-
-  // Decompress
-  else if (cmd=='d')
-    libzpaq::decompress(in, out);
-}
-
--------------------------------------------------------------------
-
-ARCHIVE HANDLING
-
-A ZPAQ archive consists of a sequence of independent blocks with an
-optional start tag to make blocks easier to find when mixed with other
-data. A block consists of a sequence of segments that must be decompressed
-in order from the beginning of the block. Each block uses a compression
-algorithm described in the block header. Each segment describes an array,
-a file, or a part of a file. A segment begins with an optional file name
-and an optional comment and ends with an optional SHA-1 checksum for
-integrity checking.
-
-compress(in, out, level) produces a compressed stream with one block
-containing one segment with no filename, no comment, and no checksum.
-The level is one of 3 predefined models (1=fast, 2=mid, 3=max).
-It will not write start tags.
-
-decompress(in, out) concatenates all of the decompressed output of
-all segments in all blocks. It will handle any valid compressed data,
-not just the 3 models selected by the compression level. It will
-ignore the filename and comment fields. It will not perform integrity
-checking and ignore any stored checksums. The decompressed data
-may be mixed with other data provided that the first block after
-any non-ZPAQ data is preceded by a start tag.
-
-The classes Compressor and Decompresser in namespace libzpaq give
-finer control. With class Compressor it is possible to produce
-any valid ZPAQ stream. With class Decompresser it is possible
-to read the filename and comment fields, verify checksums, and
-estimate memory usage before it is allocated. The classes are
-as follows:
-
-namespace libzpaq {
-
-// For computing SHA-1 checksums
-class SHA1 {
-public:
-  void put(int c);      // hash 1 byte
-  double size();        // number of bytes hashed since last result
-  const char* result(); // finish, return 20 byte hash, and reset
-};
-
-// For archive compression
-template <typename Reader, typename Writer>
-class Compressor {
-public:
-  void setOutput(Writer* out);
-  void writeTag();
-  void startBlock(int level);  // level=1,2,3
-  void startBlock(const char* hcomp);
-  void startSegment(const char* filename = 0, const char* comment = 0);
-  void postProcess(const char* pcomp = 0);
-  void setInput(Reader* in);
-  bool compress(int n = 0);  // n bytes, 0=all, return true until done
-  void endSegment(const char* sha1string = 0);  // reads 20 bytes
-  void endBlock();
-};
-
-// For archive decompression and listing contents
-template <typename Reader, typename Writer>
-class Decompresser {
-public:
-  void setInput(Reader* in);
-  bool findBlock(double* memptr = 0);
-  template <typename Writer2> bool findFilename(Writer2* = 0);
-  template <typename Writer2> void readComment(Writer2* = 0);
-  void setOutput(Writer* out);
-  void setSHA1(SHA1* sha1ptr);
-  bool decompress(int n = 0);  // n bytes, 0=all, return true until done
-  void readSegmentEnd(char* sha1string = 0);  // writes 21 bytes
-};
-}  // end namespace libzpaq
-
-
-COMPRESSION
-
-compress() is defined in namespace libzpaq as follows:
-
-template <class Reader, class Writer>
-void compress(Reader* in, Writer* out, int level) {
-  assert(level>=1 && level<=3);
-  Compressor<Reader, Writer> c;
-  c.setInput(in);
-  c.setOutput(out);
-  c.startBlock(level);
-  c.startSegment();
-  c.postProcess();
-  c.compress();
-  c.endSegment();
-  c.endBlock();
-}
-
-A ZPAQ stream consists of one or more blocks. Each block must begin
-with startBlock() and end with endBlock(). A block may contain one or
-more segments. Each segment must start with startSegment() and end
-with endSegment(). The first (and only first) segment of a block
-must be followed by postProcess() prior to compress(). compress()
-may otherwise be called only within segments. setInput() and setOutput()
-may be called at any time to set the input source and output destination.
-However, setInput() must be called before the first call to compress().
-setOutput() must be called before any output, which begins with
-startBlock().
-
-startBlock(level) initializes the compression algorithm to one of
-3 predefined levels (1=fast, 2=mid, 3=max). Alternatively,
-
-  void startBlock(const char* hcomp);
-  ...
-  void postProcess(const char* pcomp = 0);
-
-may be called with an arbitrary compression model defined in two
-strings, hcomp and pcomp. The format for these strings is described
-in the ZPAQ reference. The first 2 bytes of the string give the length
-of the rest of the string in little-endian (LSB, MSB) format.
-
-hcomp describes the COMP and HCOMP sections of the compression model,
-corresponding to these sections in a zpaq configuration file.
-pcomp describes the PCOMP section, which describes the postprocessing
-algorithm. If pcomp is 0, then no postprocessing is performed. Otherwise
-it is the responsibility of the application to preprocess the input data
-before compression so that the postprocessor restores it to its original
-value. The 3 default levels do no postprocessing.
-
-  void startSegment(const char* filename = 0, const char* comment = 0);
-
-optionally write a filename and comment to the segment header.
-If these fields are omitted, then they are left empty. Normally
-the filename field is a hint to the decompressor to name the file
-to be extracted for this segment. If the field is empty, the normal
-behavior is to concatenate the output to the previous segment,
-which might be in a different block.
-
-The comment may be any string. Usually this is the size of the input
-file as a decimal string. The size may also be followed by a space
-and a timestamp for archivers that restore timestamps. It would
-have the format "size yyyy/mm/dd hh:mm:ss" for example,
-c.startSegment("book1", "768771 1999/12/31 23:59:59");
-
-  bool c.compress(int n = 0);
-
-tells the compressor to compress n bytes of input, or compress to
-end of input if n is 0 or the argument is omitted. It returns true
-if there is still more input to compress or false otherwise. This
-can be used to show progress, for example:
-
-  while (c.compress(10000))
-    printf("%ld -> %ld \r", ftell(in), ftell(out));
-
-If n is 0, then compress() always compresses all of its input and
-returns false.
-
-When appending to non-ZPAQ data, the first startBlock() should
-be preceded by writeTag(). This writes a 13 byte fixed string
-which is unlikely to appear in most data without a deliberate
-effort. When non-ZPAQ data is input to a decompressor, it will
-search for the tag and ignore any input until it is found. The
-tag must be immediately followed by the start of a block.
-setOutput() should be called prior to writeTag(). It takes no
-arguments.
-
-
-CHECKSUMS
-
-  void endBlock(const char* sha1string = 0);
-
-writes a 20 byte SHA-1 hash at the end of a segment. It is intended
-to be a hash of the input before preprocessing (if any) and before
-compression. A decompresser can compute the hash of the output
-and compare it with the stored value. It is believed to be
-computationally infeasible to find two different inputs with the same
-checksum. If sha1string is omitted or 0, then no checksum is written
-and the decompressor will not be able to verify its output.
-
-The SHA1 class may be used to compute the checksum and size of a byte
-sequence. For example, the following finds the size and checksum
-of a file.
-
-  SHA1 sha1;
-  int ch;
-  FILE* in = fopen(filename, "rb");
-  while ((ch = getc(in)) != EOF)
-    sha1.put(ch);
-  double size = sha1.size();  // in bytes, up to 2^61 - 1
-  const char* sha1string = sha1.result();  // 20 byte hash
-
-put(c) updates the hash value with the byte c and increments
-the value returned by size(). result() calculates the final hash value
-and has the side effect of resetting the hash and resetting size()
-to return 0.0. Thus, size() should be called first. The pointer
-returned by result() remains valid until the next call to result()
-or the SHA1 object is destroyed. It is typically used like this:
-
-  for (each block...) {
-    c.startBlock(level);
-    bool first_segment = true;
-    for (each segment in block...) {
-
-      // ... get size and sha1string as above
-
-      rewind(in);
-      char sizestring[20];
-      sprintf(sizestring, "%1.0f", size);
-      c.startSegment(filename, sizestring);
-      if (first_segment)
-        c.postProcess();
-      first_segment = false;
-      c.compress();
-      c.endSegment(sha1.result());
-    }
-    c.endBlock();
-  }
-
-The largest value that sha1.size() can return is
-2^61 - 1 = 2305843009213693951, which is 19 digits.
-
-
-DECOMPRESSION
-
-The function decompress(in, out) is defined as follows:
-
-template <class Reader, class Writer>
-void decompress(Reader* in, Writer* out) {
-  Decompresser<Reader, Writer> d;
-  d.setInput(in);
-  d.setOutput(out);
-  while (d.findBlock()) {       // don't calculate memory
-    while (d.findFilename()) {  // discard filename
-      d.readComment();          // discard comment
-      d.decompress();           // to end of segment
-      d.readSegmentEnd();       // discard sha1string
-    }
-  }
-}
-
-
-setInput() and setOutput() may be called to redirect the input and
-output at any time. However setInput() must be called before the
-first call to findBlock(). setOutput() must be called before the
-first call to decompress(). The other functions must be called
-in exactly the order shown.
-
-  bool findBlock(double* memptr = 0);
-
-findBlock() scans forward to the start of the next block. It either
-immediately reads the start of a block, or otherwise searches for
-a start tag immediately followed by the start of a block. If it
-does not find a block, it returns false. Otherwise if memptr is
-present and not 0, then it calculates the approximate memory
-in bytes that will be required to decompress data in this block
-and store the result in *memptr. Then it returns true. The
-memory is not allocated until the first call to decompress().
-It remains allocated until the end of the block.
-
-  template <typename Writer2> bool findFilename(Writer2* out2);
-  bool findFilename();
-
-reads either the start of a segment or an end of block (EOB) symbol.
-If it reads EOB then it returns false. If it finds another segment
-in the current block, then it reads the filename field and if out2
-is passed, then it writes the filename to out2.
-
-  template <typename Writer2> void readComment(Writer2* out2);
-  void readComment();
-
-reads the comment field from the segment header, and if out2 is
-passed, writes the comment to it. It must be called immediately
-after findFilename() returns true.
-
-Writer2 can be FILE or any type which defines
-void put(int, Writer2*) as with the type Writer. For example,
-d.findFilename(stdout) will write the filename to the screen.
-If put(int, string*) is defined as above, then the following
-will store the filename and comment in strings.
-
-  string filename, comment;
-  while (d.findFilename(&filename)) {
-    d.readComment(&comment);
-    d.decompress();
-    d.readSegmentEnd();
-    filename = comment = "";
-  }
-
-To decompress:
-
-  bool decompress(int n = 0);
-
-If n is 0 or omitted, then decompress() will decompress the entire
-segment and return false. Otherwise it will decode n bytes and pass
-them to the postprocessor and return true if there is any data
-remaining in the current segment to decompress. Thus, one could
-report progress like this every 10 KB.
-
-  while (d.decompress(10000))
-    printf("%ld -> %ld\n", ftell(in), ftell(out));
-
-The actual output may be more or less than n bytes if the data is
-postprocessed. It may also be less than n if the end of the segment
-is reached.
-
-
-CHECKSUM VERIFICATION
-
-  void setSHA1(SHA1* sha1ptr = 0);
-
-tells the decompresser to compute the SHA-1 checksum of its output
-by calling sha1ptr->put(ch) for each output byte ch. If sha1ptr
-is 0 or omitted, then no checksum computation is done.
-
-  void readSegmentEnd(char* sha1string);
-
-reads the stored 20 byte checksum (if present) at the end of a segment
-into the last 20 bytes of the 21 byte sha1string. The first byte is
-1 to indicate the checksum is present, or 0 if absent.
-Thus, checksums may be verified as follows:
-
-  SHA1 sha1;
-  d.setSHA1(&sha1);
-  char sha1string[21];  
-  while (d.findBlock()) {
-    while (d.findFilename()) {
-      d.readComment();
-      d.decompress();
-      d.readSegmentEnd(sha1string);
-      if (sha1string[0]) {  // segment trailer has a checksum?
-        if (memcmp(sha1string+1, sha1.result(), 20))
-          printf("Verify error\n");
-        else
-          printf("Verify OK\n");
-      }
-      else
-        printf("Not verified\n");
-    }
-  }
-
-
-LISTING ARCHIVE CONTENTS
-
-It is possible to read the contents of the archive headers and
-trailers without decompressing the data. To do this, calls to
-decompress() are omitted. It is possible to decompress part of
-a block but it is an error to decompress any data if any earlier
-data in the same block was skipped. For example, the following
-will list the contents of an archive.
-
-  double memory;
-  for (int i=1; d.findBlock(&memory)); ++i) {
-    printf("Block %d needs %1.3f MB memory\n", i, memory/1e6);
-    while (d.findFilename(stdout)) {
-      printf(" ");
-      d.readComment(stdout);
-      printf("\n");
-      // skip decompress();
-      d.readSegmentEnd();
-    }
-  }
-
-
-REVISION HISTORY
-
-Sept. 27, 2010. Initial release v0.01, subject to change.
-
+See accompanying libzpaq.txt for documentation.
 */
 
 #ifndef LIBZPAQ_H
@@ -524,6 +36,10 @@ typedef unsigned int U32;
 
 // Callback for error handling
 extern void error(const char* msg);
+
+// Memory reader and writer (no bounds checks)
+extern int get(const char**);
+void put(int, char**);
 
 // Read 16 bit little-endian number
 int toU16(const char* p);
@@ -649,41 +165,63 @@ private:
   void swap(U8& x)  {a^=x; x^=a; a^=x;}
   void err();  // exit with run time error
 public:
-  template <typename Reader2> int read(Reader2* r) {  // Read header
-    // MARS compiler insists on inlining this function
+  // MARS compiler insists on inlining templated member functions
+
+  // Write header to out2, return true if HCOMP/PCOMP section is present
+  template <typename Writer2> bool write(Writer2* out2) {
+    if (header.size()<=6) return false;
+    assert(header[0]+256*header[1]==cend-2+hend-hbegin);
+    assert(cend>=7);
+    assert(hbegin>=cend);
+    assert(hend>=hbegin);
+    if (header[6]>0) {  // if any components then write COMP
+      for (int i=0; i<cend; ++i)
+        put(header[i], out2);
+    }
+    else {  // write PCOMP size only
+      put(hend-hbegin&255, out2);
+      put(hend-hbegin>>8, out2);
+    }
+    for (int i=hbegin; i<hend; ++i)
+      put(header[i], out2);
+    return true;
+  }
+
+  // Read header from in2
+  template <typename Reader2> int read(Reader2* in2) {
 
     // Get header size and allocate
-    int hsize=get(r);
-    hsize+=get(r)*256;
+    int hsize=get(in2);
+    hsize+=get(in2)*256;
     header.resize(hsize+300);
     cend=hbegin=hend=0;
     header[cend++]=hsize&255;
     header[cend++]=hsize>>8;
-    while (cend<7) header[cend++]=get(r); // hh hm ph pm n
+    while (cend<7) header[cend++]=get(in2); // hh hm ph pm n
 
     // Read COMP
     int n=header[cend-1];
     for (int i=0; i<n; ++i) {
-      int type=get(r);  // component type
+      int type=get(in2);  // component type
       if (type==-1) error("unexpected end of file");
       header[cend++]=type;  // component type
       int size=compsize[type];
       if (size<1) error("Invalid component type");
       if (cend+size>header.size()-8) error("COMP list too big");
       for (int j=1; j<size; ++j)
-        header[cend++]=get(r);
+        header[cend++]=get(in2);
     }
-    if ((header[cend++]=get(r))!=0) error("missing COMP END");
+    if ((header[cend++]=get(in2))!=0) error("missing COMP END");
 
     // Insert a guard gap and read HCOMP
     hbegin=hend=cend+128;
     while (hend<hsize+129) {
       assert(hend<header.size()-8);
-      int op=get(r);
+      int op=get(in2);
       if (op==-1) error("unexpected end of file");
       header[hend++]=op;
     }
-    if ((header[hend++]=get(r))!=0) error("missing HCOMP END");
+    if ((header[hend++]=get(in2))!=0) error("missing HCOMP END");
 
     assert(cend>=7 && cend<header.size());
     assert(hbegin==cend+128 && hbegin<header.size());
@@ -1107,9 +645,8 @@ struct Component {
 
 // Next state table generator
 class StateTable {
-  enum {B=6, N=64}; // sizes of b, t
+  enum {N=64}; // sizes of b, t
   U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
-  static const int bound[B];  // n0 -> max n1, n1 -> max n0
   int num_states(int n0, int n1);  // compute t[n0][n1][1]
   void discount(int& n0);  // set new value of n0 after 1 or n1 after 0
   void next_state(int& n0, int& n1, int y);  // new (n0,n1) after bit y
@@ -2466,7 +2003,7 @@ int Decoder<Reader, Writer>::skip() {
 
 template <typename Reader, typename Writer>
 class PostProcessor {
-  int state;   // input parse state
+  int state;   // input parse state: 0=INIT, 1=PASS, 2..4=loading, 5=POST
   int hsize;   // header size
   int ph, pm;  // sizes of H and M in z
 public:
@@ -2474,6 +2011,7 @@ public:
   PostProcessor(): state(0), hsize(0), ph(0), pm(0) {}
   void init(ZPAQL<Reader, Writer>& hz);
   int write(int c);  // Input a byte, return state
+  int getState() const {return state;}
 };
 
 // Copy ph, pm from block header
@@ -2610,7 +2148,7 @@ public:
   void startSegment(const char* filename = 0, const char* comment = 0);
   void setInput(Reader* i) {in=i;}
   void postProcess(const char* pcomp=0);
-  bool compress(int n = 0);  // n bytes, 0=all, return true until done
+  bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
   void endBlock();
 private:
@@ -2704,7 +2242,6 @@ template <typename Reader, typename Writer>
 bool Compressor<Reader, Writer>::compress(int n) {
   assert(state==SEG2);
   int ch=0;
-  if (n<=0) n=-1;
   while (n && (ch=get(in))!=-1) {
     enc.compress(ch);
     if (n>0) --n;
@@ -2745,23 +2282,25 @@ void Compressor<Reader, Writer>::endBlock() {
 template <typename Reader, typename Writer>
 class Decompresser {
 public:
-  Decompresser(): z(), dec(z), pp(), state(INIT), firstSegment(false) {}
+  Decompresser(): z(), dec(z), pp(), state(INIT) {}
   void setInput(Reader* in) {dec.in=in;}
   bool findBlock(double* memptr = 0);
+  template <typename Writer2> void hcomp(Writer2* out2) {z.write(out2);}
   template <typename Writer2> bool findFilename(Writer2*);
-  bool findFilename();
+  bool findFilename() {return this->findFilename((char**)0);}
   template <typename Writer2> void readComment(Writer2*);
-  void readComment();
+  void readComment() {this->readComment((char**)0);}
   void setOutput(Writer* out) {pp.z.output=out;}
   void setSHA1(SHA1* sha1ptr) {pp.z.sha1=sha1ptr;}
-  bool decompress(int n = 0);  // n bytes, 0=all, return true until done
+  bool decompress(int n = -1);  // n bytes, -1=all, return true until done
+  template <typename Writer2> bool pcomp(Writer2* out2) {
+    return pp.z.write(out2);}
   void readSegmentEnd(char* sha1string = 0);
 private:
   ZPAQL<Reader, Writer> z;
   Decoder<Reader, Writer> dec;
   PostProcessor<Reader, Writer> pp;
   enum {INIT, BLOCK, SEG1, SEG2, SEGEND, BLOCKSKIP, SEG1SKIP, SEG2SKIP} state;
-  bool firstSegment;
 };
 
 // Find the start of a block and return true if found. Set memptr
@@ -2788,9 +2327,10 @@ bool Decompresser<Reader, Writer>::findBlock(double* memptr) {
   if (get(dec.in)!=1) error("unsupported ZPAQ level");
   if (get(dec.in)!=1) error("unsupported ZPAQL type");
   z.read(dec.in);
+  dec.init();
+  pp.init(z);
   if (memptr) *memptr=z.memory();
   state=BLOCK;
-  firstSegment=true;
   return true;
 }
 
@@ -2822,31 +2362,6 @@ bool Decompresser<Reader, Writer>::findFilename(Writer2* filename) {
   return false;
 }
 
-// Skip comment from segment header
-template <typename Reader, typename Writer>
-bool Decompresser<Reader, Writer>::findFilename() {
-  assert(state==BLOCK || state==BLOCKSKIP);
-  int c=get(dec.in);
-  if (c==1) {  // segment found
-    while (true) {
-      c=get(dec.in);
-      if (c==-1) error("unexpected EOF");
-      if (c==0) {
-        if (state==BLOCK) state=SEG1;
-        if (state==BLOCKSKIP) state=SEG1SKIP;
-        return true;
-      }
-    }
-  }
-  else if (c==255) {  // end of block found
-    state=INIT;
-    return false;
-  }
-  else
-    error("missing segment or end of block");
-  return false;
-}
-
 // Read the comment from the segment header
 template <typename Reader, typename Writer>
 template<typename Writer2>
@@ -2863,35 +2378,16 @@ void Decompresser<Reader, Writer>::readComment(Writer2* comment) {
   if (get(dec.in)!=0) error("missing reserved byte");
 }
 
-// Skip comment from segment header
-template <typename Reader, typename Writer>
-void Decompresser<Reader, Writer>::readComment() {
-  assert(state==SEG1 || state==SEG1SKIP);
-  if (state==SEG1) state=SEG2;
-  if (state==SEG1SKIP) state=SEG2SKIP;
-  while (true) {
-    int c=get(dec.in);
-    if (c==-1) error("unexpected EOF");
-    if (c==0) break;
-  }
-  if (get(dec.in)!=0) error("missing reserved byte");
-}
-
-// Decompress n bytes, or all if n is 0. Return false if done
+// Decompress n bytes, or all if n < 0. Return false if done
 template <typename Reader, typename Writer>
 bool Decompresser<Reader, Writer>::decompress(int n) {
   assert(state==SEG2);
-  assert(n>=0);
 
-  // Initialize model if this is the first data in the block
-  if (firstSegment) {
-    dec.init();
-    pp.init(z);
-    firstSegment=false;
-  }
+  // Decompress and load PCOMP into postprocessor
+  while ((pp.getState()&3)!=1)
+    pp.write(dec.decompress());
 
-  // Decompress n bytes, or all if n <= 0
-  if (n<=0) n=-1;
+  // Decompress n bytes, or all if n < 0
   while (n) {
     int c=dec.decompress();
     pp.write(c);
