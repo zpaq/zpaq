@@ -1,51 +1,51 @@
-README for ZPIPE - Jan. 18, 2010.
+ZPIPE v2.00
 
-zpipe is a ZPAQ compatible data compressor and decompresser
-that reads from standard input and writes to standard output.
+zpipe compresses or decompresses from standard input to standard output.
 
-To compress:   zpipe c < input > output
-To decompress: zpipe d < input > output
+To compress fastest:  zpipe -1 < input > output
+To compress average:  zpipe -2 < input > output
+To compress smallest: zpipe -3 < input > output
+To decompress:        zpipe -d < input > output
 
-Version 1.00 Contents:
+The compressed format is compatible with the ZPAQ level 1 standard
+described in zpaq1.pdf at http://mattmahoney.net/dc/#zpaq
+The format is compatible with zp, zpaq, and unzpaq, and with applications
+that use libzpaq including demo1 and demo2.
 
-zpipe.exe - Executable program for Windows, Sept. 30, 2009.
+Compression levels 1 through 3 are equivalent to c1 through c3 in zp
+and with fast.cfg, mid.cfg, and max.cfg respectively in zpaq.
 
-zpipe.cpp - Source code for Windows/g++, Sept. 29, 2009.
+Compression produces a single block containing a single segment
+with no stored filename, comment, or checksum. When decompressed
+with an archiver like zp, zpaq, or unzpaq, the user must specify the
+output file name.
 
-zpipe-fix-build-on-linux.diff - Patch for Linux (by Hanno Böck)
-  Jan. 18, 2010.
+When decompressing, all of the output data is concatenated. Stored
+filenames and comments are ignored. Checksums are not verified.
 
-To compile in Windows (g++ 4.4.0)
+zpipe (zpipe.cpp and zpipe.exe) is (C) 2010 Dell Inc. It is licensed
+under GPLv3. See gpl.txt.
 
-  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s zpipe.cpp -o zpipe
+libzpaq is public domain. There are no restrictions on the use of this
+code. See zpaqlib.txt.
 
-To turn off assertion checking (faster), compile with -DNDEBUG
+zpipe and libzpaq are written by Matt Mahoney.
+For the latest versions of zpipe and libzpaq, see
+http://mattmahoney.net/dc/#zpaq
 
-For Linux, apply the patch or remove the two lines from main()
-at the end of the source code:
+Contents of zpipe200.zip:
 
-  setmode(0, O_BINARY);  // stdin in binary mode
-  setmode(1, O_BINARY);  // stdout in binary mode
+  readme.txt  - This file
+  zpipe.cpp   - Source code (GPL)
+  zpipe.exe   - Windows executable (GPL)
+  libzpaq.txt - libzpaq 0.02 documentation (public domain)
+  libzpaq.h   - libzpaq include file (public domain)
+  libzpaq.cpp - libzpaq source code (public domain)
+  demo1.cpp   - libzpaq usage example (public domain)
+  demo2.cpp   - libzpaq usage example (public domain)
+  gpl.txt     - GPLv3 license
 
-This code is non-standard but necessary in Windows because by default
-standard input and output are open in text mode. Not all Windows
-compilers will accept it. The code is not needed in UNIX or Linux.
+zpipe.exe was compiled with g++ 4.5.0 and compressed with upx 3.06w:
 
-The ZPAQ standard is published at http://mattmahoney.net/dc/
-
-zpipe is compatible with all ZPAQ compressors and decompressers
-that follow the standard. In particular compression and decompression
-are equivalent to the zpaq 1.10 commands:
-
-  zpaq nicmid.cfg output input
-  zpaq x input output
-
-In other words, the compressed output is stored as a single segment
-in a single block with no filename or comment but with a SHA1 checksum.
-The compression model is mid.cfg. It requires 111 MB memory to compress
-or decompress.
-
-The code is Copyright 2009, Ocarina Networks and is licensed
-under the GNU General Public License (GPL) version 3.
-http://www.gnu.org/copyleft/gpl.html
-It is written by Matt Mahoney.
+  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG zpipe.cpp libzpaq.h -o zpipe
+  upx zpipe.exe
