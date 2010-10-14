@@ -1,6 +1,6 @@
-                       LIBZPAQ Distribution 1.00
+                       LIBZPAQ Distribution 0.03
                         Matt Mahoney, Dell Inc.
-                           Sept. 29, 2010
+                           Oct. 14, 2010
 
 ZPAQ is a proposed standard for highly compressed data. This package
 contains the specification, a library application programming interface
@@ -14,15 +14,15 @@ readme.txt            Sep 29 2010  This file                Free to copy
 zpaq.pdf       Rev 1  Sep 29 2009  Format specification     Free to copy
 unzpaq108.cpp  1.08   Oct 14 2009  Reference decoder        GPL
 
-libzpaq.txt    0.02   Sep 27 2010  API documentation        Public domain
-libzpaq.cpp    0.02   Sep 28 2010  API source code          Public domain
-libzpaq.h      0.02   Sep 28 2010  API header file          Public domain
+libzpaq.txt    0.03   Oct 14 2010  API documentation        Public domain
+libzpaq.cpp    0.03   Oct 14 2010  API source code          Public domain
+libzpaq.h      0.03   Oct 14 2010  API header file          Public domain
 
-zpipe.cpp      2.00   Sep 28 2010  File compressor source   GPL
-zpipe.exe      2.00   Sep 28 2010  Windows executable       GPL
+zpipe.cpp      2.01   Oct 14 2010  File compressor source   GPL
+zpipe.exe      2.01   Oct 14 2010  Windows executable       GPL
 
-zp.cpp         2.00   Sep 29 2010  Archiver source          GPL
-zp.exe         2.00   Sep 29 2010  Windows executable       GPL
+zp.cpp         2.01   Oct 14 2010  Archiver source          GPL
+zp.exe         2.01   Oct 14 2010  Windows executable       GPL
 
 fast.cfg              Apr 26 2010  ZPAQL source for         GPL
 mid.cfg               Oct 09 2009    compression levels     GPL
@@ -109,3 +109,12 @@ Windows executable. It also runs under Linux. zpaq.cpp and zpaq1.pdf
 tell how to interpret the ZPAQL code in these configuration files.
 You do not need these files to compile or run any of the applications
 in this package or to use libzpaq.
+
+History:
+
+Sep 27 2010: libzpaq 0.02, zp 2.00, zpipe 2.00
+
+Oct 14 2010: libzpaq 0.03, zp 2.01, zpipe 2.01. libzpaq interface changed.
+Reader and Writer were changed from template paramters to virtual
+base classes to speed up compilation. Corresponding changes made to
+zp and zpipe.
