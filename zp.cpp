@@ -1,5 +1,5 @@
-/*  zp v2.00 archiver and file compressor.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2010.
+/*  zp v2.01 archiver and file compressor.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 14, 2010.
 
 Copyright (C) 2010, Dell Inc.
 
@@ -178,72 +178,11 @@ The comment is the original file size as a decimal string (exact to
 
 */
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 using std::string;
-
-// Some types for writing decimal numbers or discarding output.
-class NumberWriter{};
-class Null{};
-
-// FILE type with a byte counter
-struct FileCounter {
-  FILE* f;
-  double count;  // number of bytes get or put to f
-  FileCounter(FILE* f_=0): f(f_), count(0) {}
-};
-
-// libzpaq requires error(), get(), put() definitions.
-namespace libzpaq {
-
-  // libzpaq will call error(msg) with an English language message
-  // in case of corrupt input or out of memory.
-  void error(const char* msg) {
-    fprintf(stderr, "zp error: %s\n", msg);
-    exit(1);
-  }
-
-  // get() may be overloaded for pointer to any type. It should read
-  // and return one byte (0..255) or -1 at end of input.
-  int get(FILE* in) {
-    return getc(in);
-  }
-
-  // Read and count a byte
-  int get(FileCounter* fc) {
-    int c=getc(fc->f);
-    if (c!=EOF) fc->count+=1;
-    return c;
-  }
-
-  // put() may be overloaded for pointer to any type. It should write
-  // the low 8 bits of c. This version writes to a file or stdout.
-  void put(int c, FILE* out) {
-    putc(c, out);
-  }
-
-  // Append c to a string
-  void put(int c, string* out) {
-    (*out)+=char(c);
-  }
-
-  // Write one byte c as a decimal number.
-  void put(int c, NumberWriter*) {
-    printf("%d,", c);
-  }
-
-  // Write one byte c to the bit bucket.
-  void put(int c, Null*) {}
-
-  // Write one byte and count it
-  void put(int c, FileCounter* fc) {
-    fc->count+=1;
-    putc(c, fc->f);
-  }
-}
-#include "libzpaq.h"
-
 #include <string.h>
 #include <errno.h>
 #include <time.h>
@@ -253,6 +192,56 @@ namespace libzpaq {
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+
+// libzpaq requires error() and concrete derivations of Reader and Writer
+namespace libzpaq {
+
+  // libzpaq will call error(msg) with an English language message
+  // in case of corrupt input or out of memory.
+  void error(const char* msg) {
+    fprintf(stderr, "zp error: %s\n", msg);
+    exit(1);
+  }
+}
+
+#include "libzpaq.h"
+
+// Some types for writing decimal numbers or discarding output.
+struct NumberWriter: public libzpaq::Writer {
+  void put(int c) {printf("%d,", c);}
+};
+
+struct Null: public libzpaq::Writer{
+  void put(int c) {}
+};
+
+// FILE type with a byte counter
+struct File: public libzpaq::Reader, public libzpaq::Writer {
+  FILE* f;
+  double count;  // number of bytes get or put to f
+  File(FILE* f_=0): f(f_), count(0) {}
+
+  // Read and count a byte
+  int get() {
+    int c=getc(f);
+    if (c!=EOF) count+=1;
+    return c;
+  }
+
+  // Write and count a byte
+  void put(int c) {
+    count+=1;
+    putc(c, f);
+  }
+};
+
+// Output to a string by appending to it
+struct String: public libzpaq::Writer {
+  string s;
+  String(const string& s_ = ""): s(s_) {}
+  void put(int c) {s+=char(c);}
+};
+
 
 /////////////////////////// Decompress ///////////////////////
 
@@ -289,8 +278,7 @@ static bool validate_filename(const char* filename) {
 }
 
 // Skip n blocks
-template <class Reader, class Writer>
-void skip_block(libzpaq::Decompresser<Reader, Writer>& d, int n) {
+void skip_block(libzpaq::Decompresser& d, int n) {
   for (; n>0 && d.findBlock(); --n) {
     while (d.findFilename()) {
       d.readComment();
@@ -361,9 +349,9 @@ static void decompress(int argc, char** argv) {
   assert(argc>=3);
 
   // Open archive
-  libzpaq::Decompresser<FILE, FILE> d;
-  FILE* in=open_archive(argv[2], "rb");
-  d.setInput(in);
+  libzpaq::Decompresser d;
+  File in(open_archive(argv[2], "rb"));
+  d.setInput(&in);
 
   // If user specifies N then skip N-1 blocks
   int block=atoi(argv[1]+1);
@@ -371,24 +359,24 @@ static void decompress(int argc, char** argv) {
     skip_block(d, block-1);
 
   // Read the archive
-  FILE* out=0;  // output file
+  File out(0);  // output file
   int filecount=0;  // number of files extracted
   libzpaq::SHA1 sha1;
   d.setSHA1(&sha1);
   while (d.findBlock()) {
-    for (string filename; d.findFilename(&filename); filename="") {
-      string comment;
+    for (String filename; d.findFilename(&filename); filename.s="") {
+      String comment;
       d.readComment(&comment);
-      printf("%s %s ", filename.c_str(), comment.c_str());
+      printf("%s %s ", filename.s.c_str(), comment.s.c_str());
 
       // open output file
       // if filename is empty, use the previously opened file
-      if (filename!="") {
+      if (filename.s!="") {
 
         // close last file
-        if (out) {
-          fclose(out);
-          out=0;
+        if (out.f) {
+          fclose(out.f);
+          out.f=0;
           ++filecount;
         }
 
@@ -399,8 +387,8 @@ static void decompress(int argc, char** argv) {
             goto end;
           }
           char* name=argv[filecount+3];
-          out=create(name);
-          if (!out) {
+          out.f=create(name);
+          if (!out.f) {
             perror(name);
             goto end;
           }
@@ -411,37 +399,37 @@ static void decompress(int argc, char** argv) {
         // Otherwise, use the names in the archive, but don't clobber
         // or use suspicious filenames
         else {
-          string newname=filename;
-          if (argv[1][0]=='e') newname=strip(filename);
-          if (newname!=filename)
-            printf("-> %s ", newname.c_str());
-          if (!validate_filename(newname.c_str())) {
+          String newname=filename;
+          if (argv[1][0]=='e') newname.s=strip(filename.s);
+          if (newname.s!=filename.s)
+            printf("-> %s ", newname.s.c_str());
+          if (!validate_filename(newname.s.c_str())) {
             printf("Error: bad filename\n");
             goto end;
           }
-          out=fopen(newname.c_str(), "rb");
-          if (out) {
-            fclose(out);
-            out=0;
+          out.f=fopen(newname.s.c_str(), "rb");
+          if (out.f) {
+            fclose(out.f);
+            out.f=0;
             printf("Error: won't overwrite\n");
             goto end;
           }
           else {
-            out=create(newname.c_str());
-            if (!out) {
-              perror(newname.c_str());
+            out.f=create(newname.s.c_str());
+            if (!out.f) {
+              perror(newname.s.c_str());
               goto end;
             }
           }
         }
       }
-      if (!out) {
+      if (!out.f) {
         printf("Output filename not specified\n");
         goto end;
       }
 
       // Decompress and report progress every 100 KB
-      d.setOutput(out);
+      d.setOutput(&out);
       printf("-> ");
       while (d.decompress(100000)) {
         for (int i=printf("%1.0f ", sha1.size()); i>0; --i)
@@ -464,8 +452,8 @@ static void decompress(int argc, char** argv) {
 
   // Close files
 end:
-  if (out) fclose(out), ++filecount;
-  fclose(in);
+  if (out.f) fclose(out.f), ++filecount;
+  fclose(in.f);
   printf("%d file(s) extracted\n", filecount);
 }
 
@@ -488,7 +476,7 @@ static bool is_file(const char* filename) {
 static void compress(int argc, char** argv) {
   assert(argc>=3);
 
-  libzpaq::Compressor<FileCounter, FileCounter> c;
+  libzpaq::Compressor c;
   libzpaq::SHA1 sha1;
 
   // Select compression level 1, 2, or 3
@@ -497,7 +485,7 @@ static void compress(int argc, char** argv) {
 
   // Compress files in argv[3...argc-1]
   int filecount=0;  // number of files compressed
-  FileCounter out(0);  // output file
+  File out(0);  // output file
   double start=0;  // output byte count at start of each file
   for (int i=3; i<argc; ++i) {
 
@@ -515,8 +503,7 @@ static void compress(int argc, char** argv) {
     }
 
     // Open input file
-    FileCounter in;
-    in.f=fopen(argv[i], "rb");
+    File in(fopen(argv[i], "rb"));
     if (!in.f) {
       perror(argv[i]);
       continue;
@@ -580,14 +567,16 @@ static void compress(int argc, char** argv) {
 // to decompress. For each segment, show the filename and comment.
 static void list(int argc, char** argv) {
   assert(argc>2 && argv[2]);
-  libzpaq::Decompresser<FILE, FILE> d;
+  libzpaq::Decompresser d;
   double memory;
-  d.setInput(open_archive(argv[2], "rb"));
+  File out(stdout);
+  File in(open_archive(argv[2], "rb"));
+  d.setInput(&in);
   for (int i=1; d.findBlock(&memory); ++i) {
     printf("======== Block %d requires %1.3f MB memory\n", i, memory/1e6);
-    while (d.findFilename(stdout)) {
+    while (d.findFilename(&out)) {
       printf(" ");
-      d.readComment(stdout);
+      d.readComment(&out);
       printf("\n");
       d.readSegmentEnd();
     }
@@ -609,17 +598,15 @@ static void verbose(int argc, char** argv) {
   // filename string, and optional comment string, some compressed data,
   // and an optional 20 byte SHA-1 checksum of the data before compression.
   double memory;
-  string filename, comment;
+  String filename, comment;
   char sha1string[21];
 
-  // Create object d to decompress ZPAQ archives. Input will be read
-  // from a FILE*. Decompressed output would go to a Null* which just
-  // discards any output. Normally that would also be a FILE.
-  libzpaq::Decompresser<FILE, Null> d;
+  // Create object d to decompress ZPAQ archives.
+  libzpaq::Decompresser d;
 
   // Set the input to the archive
-  FILE* in=open_archive(argv[2], "rb");
-  d.setInput(in);
+  File in(open_archive(argv[2], "rb"));
+  d.setInput(&in);
 
   // Search for the next block and return false when done.
   // If true, calculate memory required for decompression.
@@ -629,7 +616,7 @@ static void verbose(int argc, char** argv) {
 
     // Find the next segment in the block. If found, read the file
     // name from the segment header and write it to filename.
-    // The argument can be any pointer type T* that defines put(int, T*).
+    // The argument can be any type derived from libzpaq::Writer.
     // If there are no more segments in the block, return false.
     while (d.findFilename(&filename)) {
 
@@ -639,15 +626,16 @@ static void verbose(int argc, char** argv) {
 
       // If this is the first segment in the block, then print the
       // hcomp string. This string contains ZPAQL code which describes
-      // the decompression algorithm. The argument can be any type T*
-      // that defines put(int, T*). Here we just write the code as
+      // the decompression algorithm. The argument can be any type
+      // derived from Writer. Here we just write the code as
       // a list of bytes as decimal numbers. The format is suitable
       // for passing to Compressor::startBlock(hcomp). The first 2
       // bytes is the length of the rest of the string in little-endian
       // (LSB, MSB) format. The maximum possible size is 65537.
       if (firstSegment) {
         printf("hcomp=");
-        d.hcomp((NumberWriter*)0);
+        NumberWriter nw;
+        d.hcomp(&nw);
 
         // Decompress 0 bytes. We need to do this before getting the
         // pcomp string because it is compressed prior to the data in
@@ -665,8 +653,8 @@ static void verbose(int argc, char** argv) {
         // postprocessing algorithm in ZPAQL code. It is optional.
         // If omitted, then the decompressed data is output directly.
         // pcomp(w) returns true if a string is present and writes
-        // it to w, where w is any pointer of type T* where put(int, T*)
-        // is defined. If no pcomp string is present, then it returns
+        // it to w, where w is any type derived from Writer.
+        // If no pcomp string is present, then it returns
         // false without writing anything. If present, the output
         // format is suitable for passing to Compressor::postProcess(pcomp).
         // The first 2 bytes of the string is the length of the rest
@@ -674,7 +662,7 @@ static void verbose(int argc, char** argv) {
         // is 65537 bytes. Here we write the output as a list of
         // decimal numbers.
         printf("\npcomp=");
-        if (!d.pcomp((NumberWriter*)0))
+        if (!d.pcomp(&nw))
           printf("(empty)");
         printf("\n");
         firstSegment=false;
@@ -696,11 +684,11 @@ static void verbose(int argc, char** argv) {
 
       // Write the filename and comment. We have to clear the
       // strings afterward because we defined put() to append bytes.
-      printf(" %10s %s\n", comment.c_str(), filename.c_str());
-      filename=comment="";
+      printf(" %10s %s\n", comment.s.c_str(), filename.s.c_str());
+      filename.s=comment.s="";
     }
   }
-  fclose(in);
+  fclose(in.f);
   printf("\n");
 }
 
@@ -708,7 +696,7 @@ static void verbose(int argc, char** argv) {
 
 // Print help message and exit
 static void usage() {
-  printf("ZP v2.00 archiver, (C) 2010, Dell Inc.\n"
+  printf("ZP v2.01 archiver, (C) 2010, Dell Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "Licensed under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"

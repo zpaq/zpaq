@@ -1,7 +1,7 @@
-/*  zpipe streaming file compressor v2.00
+/*  zpipe streaming file compressor v2.01
 
 (C) 2010, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 28, 2010.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 14, 2010.
 
     LICENSE
 
@@ -26,7 +26,7 @@ Options are:
 
 Compressed output is in ZPAQ format as one segment within one
 block. The segment has no filename, commment, or checksum. It is readable
-by other ZPAQ compatible decompressors. It is equivalent to:
+by other ZPAQ compatible decompressors. -2 is equivalent to:
 
   zpaq nicmid.cfg output input
 
@@ -48,10 +48,8 @@ To turn off assertion checking (faster), compile with -DNDEBUG
 #include <fcntl.h> // for setmode(), requires g++
 #endif
 
-// libzpaq requires get(), put() and error()
+// libzpaq requires error() and concrete derivations of Reader and Writer
 namespace libzpaq {
-  inline int get(FILE* in) {return getc(in);}
-  inline void put(int c, FILE* out) {putc(c, out);}
   void error(const char* msg) {
     fprintf(stderr, "zpipe error: %s\n", msg);
     exit(1);
@@ -59,10 +57,17 @@ namespace libzpaq {
 }
 #include "libzpaq.h"
 
+struct File: public libzpaq::Reader, public libzpaq::Writer {
+  FILE* f;
+  File(FILE* f_): f(f_) {}
+  int get() {return getc(f);}
+  void put(int c) {putc(c, f);}
+};
+
 // Print help message and exit
 void usage() {
   fprintf(stderr, 
-    "zpipe 2.00 file compressor\n"
+    "zpipe 2.01 file compressor %s\n"
     "(C) 2010, Dell Inc.\n"
     "Licensed under GPL v3. See http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -71,7 +76,7 @@ void usage() {
     "  -1   compress fastest\n"
     "  -2   compress average\n"
     "  -3   compress smallest\n"
-    "  -d   decompress\n");
+    "  -d   decompress\n", __DATE__);
   exit(1);
 }
 
@@ -82,6 +87,8 @@ int main(int argc, char** argv) {
   setmode(0, O_BINARY);  // stdin in binary mode
   setmode(1, O_BINARY);  // stdout in binary mode
 #endif
+  File in(stdin);
+  File out(stdout);
 
   // Read command line
   char option=0;
@@ -92,9 +99,9 @@ int main(int argc, char** argv) {
 
   // Compress
   if (option=='d')
-    libzpaq::decompress(stdin, stdout);
+    libzpaq::decompress(&in, &out);
   else if (option>='1' && option<='3')
-    libzpaq::compress(stdin, stdout, option-'0');
+    libzpaq::compress(&in, &out, option-'0');
   else
     usage();
   return 0;
