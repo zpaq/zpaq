@@ -1,28 +1,34 @@
-                       LIBZPAQ Distribution 0.03
+                       LIBZPAQ Distribution 1.02
                         Matt Mahoney, Dell Inc.
-                           Oct. 14, 2010
+                             Oct. 20, 2010
 
 ZPAQ is a proposed standard for highly compressed data. This package
 contains the specification, a library application programming interface
-for reading and writing ZPAQ formatted compressed data, and two applications
-that use the library: a file compressor, zpipe, and an archiver, zp.
+for reading and writing ZPAQ formatted compressed data, and 3 applications
+that use the library: a file compressor (zpipe), an archiver (zp) and
+a self extracting stub (zpsfx).
 Contents:
 
    File         Ver.  Date                Description         License
 ------------   -----  -----------  -----------------------  ------------
-readme.txt            Sep 29 2010  This file                Free to copy
+readme.txt            Oct 20 2010  This file                Free to copy
 zpaq.pdf       Rev 1  Sep 29 2009  Format specification     Free to copy
 unzpaq108.cpp  1.08   Oct 14 2009  Reference decoder        GPL
 
-libzpaq.txt    0.03   Oct 14 2010  API documentation        Public domain
-libzpaq.cpp    0.03   Oct 14 2010  API source code          Public domain
-libzpaq.h      0.03   Oct 14 2010  API header file          Public domain
+libzpaq.txt    0.04   Oct 20 2010  API documentation        Public domain
+libzpaq.cpp    0.04   Oct 20 2010  API source code          Public domain
+libzpaqo.cpp   0.04   Oct 20 2010  API source code          Publid domain
+libzpaq.h      0.04   Oct 20 2010  API header file          Public domain
 
 zpipe.cpp      2.01   Oct 14 2010  File compressor source   GPL
-zpipe.exe      2.01   Oct 14 2010  Windows executable       GPL
+zpipe.exe      2.01   Oct 20 2010  Windows executable       GPL
 
 zp.cpp         2.01   Oct 14 2010  Archiver source          GPL
-zp.exe         2.01   Oct 14 2010  Windows executable       GPL
+zp.exe         2.01   Oct 20 2010  Windows executable       GPL
+
+zpsfx.cpp      1.00   Oct 20 2010  Self extracting stub     Public domain
+zpsfx.exe      1.00   Oct 20 2010  Self extracting stub     Public domain
+zpsfx.tag             Oct 20 2010  Tag for zpsfx            Public domain
 
 fast.cfg              Apr 26 2010  ZPAQL source for         GPL
 mid.cfg               Oct 09 2009    compression levels     GPL
@@ -49,8 +55,9 @@ The implementation of the compressor is up to the user.
 Libzpaq is an API in C++ that allows applications to compress or
 decompress ZPAQ formatted data to or from files or objects in memory.
 It consists of a header file (libzpaq.h) that should be #included in
-the application, and source code (libzpaq.cpp) that should be linked
-to it.
+the application, and 2 source code files (libzpaq.cpp and libzpaqo.cpp)
+that should be linked to it. libzpaqo.cpp is source code for optimizing
+the 3 default models (fast, mid, max).
 
 zpipe compresses or decompresses from standard input to standard
 output. It supports 3 compression levels: 1=fast, 2=mid, 3=max
@@ -70,22 +77,29 @@ For example:
   zp x archive out1 out2      (extract first 2 files and rename)
   zp e archive                (extract all files to current directory)
 
-Running either program with no arguments prints a brief help message.
-More detailed usage instructions are documented in zpipe.cpp and zp.cpp.
+zpsfx is used to create self extracting archives:
+
+  copy/b zpsfx.exe+zpsfx.tag+archive.zpaq archive.exe
+
+Then running archive.exe with no arguments will extract the compressed files.
+
+Running zp or zpipe with no arguments prints a brief help message.
+More detailed usage instructions are documented in the source code.
 
 All of these programs can read each other's output. When zpipe
 decompresses an archive, all of the output is concatenated together.
 When zp or unzpaq decompresses a file compressed with zpipe, the user must
-specify the output file name.
+specify the output file name. zpsfx requires stored filenames, so appending
+to zpsfx with zpipe will not work. zpsfx is public domain to allow distributing
+self extracting archives without source code, which GPL might not allow.
 
 The executables were compiled with g++ 4.5.0 and compressed with upx 3.06w
 as follows:
 
-  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG zpipe.cpp libzpaq.cpp -o zpipe
-  upx zpipe.exe
+  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG %1.cpp libzpaq.cpp libzpaqo.cpp -o %1
+  upx -9 %1.exe
 
-  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG zp.cpp libzpaq.cpp -o zp
-  upx zp.exe
+where %1 is zpipe, zp, or zpsfx.
 
 Libzpaq and the applications that use it (zpipe and zp, but not unzpaq)
 support arbitrary compression algorithms, but are optimized for 3 levels
@@ -118,3 +132,6 @@ Oct 14 2010: libzpaq 0.03, zp 2.01, zpipe 2.01. libzpaq interface changed.
 Reader and Writer were changed from template paramters to virtual
 base classes to speed up compilation. Corresponding changes made to
 zp and zpipe.
+
+Oct 20 2010: libzpaqo.cpp separates the optimized code from libzpaq.cpp.
+Added zpsfx 1.00.

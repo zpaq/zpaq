@@ -1,6 +1,6 @@
 /* libzpaq.h 
-LIBZPAQ Version 0.03
-Written by Matt Mahoney, Oct. 14, 2010
+LIBZPAQ Version 0.04
+Written by Matt Mahoney, Oct. 20, 2010
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
@@ -36,11 +36,13 @@ extern void error(const char* msg);
 class Reader {
 public:
   virtual int get() = 0;  // should return 0..255, or -1 at EOF
+  virtual ~Reader() {}
 };
 
 class Writer {
 public:
   virtual void put(int c) = 0;  // should output low 8 bits of c
+  virtual ~Writer() {}
 };
 
 // Read 16 bit little-endian number
@@ -228,9 +230,7 @@ private:
 
   // Modeling support functions
   int predict0();       // default
-  int predict1();       // optimized
   void update0(int y);  // default
-  void update1(int y);  // optimized
   int dt[1024];         // division table for cm: dt[i] = 2^16/(i+1.5)
   U16 squasht[4096];    // squash() lookup table
   short stretcht[32768];// stretch() lookup table
