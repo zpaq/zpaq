@@ -1,7 +1,7 @@
 /* libzpaq.cpp
 
-Part of LIBZPAQ Version 0.04
-Written by Matt Mahoney, Oct. 20, 2010
+Part of LIBZPAQ Version 2.00
+Written by Matt Mahoney, Oct. 30, 2010
 
 The LIBZPAQ software is placed in the public domain. It may be used
 without restriction. LIBZPAQ is provided "as is" with no warranty.
@@ -296,7 +296,6 @@ int ZPAQL::read(Reader* in2) {
   assert(hend>hbegin && hend<header.size());
   assert(hsize==header[0]+256*header[1]);
   assert(hsize==cend-2+hend-hbegin);
-  selectModel();  // set select if an optimization is available
   return cend+hend-hbegin;
 }
 
@@ -369,6 +368,7 @@ void ZPAQL::init(int hbits, int mbits) {
   m.resize(1, mbits);
   r.resize(256);
   a=b=c=d=pc=f=0;
+  selectModel();
 }
 
 // Run program on input by interpreting header
@@ -617,11 +617,13 @@ void ZPAQL::err() {
 // Search header for an optimization and set select>0 if found.
 void ZPAQL::selectModel() {
   int p=0, len, count=0;
+  select=0;
   while (true) {
     ++count;
     len=toU16(models+p);
     if (len<1) break;
-    if (cend+hend-hbegin==len+2 && memcmp(&header[0], models+p, cend)==0
+    if (cend+hend-hbegin==len+2 &&
+        (cend<=6 || memcmp(&header[6], models+p+6, cend-6)==0)
         && memcmp(&header[hbegin], models+p+cend, hend-hbegin)==0)
       select=count;
     p+=len+2;
@@ -1029,10 +1031,10 @@ int Decoder::skip() {
 ////////////////////// PostProcessor //////////////////////
 
 // Copy ph, pm from block header
-void PostProcessor::init(ZPAQL& hz) {
+void PostProcessor::init(int h, int m) {
   state=hsize=0;
-  ph=hz.header[4];
-  pm=hz.header[5];
+  ph=h;
+  pm=m;
   z.clear();
 }
 
@@ -1151,10 +1153,12 @@ void Compressor::writeTag() {
 }
 
 void Compressor::startBlock(int level) {
-  if (level<1 || level>3) error("compression level must be 1, 2, or 3");
+  if (level<1) error("compression level must be at least 1");
   const char* p=models;
-  for (; level>1 && toU16(p); --level)
+  int i;
+  for (i=1; i<level && toU16(p); ++i)
     p+=toU16(p)+2;
+  if (toU16(p)<1) error("compression level too high");
   startBlock(p);
 }
 
@@ -1206,7 +1210,7 @@ void Compressor::postProcess(const char* pcomp) {
     enc.compress(1);
     int len=toU16(pcomp)+2;
     for (int i=0; i<len; ++i)
-      enc.compress(pcomp[i]);
+      enc.compress(pcomp[i]&255);
   }
   else
     enc.compress(0);
@@ -1275,7 +1279,8 @@ bool Decompresser::findBlock(double* memptr) {
   if (dec.in->get()!=1) error("unsupported ZPAQL type");
   z.read(dec.in);
   dec.init();
-  pp.init(z);
+  assert(z.header.size()>5);
+  pp.init(z.header[4], z.header[5]);
   if (memptr) *memptr=z.memory();
   state=BLOCK;
   return true;

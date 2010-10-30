@@ -1,9 +1,9 @@
 /* libzpaqo.cpp
 
-Part of LIBZPAQ Version 0.04
+Part of LIBZPAQ Version 2.00
 See accompanying libzpaq.txt for documentation.
 
-Written by Matt Mahoney, Oct. 20, 2010
+Written by Matt Mahoney, Oct. 30, 2010
 
 The LIBZPAQ software is placed in the public domain. It may be used
 without restriction. LIBZPAQ is provided "as is" with no warranty.
