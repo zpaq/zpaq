@@ -86,7 +86,7 @@ void SHA1::process() {
   U32 d=h[3];
   U32 e=h[4];
   for (int i=0; i<20; ++i) {
-    const U32 f=b&c|~b&d, k=0x5A827999;
+    const U32 f=(b&c)|(~b&d), k=0x5A827999;
     const U32 t=(a<<5|a>>27)+f+e+k+w[i];
     e=d;
     d=c;
@@ -104,7 +104,7 @@ void SHA1::process() {
     a=t;
   }
   for (int i=40; i<60; ++i) {
-    const U32 f=b&c|b&d|c&d, k=0x8F1BBCDC;
+    const U32 f=(b&c)|(b&d)|(c&d), k=0x8F1BBCDC;
     const U32 t=(a<<5|a>>27)+f+e+k+w[i];
     e=d;
     d=c;
@@ -248,8 +248,8 @@ bool ZPAQL::write(Writer* out2) {
       out2->put(header[i]);
   }
   else {  // write PCOMP size only
-    out2->put(hend-hbegin&255);
-    out2->put(hend-hbegin>>8);
+    out2->put((hend-hbegin)&255);
+    out2->put((hend-hbegin)>>8);
   }
   for (int i=hbegin; i<hend; ++i)
     out2->put(header[i]);

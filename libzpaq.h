@@ -1,6 +1,6 @@
 /* libzpaq.h 
-LIBZPAQ Version 2.00
-Written by Matt Mahoney, Oct. 30, 2010
+LIBZPAQ Version 2.02
+Written by Matt Mahoney, Nov. 13, 2010
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
@@ -49,7 +49,7 @@ public:
 int toU16(const char* p);
 
 // A list of headers for which optimizations are available
-extern const char models[];
+extern const char  models[];
 
 // An Array of T is cleared and aligned on a 64 byte address
 //   with no constructors called. No copy or assignment.
@@ -105,7 +105,7 @@ class SHA1 {
 public:
   void put(int c) {  // hash 1 byte
     U32& r=w[len0>>5&15];
-    r=r<<8|c&255;
+    r=(r<<8)|(c&255);
     if (!(len0+=8)) ++len1;
     if ((len0&511)==0) process();
   }
@@ -220,6 +220,7 @@ public:
   void init();          // build model
   int predict();        // probability that next bit is a 1 (0..4095)
   void update(int y);   // train on bit y (0..1)
+  int stat(int);        // Defined externally
 private:
 
   // Predictor state
@@ -286,6 +287,7 @@ public:
   int decompress();  // return a byte or EOF
   int skip();  // skip to the end of the segment, return next byte
   void init() {pr.init(); low=1; high=0xFFFFFFFF; curr=0;}
+  int stat(int x) {return pr.stat(x);}
 private:
   U32 low, high; // range
   U32 curr;  // last 4 bytes of archive
@@ -319,6 +321,7 @@ public:
     out(0), low(1), high(0xFFFFFFFF), pr(z) {}
   void init();
   void compress(int c);  // c is 0..255 or EOF
+  int stat(int x) {return pr.stat(x);}
   Writer* out;  // destination
 private:
   U32 low, high; // range
@@ -342,6 +345,7 @@ public:
   void endSegment(const char* sha1string = 0);
   void endBlock();
   int getModel() const {return z.select;}
+  int stat(int x) {return enc.stat(x);}
 private:
   ZPAQL z;
   Encoder enc;
@@ -367,6 +371,7 @@ public:
   void readSegmentEnd(char* sha1string = 0);
   int getModel() const {return z.select;}
   int getPostModel() const {return pp.getModel();}
+  int stat(int x) {return dec.stat(x);}
 private:
   ZPAQL z;
   Decoder dec;

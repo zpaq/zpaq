@@ -1,7 +1,7 @@
-/*  zpaq v2.01 archiver and file compressor.
+/*  zpaq v2.02 archiver and file compressor.
 
 (C) 2009, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Nov. 5, 2010
+    Written by Matt Mahoney, matmahoney@yahoo.com, Nov. 13, 2010
 
     LICENSE
 
@@ -1412,8 +1412,8 @@ int compile_cmd(const char* cmd, String& hcomp,
 void fix_pcomp(const String& hcomp, String& pcomp) {
   if (hcomp.len()>=8 && pcomp.len()>=2) {
     pcomp=hcomp.sub(0, 8)+pcomp.sub(2);
-    pcomp[0]=pcomp.len()-2&255;  // new length of PCOMP
-    pcomp[1]=pcomp.len()-2>>8;
+    pcomp[0]=(pcomp.len()-2)&255;  // new length of PCOMP
+    pcomp[1]=(pcomp.len()-2)>>8;
     pcomp[6]=pcomp[7]=0;  // n=0 components
   }
 }
@@ -1503,6 +1503,7 @@ String root(int argc, char** argv) {
     path+=i+(path[i]!=0);
   }
   error("ZPAQ install directory not found");
+  return "";
 }
 
 #ifndef OPT
@@ -2164,7 +2165,7 @@ void dump(FILE* out, const String& models, int p, int n) {
   "\n"
   "  // Model %d\n  ", n);
   for (int i=0; i<len; ++i) {
-    fprintf(out, "%d,", models(p+i));
+    fprintf(out, "%d,", char(models(p+i)));
     if (i%16==15) fprintf(out, "\n  ");
   }
   fprintf(out, "\n");
@@ -2314,7 +2315,7 @@ void optimize(const String& models, int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  fprintf(stderr, "ZPAQ v2.01 archiver, (C) 2010, Dell Inc.\n"
+  fprintf(stderr, "ZPAQ v2.02 archiver, (C) 2010, Dell Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -2764,11 +2765,80 @@ static void compress(int argc, char** argv) {
     c.endBlock();
     fprintf(stderr, "%d file(s) compressed to %s -> %1.0f\n",
       filecount, argv[2], out.count);
+    c.stat(0);
     fclose(out.f);
   }
   else
     fprintf(stderr, "Archive %s not updated\n", argv[2]);
 }
+
+// Print component statistics
+int libzpaq::Predictor::stat(int) {
+  printf("\nMemory utilization:\n");
+  int cp=7;
+  for (int i=0; i<z.header[6]; ++i) {
+    assert(cp<z.header.size());
+    int type=z.header[cp];
+    assert(compsize[type]>0);
+    printf("%2d %s", i, compname[type]);
+    for (int j=1; j<compsize[type]; ++j)
+      printf(" %d", z.header[cp+j]);
+    Component& cr=comp[i];
+    if (type==MATCH) {
+      assert(cr.cm.size()>0);
+      assert(cr.ht.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (cr.cm[j]) ++count;
+      printf(": buffer=%d/%d index=%d/%d (%1.2f%%)", cr.limit/8, cr.ht.size(),
+        count, cr.cm.size(), count*100.0/cr.cm.size());
+    }
+    else if (type==SSE) {
+      assert(cr.cm.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j) {
+        if (int(cr.cm[j])!=(squash((j&31)*64-992)<<17|z.header[cp+3]))
+          ++count;
+      }
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==CM) {
+      assert(cr.cm.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (cr.cm[j]!=0x80000000) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==MIX) {
+      int count=0;
+      int m=z.header[cp+3];
+      assert(m>0);
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (int(cr.cm[j])!=65536/m) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==MIX2) {
+      int count=0;
+      for (int j=0; j<cr.a16.size(); ++j)
+        if (int(cr.a16[j])!=32768) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.a16.size(),
+        count*100.0/cr.a16.size());
+    }
+    else if (cr.ht.size()>0) {
+      int hcount=0;
+      for (int j=0; j<cr.ht.size(); ++j)
+        if (cr.ht[j]>0) ++hcount;
+      printf(": %d/%d (%1.2f%%)",
+          hcount, cr.ht.size(), hcount*100.0/cr.ht.size());
+    }
+    cp+=compsize[type];
+    printf("\n");
+  }
+  return 0;
+}     
 
 ////////////////////////// list //////////////////////////
 
