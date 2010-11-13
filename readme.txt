@@ -1,6 +1,6 @@
-                       LIBZPAQ Distribution 2.01
+                       LIBZPAQ Distribution 2.02
                         Matt Mahoney, Dell Inc.
-                             Nov. 5, 2010
+                             Nov. 13, 2010
 
 ZPAQ is a proposed standard for highly compressed data. This package
 contains the specification, a library application programming interface
@@ -10,25 +10,25 @@ Contents:
 
    File         Ver.  Date                Description         License
 ------------   -----  -----------  -----------------------  ------------
-readme.txt            Nov 05 2010  This file                Free to copy
+readme.txt            Nov 13 2010  This file                Free to copy
 zpaq.pdf       Rev 1  Sep 29 2009  Format specification     Free to copy
 unzpaq.cpp     1.08   Oct 14 2009  Reference decoder        GPL
 
 libzpaq.txt    2.00   Oct 30 2010  API documentation        Public domain
-libzpaq.cpp    2.00   Oct 30 2010  API source code          Public domain
-libzpaqo.cpp   2.00   Oct 30 2010  API source code          Public domain
-libzpaq.h      2.00   Oct 30 2010  API header file          Public domain
+libzpaq.cpp    2.02   Nov 13 2010  API source code          Public domain
+libzpaqo.cpp   2.02   Nov 13 2010  API source code          Public domain
+libzpaq.h      2.02   Nov 13 2010  API header file          Public domain
 
 zpipe.cpp      2.01   Oct 14 2010  File compressor source   GPL
-zpipe.exe      2.01   Nov 05 2010  Windows executable       GPL
+zpipe.exe      2.01   Nov 13 2010  Windows executable       GPL
 
-zpaq.cpp       2.01   Nov 05 2010  Archiver source code     GPL
-zpaq.exe       2.01   Nov 05 2010  Windows executable       GPL
+zpaq.cpp       2.02   Nov 13 2010  Archiver source code     GPL
+zpaq.exe       2.02   Nov 13 2010  Windows executable       GPL
 makezpaq.bat          Nov 05 2010  Script for "zpaq o"      Public domain
 makezpsfx.bat         Nov 05 2010  Script for "zpaq e"      Public domain
 
 zpsfx.cpp      1.00   Oct 20 2010  Self extracting stub     Public domain
-zpsfx.exe      1.00   Nov 05 2010  Self extracting stub     Public domain
+zpsfx.exe      1.00   Nov 13 2010  Self extracting stub     Public domain
 zpsfx.tag             Oct 20 2010  Tag for zpsfx            Public domain
 
 fast.cfg              Apr 26 2010  zpaq source for          GPL
@@ -36,7 +36,7 @@ mid.cfg               Oct 09 2009    compression levels     GPL
 max.cfg               Oct 09 2009    1, 2, and 3            GPL
 min.cfg               Oct 09 2009  fast LZP model           GPL
 lzppre.cpp            Sep 28 2009  preprocessor for min.cfg GPL
-lzppre.exe            Nov 05 2010  Windows executable       GPL
+lzppre.exe            Nov 13 2010  Windows executable       GPL
 
 compile.bat           Nov 05 2010  Script to compile all    Public domain
 
@@ -209,3 +209,6 @@ Oct 30 2010: replaced zp with zpaq 2.00. The library implementation
 Nov 05 2010: zpaq 2.01. Supports self extracting archives. Simplified
 installation (everything goes in C:\zpaq).
 
+Nov 13 2010: libzpaq 2.02, zpaq 2.02. zpaq displays memory usage
+statistics (like zpaq 1.10 but removed in 2.00). libzpaq support
+added. Fixed some compiler warnings.
