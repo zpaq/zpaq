@@ -1,7 +1,7 @@
-/*  zpaq v2.02 archiver and file compressor.
+/*  zpaq v2.03 archiver and file compressor.
 
-(C) 2009, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Nov. 13, 2010
+(C) 2009-2010, Dell Inc.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Dec. 23, 2010
 
     LICENSE
 
@@ -18,867 +18,83 @@
 
 This program compresses files into archives and decompresses them.
 The archive format is compatible with other ZPAQ level 1 compliant
-programs. See http://mattmahoney.net/dc/ for the latest version of this
-program. zpaq is also a development environment for creating and
-debugging new compression algorithms using configuration (.cfg) files
-and external preprocessors.
+programs. It has 3 built in compression levels and allows user
+configuration files and preprocessors to specify arbitrary compression
+algorithms. See http://mattmahoney.net/dc/zpaq.html for the latest version
+of this program and full documentation. See usage() below for brief summary
+of commands.
 
+To compile, you need libzpaq from the above link:
 
-Installation (Windows)
-----------------------
+  g++ -O3 -DNDEBUG -DOPT="..." zpaq.cpp libzpaq.cpp libzpaqo.cpp -o zpaq
 
-Create a folder c:\zpaq and put all files here.
+-DNDEBUG turns off run time checks for better speed.
 
-zpaq is a command line program. To run it, use the command
+-DOPT should be omitted if no C++ compiler is available on the
+machine where zpaq will be run. Otherwise, -DOPT enables the "o" modifier
+which speeds up compression or decompression (typically twice as fast)
+when using compression levels other than the 3 defaults (1, 2, 3, or
+fast, mid, max).
 
-  c:\zpaq\zpaq
+When "o" is used with any compression or decompression command,
+zpaq will create zpaqopt.cpp in the current directory, compile it to
+zpaqopt.exe, and run it with the same arguments. zpaqopt.exe works like zpaq
+except that it runs faster for the given config file (compression) or
+archive (decompression). It works by replacing libzpaqo.cpp with zpaqopt.cpp.
+OPT is the compile command that generates zpaqopt.exe in the current directory.
+For example:
 
-or put c:\zpaq in your PATH and simply use the command "zpaq".
+  -DOPT="\"g++ -O3 -DNDEBUG zpaq.cpp libzpaq.cpp zpaqopt.cpp -o zpaqopt.exe\""
 
-zpaq has 3 built in compression levels (1=fast, 2=mid, 3=max)
-and the ability to use custom compression algorithms described
-in configuration (.cfg) files and external preprocessors, which
-should be in the same folder as zpaq.exe.
+although this would only work if all of the source code (including libzpaq.h)
+were in the current directory. Usually these files will be in some fixed
+location that the OPT command must specify. Alternatively, OPT could be
+set to a script that contains the commands. zpaq will then execute the script.
+For example:
 
-If you want to use custom algorithms, then you can speed up compression
-and decompression (typically twice as fast) with a C++ compiler,
-preferably MinGW g++. To install run "compile.bat" to create
-the necessary object files.
+  -DOPT="makezpaq"      (Windows)
+  -DOPT=\"makezpaq\"    (Linux)
 
-If you want to use a different install folder than c:\zpaq
-or different compiler than g++ then edit compile.bat and makezpaq.bat
-and make appropriate changes. You can also change compiler options
-as appropriate for your computer.
+libzpaq.cpp and zpaq.cpp might be compiled in advance to .o files which
+will speed up the build of zpaqopt.exe. Build them like this:
 
+  g++ -O3 -DNDEBUG -c zpaq.cpp libzpaq.cpp
 
-Command summary
----------------
+(Note that -DOPT is not used here. Thus, do not build zpaq or zpaq.exe
+from this zpaq.o).
 
-To compress: zpaq [nsitokv][ca][N][F[,N...]] archive [folder/] files...
-  n = don't store filenames (extraction will concatenate)
-  s = don't store SHA1 checksums (saves 20 bytes)
-  i = don't store file sizes as comments (saves a few bytes)
-  t = append locator tag to non-ZPAQ data such as zpsfx.exe
-  c = create new archive.zpaq with 1 block
-  a = or append 1 block to existing archive or archive.zpaq
-  N = compression level 1=fast, 2=mid, 3=max
-  F = or use configuration file F.cfg
-  ,N = pass numeric arguments to F.cfg
-  folder/ = store path for extraction (default = filename only)
-To list contents: zpaq [v]l archive
-To extract: zpaq [ok]x[N] archive [folder/] [files...]
-  N = extract only block N (1, 2, 3...)
-  folder/ = extract to folder (default = stored paths)
-  files... = rename extracted files (clobbers)
-      otherwise use stored names (does not clobber)
-To make self extracting archive.exe: zpaq [ok]e archive
-To debug configuration file F.cfg: zpaq [ptokv]rF[,N...] [args...]
-  p = run PCOMP (default is to run HCOMP)
-  t = trace (single step), args are numeric inputs
-      otherwise args are input, output (default stdin, stdout)
-  ,N = pass numeric arguments to F
-For all commands:
-  o = compress or decompress faster (requires C++ compiler)
-  k = with o, keep zpaqopt.cpp, zpaqopt.exe
-  v = verbose (echo F.cfg)
+In Windows, you might have an installation directory like c:\zpaq
+with the following files:
 
-Prefixes, commands, and suffixes should be written without spaces,
-for example:
+  zpaq.o
+  libzpaq.o
+  libzpaq.h
 
-  zpaq otsamax,2,1 books.zpaq calgary/ \data\calgary\book1
+and OPT or makezpaq.bat might be as follows:
 
-appends (a) to archive books.zpaq with prefixes o (compress faster),
-t (append locator tag), and s (don't store checksum). The suffix
-max,2,1 says to compress with the model described in max.cfg with
-arguments 2 and 1 passed to that model. The file \data\calgary\book1
-is stored with a filename of calgary/book1.
+  g++ -O3 c:\zpaq\zpaq.o c:\zpaq\libzpaq.o -Ic:\zpaq zpaqopt.cpp -o zpaqopt
 
-  zpaq x books /tmp/
+In Linux, the files might be installed:
 
-will extract the contents of books.zpaq and create /tmp/book1
-(instead of calgary/book1).
+  /usr/lib/zpaq/zpaq.o
+  /usr/lib/zpaq/libzpaq.o
+  /usr/include/libzpaq.h
 
-The ZPAQ archive format is described in the level 1, revision
-1 version of the specification which can be found in this
-distribution and from http://mattmahoney.net/dc/
-Briefly, an archive consists of a sequence of blocks that can
-be extracted independently in any order. A block contains a header
-which describes the decompression algorithm, followed by a sequence
-of segments which must be decompressed in order from the beginning.
-Each segment has an optional filename, an optional checksum, compressed
-data, and an optional SHA-1 checksum.
+and OPT or an executable script called makezpaq might be as follows:
 
+  #!/bin/bash
+  g++ -O3 /usr/lib/zpaq/zpaq.o /usr/lib/zpaq/libzpaq.o zpaqopt.cpp \
+      -o zpaqopt.exe
 
-Compression
------------
+-DNDEBUG has no effect on zpaqopt.cpp so it is not needed.
 
-The "c" command creates a new archive. The archive must have a .zpaq
-extension. If the filename does not end with ".zpaq", it will be
-added automatically.
+You can customize compiler optimizations to your local machine.
+Some options to try are -s -march=native -fomit-frame-pointer.
 
-The "a" command appends to an existing archive. It does not have
-to have a .zpaq extension if the file already exists. If the named
-archive does not exist, the program will try adding a .zpaq extension.
-If that file still does not exist, it will be created.
+You could also use other compilers. For example, with Borland
+(Windows) you might use:
 
-For both "c" and "a", the files to be compressed will be placed
-in separate segments in a single block. The filename will be stored
-without a path unless you supply a "folder/" argument with a trailing
-slash or backslash after the archive name. In that case, each segment
-filename will be stored as "folder/file".
-
-The "n" prefix means don't store filenames. When an unnamed segment
-is extracted, it is appended to the previous segment. The effect is
-that all of the files will be concatenated. If the first segment in
-the archive is not named, then a filename must be given during extraction.
-This option is useful if you want to split a file into parts that
-use different compression algorithms in different blocks with one
-segment each. In this case, only the first part should be named.
-
-A ZPAQ archive can be mixed with non-ZPAQ data between blocks. This
-extra data will be ignored. However, any ZPAQ blocks following the
-non-ZPAQ data will only be found if preceded by a special 13 byte
-marker. The "t" prefix appends this marker at the start of the block.
-
-The "i" prefix prevents a comment from being stored, which saves
-a few bytes. Normally the prefix contains the original size of the
-file as a decimal string. A comment is displayed when the archive
-is listed or extracted but has no effect on the output file.
-
-The "s" prefix prevents the 20 byte SHA-1 checksum from being
-stored. The effect is that the extracted data cannot be verified
-as identical.
-
-The compression algorithm is specified by the suffix to the
-"c" or "a" command, either as a number (1, 2, or 3) or the name of a
-configuration file without the .cfg extension, such as "a2" or
-"cmax" for config file max.cfg. Some config files take numeric
-arguments, which should be preceded by commas without spaces,
-for example "cmid,-1" or "amax,2,3". The meaning of the arguments
-depends on the config file. If the suffix starts with a digit
-then it has the following meaning:
-
-  1 = fast (fastest and least memory but least compression)
-  2 = mid  (moderate speed, memory, and compression)
-  3 = max  (slowest and most memory but best compression)
-
-The config files fast.cfg, mid.cfg, and max.cfg are included but
-are also built into zpaq so they need not be present. If a config
-file is specified without a leading path, then it must either
-be in the current directory or in the ZPAQ install directory
-where zpaq.exe is stored (normally c:\zpaq).
-
-Some configuration files specify an external preprocessor and matching
-postprocessing code which is embedded in the block header. If so, then
-the preprocessor must be either in the current directory or in the
-ZPAQ install directory where zpaq.exe is located (usually c:\zpaq).
-The preprocessor is run to create a temporary file archive.zpaq.pre
-in the current directory and then run through the specified
-postprocessing code to verify that the original will be restored during
-decompression. If the output SHA-1 checksum does not match, then the file
-is skipped.
-
-The "o" prefix tells zpaq to compress faster when using a config
-file. zpaq will translate the ZPAQL code in the config file into
-zpaqopt.cpp in the current directory, call makezpaq.bat to compile it
-with an external C++ compiler to zpaqopt.exe in the current directory,
-then run it with the same arguments that were passed to zpaq. "o" has no
-effect on speed for built in models (1..3) because these models have
-already been compiled for better speed.
-
-The "k" prefix tells zpaq not to delete zpaqopt.cpp and zpaqopt.exe
-after using "o". These programs work just like zpaq except that "o"
-is ignored, and the model number (c1, a2, etc) selects an optimized
-model rather than the 3 standard models. Other models can be
-used but won't be as fast.
-
-The "v" (verbose) prefix displays the config file as it is
-read, which makes debugging easier. How to write config files
-is described later. It also prevents temporary file archive.zpaq.pre,
-from being deleted.
-
-
-List
-----
-
-The "l" command lists the contents of an archive. It first searches
-for the named archive, and if not found, tries appending a .zpaq
-extension if there is not already one. The listing displays
-each block (numbered starting at 1) and the amount of memory needed
-to extract it. Decompression requires about the same amount of memory
-and time as compression. For each segment, the filename, comment
-(uncompressed size) and compressed size is shown.
-
-The "v" prefix ("vl") displays in addition the compression algorithm
-in a format suitable for use as a config file. If the original
-config file specified an external preprocessing program, then that
-information will be missing because it is not needed for extraction.
-The SHA-1 checksum for each segment is also shown.
-
-
-Extraction
-----------
-
-The "x" command extracts from an archive. It first searches
-for the named archive, and if not found, tries appending a .zpaq
-extension if there is not already one.
-
-A numeric suffix N like "x1", "x2" means to extract only from
-block N. The first block is 1. By default, the entire archive
-is extracted.
-
-Files are extracted using the filenames stored for each segment.
-If a filename contains a path like "dir1/dir2/file" then zpaq
-will try to create the needed folders (dir1/ and dir1/dir2/) if they
-do not already exist.
-
-If the output file already exists, then zpaq will exit rather than
-clobber the file. If you specify one or more filenames on the
-command line, then each named segment will be extracted by
-creating the newly named file. In this case, existing files
-will be overwritten. If you specify more file names than there
-are named segments, the extra will be ignored. If you specify fewer,
-then the extra segments will not be extracted. Unnamed segments
-are always appended to the last named segment regardless of
-renaming, except that if the first segment is not named, then
-a filename argument is required to name it.
-
-If you specify a folder (with a trailing / or \ ) then all files
-will be extracted to the named folder regardless of any stored
-paths. To extract all files to the current folder, you can use "./"
-as in "zpaq x archive ./". zpaq treats / and \ equivalently and
-converts to the approprate form as needed (/ for Linux, \ for Windows).
-
-The "o" prefix makes decompression faster. It first scans all
-the block headers to extract the decompression algorithms, translates
-the embedded ZPAQL code into C++, compiles the program zpaqopt.exe
-in the current directory and runs it with the same command line
-arguments. This only helps if the archive was compressed
-with a config file different from fast, mid, or max with no arguments,
-because those 3 models are built in and automatically detected.
-
-The "k" prefix keeps zpaqopt.cpp and zpaqopt.exe.
-
-
-Self extracting archives
-------------------------
-
-The "e" command tells zpaq to convert archive.zpaq to archive.exe,
-which can be run to extract the files it contains. archive.zpaq
-is not deleted.
-
-To run archive.exe, enter the file name including the .exe extension.
-If it is in a different folder, you must include the path to
-it even if that folder is in the PATH environment variable.
-When run, it will extract its contents using the file names as stored.
-If the named files exist, they will be overwritten. Command line
-arguments to archive.exe are ignored.
-
-You can also use zpaq to list or extract from archive.exe like a
-regular archive. If you append to it with "a" then those files
-will also self-extract when run.
-
-The "e" command is equivalent to:
-
-  copy/b c:\zpaq\zpsfx.exe+c:\zpaq\zpsfx.tag+archive.zpaq archive.exe
-
-zpsfx.exe reads itself to find the start of the archive marked by
-the 13 byte tag in zpsfx.tag. This is the same tag appended by "ta".
-
-The "o" prefix builds an optimized archive containing code which
-decompresses faster. It generates zpaqopt.cpp (as with "ox") and
-uses makezpsfx.bat to link zpsfx.o to create zpaqopt.exe.
-Then the tag and archive are appended as before.
-
-The "k" prefix keeps zpaqopt.cpp and zpaqopt.exe.
-
-
-Debugging
----------
-
-The "r" command is used to debug config files for development.
-No archive is given. Instead, there are two optional command line
-arguments specifying the input and output files, which default to
-stdin and stdout. The program is run by calling the HCOMP section
-of the named config file (with optional arguments) once for each
-input byte with that input in the A register. Output is by the
-OUT instruction. The HCOMP code normally computes contexts.
-
-The "p" prefix says to execute the PCOMP section rather than HCOMP.
-The PCOMP code normally post processes. It is run once per input
-byte and once more with EOF (-1) as input.
-
-The "t" prefix says to trace exection. The command line arguments are
-numbers rather than files. The program is run once per argument
-with that value in the A register. After each instruction is
-executed, the register contents are displayed. After HALT is executed,
-the memory contents are displayed. The input arguments are either
-decimal numbers like "255" or hexadecimal like "xFF". Contents are
-displayed in the same base.
-
-The "o", "k", and "v" prefixes works like with compression.
-
-
-Configuration files
--------------------
-
-ZPAQ uses a configurable compression algorithm based on
-bitwise prediction and arithmetic coding, and optional
-pre- and post-processing. The algorithm is described
-precisely in http://mattmahoney.net/dc/zpaq1.pdf
-
-The compression and decompression algorithm is described
-in a configuration file. The decompression algorithm is
-stored in the ZPAQ archive. The configuration file is only
-needed during compression. It has 3 parts:
-
-COMP - a description of a sequence of bit predictors.
-Each component takes a context and earlier predictions
-as input, and outputs a prediction for the next bit.
-The last component's prediction is output to the arithmetic
-coder which codes the bit at a cost of log2(1/p), where p is
-the probability guessed for that bit. (Thus, better prediction
-leads to better compression). Bits are coded in MSB (most
-significant bit) to LSB (least significant bit) order.
-
-HCOMP - a program that is called once for each byte of
-uncompressed data with that byte as input, and outputs
-an array of 32-bit contexts, one for each component
-in the COMP section. The program is written in ZPAQL,
-a sandboxed assembler-like language designed for small size
-and fast interpretation (rather than for easy development).
-
-POST/PCOMP - an optional pair of programs to preprocess the
-input before compression and postprocess the output after
-decoding for decompression. POST indicates no pre- or
-postprocessing. The model described by COMP and HCOMP
-sees a 0 byte followed by a concatenation of the uncompressed files.
-During decompression, the leading 0 indicates no postprocessing.
-
-PCOMP describes an external program to preprocess the input
-files during compression, and a ZPAQL program to perform the
-reverse conversion to restore the original input. Unlike
-COMP and HCOMP, two programs are needed because the compression
-and decompression models are not the same. During compression,
-ZPAQ will run the input through both programs and compare the
-output with the input. If they don't match, then ZPAQ will
-exit without compressing the file. If they do match, then the
-input files are preprocessed and compressed, along with
-the postprocessing program that will be used later to
-invert the preprocessing transform. The compression model
-described in the COMP and HCOMP sections sees a 1 as the
-first byte to indicate that the decoded data should be
-postprocessed before output. This is followed by a 2 byte
-program length (LSB first), the ZPAQL postprocessor code, and a
-concatenation of the preprocessed input files. The PCOMP
-code sees just the preprocessed files as input, each ending
-with EOS (-1).
-
-The preprocessor is an external program. It is not needed for
-decompression so it is not saved in the archive. It expects to be
-called with an input filename and output filename as its last 2
-arguments.
-
-The postprocessor is a ZPAQL program that is called once for each
-input byte and once with input EOS (-1) at the end of each segment.
-The program is initialized at the beginning of a block but
-maintains state information between segments within the same
-block. Its input is from archive.zpaq.tmp in the current folder
-during compression testing and from the decoder during decompression.
-
-The configuration file has the following format:
-
-  COMP hh hm ph pm n
-    (n numbered component descriptions)
-  HCOMP
-    (program to generate contexts, memory size = hh, hm)
-  POST (for no pre/post procesing)
-    0
-  END
-
-Or (for custom pre/post processing):
-
-  COMP hh hm ph pm n
-    (...)
-  HCOMP
-    (...)
-  PCOMP preprocessor-command ;
-    (postprocessor program, memory size = ph, pm)
-  END
-
-Configuration files are free format (all white space is
-the same) and mostly not case sensitive. They may contain comments in
-((nested) parenthesis).
-
-For example, mid.cfg:
-
-  comp 3 3 0 0 8 (hh hm ph pm n)
-    0 icm 5 (chain of indirect model orders 0 to 5)
-    1 isse 13 0
-    2 isse 17 1
-    3 isse 18 2
-    4 isse 18 3
-    5 isse 19 4
-    6 match 22 24 (order 7 match model with 16 MB buffer)
-    7 mix 16 0 7 24 255 (order 1 mixer, output to arithmetic coder)
-  hcomp
-    c++ *c=a b=c a=0 (save in rotating buffer)
-    d= 1 hash *d=a (order 1 context for isse 1)
-    b-- d++ hash *d=a (order 2 context)
-    b-- d++ hash *d=a (order 3 context)
-    b-- d++ hash *d=a (order 4 context)
-    b-- d++ hash *d=a (order 5 context)
-    b-- d++ hash b-- hash *d=a (order 7 context for match)
-    d++ a=*c a<<= 8 *d=a (order 1 context for mix)
-    halt
-  post (no pre/post processing)
-    0
-  end
-
-
-Components
-----------
-
-The COMP section has 5 arguments (hh, hm, ph, pm, n) followed
-by a list of n components numbered consecutively from 0 through
-n-1. hh, hm, ph, and pm describe the sizes of the arrays
-used by the HCOMP and PCOMP virtual machines as described later.
-Each machine has two arrays, H and M. Their sizes are 2^hh and
-2^hm respectively in HCOMP, and 2^ph and 2^pm in PCOMP. The
-HCOMP program computes the context for the n components by placing
-them in H[0] through H[n-1] as 32-bit numbers. Thus, hh should
-be set so that 2^hh >= n. In mid.cfg, n = 8 and hh = 3, allowing
-up to 8 contexts. Larger values would work but waste memory.
-Memory usage is 2^(hh+2) + 2^hm + 2^(ph+2) + 2^pm bytes.
-
-mid.cfg does not use pre/post processing. Thus, there is no
-PCOMP virtual machine, so ph and pm are set to 0.
-
-The 9 possible component types are:
-
-  CONST c
-  CM s limit
-  ICM s
-  MATCH s b
-  AVG j k wt
-  MIX2 s j k rate mask
-  MIX s j m rate mask
-  ISSE s j
-  SSE s j start limit
-
-All component parameters are numbers in the range 0..255.
-
-Each component outputs a "stretched" probability in the
-form ln(p(1)/p(0)). where p(1) and p(0) are the model's estimated
-probabilities that the next bit will be a 1 or 0, respectively.
-Thus, negative numbers predict a 0 and positive predict 1.
-The magnitude is the confidence of the prediction. The output is
-a number in the range -32 to 32 with precision 1/64 (a 12 bit
-signed number). Components are as follows:
-
-  CONST c  (constant)
-
-Output is (c-128)/16. Thus, numbers larger than 128 predict 1
-and smaller predict 0, regardless of context. CONST is very
-fast and uses no memory.
-
-  CM s limit  (context model)
-
-Outputs a prediction by looking up the context in a table of
-size 2^s using the s low bits of the H[i] (for component i)
-XORed with a 9 bit expansion of the previously coded (high
-order) bits of the current byte. (Recall that H[i] is updated
-once per byte). Each table entry contains a prediction p(1)
-and a count in the range 0..limit*4 (max 1020). The prediction
-is updated in proportion to the prediction error and inversely
-proportional to the count. A large limit (max 255) is best
-for stationary sources. A smaller value makes the model more
-adaptive to changing statistics. Memory usage is 2^(s+2) bytes.
-
-  ICM s  (indirect context model)
-
-Outputs a prediction by looking up the context in a hash
-table of size 64 * 2^s bit histores (1 byte states). The
-histories index a second table of size 256 that outputs
-a prediction. The table is updated by adjusting the prediction
-to reduce the prediction error (at a slow, fixed rate) and
-updating the bit history. A bit history represents a recent
-count of 0 and 1 bits and indicates whether the most recent
-bit was a 0 or 1. The hash table is indexed by the low s+10
-bits of H[i] and the previous bits of the current byte, with
-highest 8 bits (s+9..s+2) used to detect hash collisions.
-An ICM works best on nonstationary sources or where memory
-efficiency is important. It uses 2^(s+6) bytes.
-
-  MATCH s b
-
-Outputs a prediction by searching for the previous occurrence
-of the current context in a history buffer of size 2^b bytes,
-and predicting whatever bit came next, with a confidence
-proportional to the length of the match. Matches are found
-using an index of 2^s pointers into the history buffer, each
-of which points to the previous occurrence of the current
-context. A MATCH is useful for any data that has repeat occurrences
-of strings longer than about 6-8 bytes within a window of size
-2^b. Generally, larger b (up to the file size) gives better
-compression, and s = b-2 gives adequate indexing. The context
-should be a high order hash. Memory usage is 4*2^s + 2^b bytes.
-
-  AVG j k wt
-
-Averages the predictions of components j and k (which must
-precede i, the current component). The average is
-weighted by wt/256 for component j and 1 - wt/256 for
-component k. Often, averaging two predictions gives
-better results than either prediction by itself. wt should be
-selected to favor the more accurate component. AVG is very
-fast and uses no memory.
-
-  MIX2 s j k rate mask
-
-Averages the predictions of components j and k (which must precede
-i) adaptively. The weight is selected from a table of size 2^s
-by the low s bits of H[i] added to the masked, previously coded
-bits of the current byte (an 8 bit value). A mask of 255 includes
-the current byte, and a mask of 0 excludes it. (Other masks
-are rarely useful). The adaptation rate is selectable. Typical
-values are around 8 to 32. Lower values are best for stationary
-sources. Higher rates are more adaptive. A MIX2 generally gives
-better compression than AVG but at a cost in speed and memory.
-Uses 2^(s+1) bytes of memory.
-
-  MIX s j m rate mask
-
-A MIX works like a MIX2 but with m inputs over a range of
-components j..j+m-1, all of which must precede i.
-A typical use is as the final component, taking all other
-components as input with a low order context. A MIX with 2
-inputs is different than a MIX2 in that the weights are not
-constrained to add to 1. This sometimes gives better compression,
-sometimes worse. Memory usage is m*2^(s+2) bytes. Execution time
-is proportional to m.
-
-  ISSE s j  (indirect secondary symbol estimator)
-
-An ISSE takes a prediction and a context as input and outputs
-an adjusted prediction. The low s+10 bits of H[i] and the previous
-bits of the current byte index a hash table of size 2^(s+6)
-bit histories as with an ICM. The bit history is used as an 8 bit
-context to select a pair of weights for a 2 input MIX (not
-a MIX2) with component j (preceding i) as one input and
-a CONST 144 as the other. The effect is to adjust the previous
-prediction using a (typically longer) context. A typical use
-is a chain of ISSE after a low order CM or ICM working up
-to higher order contexts as in mid.cfg. (This architecture is
-also used in the PAQ9A compressor). Uses 2^(s+6) bytes.
-
-  SSE s j start limit  (secondary symbol estimator)
-
-An SSE takes a predicion and context as input (like an ISSE)
-and outputs an adjusted prediction. The mapping is direct,
-however. The input from component j and the context are mapped to
-a 2^s by 64 CM table by quantizing the prediction to 64 levels and
-interpolating between the two nearest values. The context is
-formed by adding the partial current byte to the low s bits
-of H[i]. The table is updated in proportion to the prediction
-error and inversely proportional to a count as with a CM.
-The count is initialized to start and has the range
-(start..limit*4). A large limit is best for stationary sources.
-A smaller limit is more adaptive. The starting count does
-not start at 0 because the table is initialized so that
-output predictions are the same as input predictions regardless
-of context. If the initial guess is close, then a higher start
-value works better.
-
-An SSE sometimes gives better compression than an ISSE,
-especially on stationary sources where a CM works better than
-an ICM. But it uses 2^12 times more memory for the same
-context size, so it is useful mostly for low order
-contexts. A typical use is to adjust the output of a MIX.
-It is sometimes followed by an AVG to average its input and output,
-typically weighted 75% to 90% in favor of the output. Sometimes
-more than one SSE or SSE-AVG pair is used in series with
-progressively higher order contexts, or may be used in
-parallel and mixed. An SSE uses 2^(s+8) bytes.
-
-All components are designed to work with context hashes that
-are uniformly distributed over the low order bits (depending on
-the s parameter for that component). A CM, MIX2, MIX, or SSE may
-also be used effectively with direct context lookup for low
-orders. In this case, the low 9 bits of a CM or low 8 bits of the
-other components should be cleared to leave space to combine with
-the bits of the current byte. This is summarized:
-
-  Component              Context size    Memory
-  -------------------    ------------    ------
-  CONST c                0               0
-  CM s limit             s               2^(s+2)
-  ICM s                  s+10            2^(s+6)
-  MATCH s b              s               2^(s+2) + 2^b
-  AVG j k wt             0               0
-  MIX2 s j k rate mask   s               2^(s+1)
-  MIX s j m rate mask    s               m*2^(s+2)
-  ISSE s j               s+10            2^(s+6)
-  SSE s j start limit    s               2^(s+8)
-
-Although the ZPAQ standard does not specify a maximum for s,
-this program will not create arrays 2GB (2^31) or larger.
-
-
-ZPAQL
------
-
-There are one or two ZPAQL programs in a configuration file.
-The first, HCOMP, describes a program that computes the context
-hashes. The second, PCOMP, is optional. It describes the code
-that inverts any preprocessing performed by an external program
-prior to compression. The COMP and HCOMP sections are stored
-in the block headers uncompressed. PCOMP, if used, is appended
-to the start of the input data and compressed along with it.
-
-Each virtual machine has the following state:
-
-  4 general purpose 32 bit registers, A, B, C, D.
-  A 1 bit flag register F.
-  A 16 bit program counter, PC.
-  256 32-bit registers R0 through R255.
-  An array of 32 bit elements, H, of size 2^hh (HCOMP) or 2^ph (PCOMP).
-  An array of 8 bit elements, M, of size 2^hm (HCOMP) or 2^pm (PCOMP).
-
-Recall that the first line of a configuration file is:
-
-  COMP hh hm ph pm n
-
-HCOMP is called once per byte of input to be compressed or
-decompressed with that byte in the A register. It returns with
-context hashes for the n components in H[0] through H[n-1].
-
-PCOMP is called once per decompressed byte with that byte in
-the A register. At the end of a segment, it is called with EOS
-(-1) in A. Output is by the OUT instruction. The output should
-be the uncompressed data exactly as it was originally input
-prior to preprocessing. H has no special meaning.
-
-All state variables are initialized to 0 at the beginning of
-a block. State is maintained between calls (and across segment
-boundaries) except for A (used for input) and PC, which is
-reset to 0 (the first instruction).
-
-The A register is used as the destination of most arithmetic
-or logical operations. B and C may be used as pointers into
-M. D points into H. F stores the result of comparisons and
-is used to decide conditional jumps. R0 through R255 are
-used for auxilary storage. All operations are modulo 2^32.
-All array index operations are modulo the size of the array
-(i.e. using the low bits of the pointer). The instruction set
-is as follows:
-
-- Y=Z (assignment)
-  - where Y is A B C D *B *C *D
-  - where Z is A B C D *B *C *D (0...255)
-- AxZ (binary operations)
-  - where x is += -= *= /= %= &= &~ |= ^= <<= >>= == < >
-  - where Z is as above.
-- Yx (unary operations)
-  - where Y is as above
-  - where x is <>A ++ -- ! =0
-  - except A<>A is not valid.
-- J N (conditional jumps)
-  - where J is JT JF JMP
-  - where N is a number in (-128...127).
-- LJ NN (long jump)
-  - where NN is in (0...65535).
-- X=R N (read R array)
-  - where X is A B C D
-  - where N is in (0...255).
-- R=A N (write R array)
-  - where N is in (0...255).
-- ERROR
-- HALT
-- OUT
-- HASH
-- HASHD
-
-All instructions except LJ are 1 or 2 bytes, where the second
-byte is a number in the range 0..255 (-128..127 for jumps).
-A 2 byte instruction must be written as 2 tokens separated by
-a space, e.g. "A= 3", not "A=3" or "A = 3". The exception is
-assigning 0, which has a 1 byte form, "A=0".
-
-The notation *B, *C, and *D mean M[B], M[C], and H[D] respectively,
-modulo the array sizes. For example "*B=*D" assigns M[B]=H[D]
-(discarding the high 24 bits of H[D] because M[B] is a byte).
-
-Binary operations always put the result in A.
-
-=, +=, -=, *=, &=, |=, ^= have the same meanings as in C/C++.
-
-/=, %= have the result 0 if the right operand is 0.
-
-A&~B means A &= ~B;
-
-A<<=B, A>>=B mean the same as in C/C++ but are explicitly defined
-when B > 31 to mean the low 5 bits of B.
-
-==, <, > compare and put the result in F as 1 (true) or 0 (false).
-Comparison is unsigned. Thus PCOMP would test for EOS (-1) as
-"A> 255". There are no !=, <=, or >= operators.
-
-B<>A means swap B with A. A must be the right operand. "A<>B" is
-not valid. When 32 and 8 bit values are swapped as in "*B<>A", the
-high bits are unchanged.
-
-++ and -- increment and decrement as in C/C++ but must be written
-in postfix form. "++A" is not valid. Note that "*B++" increments
-*B, not B.
-
-! means to complement all bits. Thus, "A!" means A = ~A;
-
-JT (jump if true), JF (jump if false), and JMP (jump) operands
-are relative to the next instruction in the range -128..127.
-Thus "A> 255 JT 1 A++" increments A not to exceed 256. A jump
-outside the range of the program is a run time error.
-
-LJ is a long jump. It is 3 bytes but the operand is written as
-a number in the range 0..65535 but not exceeding the size of
-the program. Thus, "A> 255 JT 3 LJ 0" jumps to the beginning
-of the program if A <= 255.
-
-The R registers can only be read or written, as in "R=A 3 B=R 3"
-which assigns A to R3, then R3 to B. These registers can only be
-assigned from A or to A, B, C, or D.
-
-ERROR causes an error like an undefined instruction, but is
-not reserved for future use (possibly in ZPAQ level 2) like
-other undefined instructions.
-
-HALT causes the program to end (and compression to resume).
-A program should always execute HALT.
-
-OUT in PCOMP outputs the low 8 bits of A as one byte to the
-file being extracted. In HCOMP it has no effect.
-
-HASH is equivalent to A = (A + *B + 512) * 773;
-HASHD is equivalent to *D = (*D + A + 512) * 773;
-These are convenient for computing context hashes that work
-well with the COMP components. They are not required, however.
-For example, "A+=*D A*= 12 *D=A" updates a rolling
-order s/2 context hash for an s-bit wide component pointed
-to by D. In general, an order ceil(s/k) hash can be updated
-by using a multiplier which is an odd multiple of 2^k. HASH and
-HASHD are not rolling hashes. They must be computed completely
-for each context. HASH is convenient when M is used as a
-history buffer.
-
-In most programs it is not necessary to code jump instructions.
-ZPAQL supports the following structured programming constructs:
-
-  IF ... ENDIF              (execute ... if F is true)
-  IF ... ELSE ... ENDIF     (execute 1st part if true, 2nd if false)
-  IFNOT ... ENDIF           (execute ... if F is false)
-  IFNOT ... ELSE ... ENDIF  (execute 1st part if false, 2nd if true)
-  DO ... WHILE              (loop while true (test F at end))
-  DO ... UNTIL              (loop while false)
-  DO ... FOREVER            (loop forever)
-
-These constructs may be nested 1000 deep. However IF statements and
-DO loops nest independently and may be crossed. For example, the
-following loop outputs a 0 terminated string pointed to by *B
-by breaking out when it finds a 0.
-
-  DO
-    A=*B A> 0 IF (JF endif)
-      OUT B++
-    FOREVER (JMP do)
-  ENDIF
-
-IF, IFNOT, and ELSE are coded as JF, JT and JMP respectively.
-They can only jump over at most 127 instructions. If the
-code in these sections are longer, then use the long forms
-IFL, IFNOTL, or ELSEL. These behave the same but are coded using
-LJ instead. There are no special forms for WHILE, UNTIL, or FOREVER.
-The compiler will automatically use the long forms when needed.
-
-
-Parameters
-----------
-
-In a config file, paramaters may be passed as $1, $2, ..., $9. These
-are replaced with numeric values passed on the command line. For example:
-
-  zpaq cmax.cfg,3,4 archive files...
-
-would have the effect of replacing $1 with 3 and $2 with 4. The default
-value is 0, i.e. $3 through $9 are replaced with 0.
-
-In addition, a parameter may have the form $N+M, where N is 1 through
-9 and M is a number. The effect is to add M. For example,
-$2+10 would be replaced with 14. Parameters may be used anywhere in the
-config file where a number is allowed.
-
-
-Pre/Post processing
--------------------
-
-The PCOMP/POST section has the form:
-
-  POST 0 END
-
-to indicate no preprocessing or postprocessing, or
-
-  PCOMP preprocessor-command ;
-    (postprocessing code)
-  END
-
-to preprocess with an external program and to invert the transform
-with postprocessing code written in ZPAQL. The preprocessing
-command must end with a space followed by a semicolon.
-The command may contain spaces or options. The program is expected
-to take as two additional arguments an input file and an output
-file. ZPAQ will call the program by appending the input file and
-a temporary file archive.zpaq.tmp formed by appending the
-extension ".tmp" to the archive name.
-
-Before each file is compressed, ZPAQ will verify that the transformed
-data in archive.zpaq.tmp will be converted back to the original input file
-by inputting archive.zpaq.tmp to the ZPAQL program in PCOMP and comparing
-its output to the original input. If the output is verified then 
-the file is compressed, and the temporary file is deleted. Otherwise
-zpaq exits with an error and archive.zpaq.tmp is retained. Furthermore,
-if the "v" (verbose) prefix is used, then the postprocessed temporary
-file archive.zpaq.tmp.out is created. This file will be different from
-the input, although it should normally be identical.
-
-Example: Suppose a preprocessor program, caesar.exe,
-implements a Caesar cipher. It takes a number, input file, and
-output file as 3 arguments. It encrypts by adding the number to
-each byte of the input file. For example:
-
-  caesar 3 book1 book1.enc
-
-would encrypt book1 to book1.enc by changing A to D, B to E, etc.
-To decrypt to book1.out:
-
-  caesar -3 book1.enc book1.out
-
-Then the following config file would use caesar.exe as a preprocessor
-with a key of 5 and compress with a simple stationary order 0 model.
-
-  COMP 0 0 0 0 1
-    0 cm 9 255
-  HCOMP
-    halt
-  PCOMP caesar 5 ;
-    a> 255 if halt endif (ignore EOS)
-    a-= 5 out halt (subtract 5 from each byte)
-  END
-
-The ZPAQL code inverts the transform by subtracting 5 from each
-byte. During decompression, the code is called once for
-each (transformed) decompressed byte in the A register, and once
-with EOS (0xFFFFFFFF) at the end of file, which is ignored.
-
-=======================================================================
+  bcc32 -O -6 -Ic:\zpaq c:\zpaq\zpaq.obj c:\zpaq\libzpaq.obj zpaqopt.cpp
 
 */
 
@@ -898,6 +114,53 @@ using std::string;
 #endif
 
 #include "libzpaq.h"
+
+// Print help message and exit
+void usage() {
+  fprintf(stderr, "ZPAQ v2.03 archiver, (C) 2009-2010, Dell Inc.\n"
+    "Written by Matt Mahoney, " __DATE__ ".\n"
+    "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
+    "\n"
+    "To compress: zpaq [nsiptokv]c|a[L|F[,N...]] archive [folder/] [files]...\n"
+    "  n = don't store filenames (extraction will concatenate)\n"
+    "  s = don't store SHA1 checksums (saves 20 bytes)\n"
+    "  i = don't store file sizes as comments (saves a few bytes)\n"
+    "  p = store full path names (default is bare filenames)\n"
+    "  t = append locator tag to non-ZPAQ data such as zpsfx.exe\n"
+    "  c = create new archive.zpaq with 1 block\n"
+    "  a = or append 1 block to existing archive or archive.zpaq\n"
+    "  L = compression level 1=fast, 2=mid, 3=max\n"
+    "  F = or use configuration file F.cfg\n"
+    "  ,N = pass numeric arguments to F.cfg\n"
+    "  folder/ = store path for extraction (default = filename only)\n"
+    "  files... = input files, default is archive\n"
+    "To list contents: zpaq [okv]l archive\n"
+    "To extract: zpaq [ok]x[B] archive [folder/] [files...]\n"
+    "  B = extract only block B (1, 2, 3...)\n"
+    "  folder/ = extract to folder (default = stored paths)\n"
+    "  files... = rename extracted files (clobbers)\n"
+    "      otherwise use stored names (does not clobber)\n"
+    "      If no name is stored, extract archive.zpaq to archive\n"
+    "To debug configuration file F.cfg: zpaq [ptokv]rF[,N...] [args...]\n"
+    "  p = run PCOMP (default is to run HCOMP)\n"
+    "  t = trace (single step), args are numeric inputs\n"
+    "      otherwise args are input, output (default stdin, stdout)\n"
+    "  ,N = pass numeric arguments to F\n"
+    "For all commands:\n"
+    "  v = verbose (echo F.cfg or detailed listing)\n"
+    );
+#ifdef OPT
+  fprintf(stderr,
+    "  o = compress or decompress faster (requires C++ compiler) using:\n"
+    "    %s\n"
+    "  k = with o, keep zpaqopt.cpp, zpaqopt.exe\n",
+    OPT);
+#endif
+#ifndef NDEBUG
+  fprintf(stderr, "DEBUG version (not compiled with -DNDEBUG)\n");
+#endif
+  exit(0);
+}
 
 // Print an error message and exit
 namespace libzpaq {
@@ -1240,6 +503,8 @@ CompType compile_comp(FILE* in, String& comp) {
           comp.put(JF);
           comp.put(3);
           if (verbose) printf("(jf 3) ");
+
+
         }
         if (op==UNTIL) {
           comp.put(JT);
@@ -1367,7 +632,7 @@ void compile(FILE* in, String& hcomp, String& pcomp, String& pcomp_cmd) {
 // with or without a .cfg extension (min or min.cfg) and put the
 // numeric arguments in args[9] (args[0]=2, args[1]=1), and return 0.
 int compile_cmd(const char* cmd, String& hcomp,
-                String& pcomp, String& pcomp_cmd, const String& root) {
+                String& pcomp, String& pcomp_cmd) {
   int level=0;
   if (isdigit(cmd[0]))
     level=atoi(cmd);
@@ -1389,10 +654,6 @@ int compile_cmd(const char* cmd, String& hcomp,
 
     // Compile F or F.cfg
     FILE* in=fopen(filename.c_str(), "r");
-    if (!in) {
-      filename=root+filename;
-      in=fopen(filename.c_str(), "r");
-    }
     if (!in) perror(filename.c_str()), exit(1);
     fprintf(stderr, "Using model %s", filename.c_str());
     for (int i=0; i<argnum; ++i)
@@ -1438,75 +699,27 @@ void testfile(const char* filename) {
 }
 
 // Print and run a command
-void run_cmd(const string& cmd) {
+int run_cmd(const string& cmd) {
   fprintf(stderr, "%s\n", cmd.c_str());
-  system(cmd.c_str());
+  return system(cmd.c_str());
 }
 
 // ZPAQ install directory, defined in zpaqopt.cpp
 extern const char* zpaqdir;
-#ifndef OPT
+#ifdef OPT
 const char* zpaqdir=0;
 #endif
 
-// Return '/' in Linux or '\' in Windows or 0 if unknown
+// Return '/' in Linux or '\' in Windows
 char slash() {
-  const char* path=getenv("PATH");  // guess by counting slashes in PATH
-  if (!path) return 0;
-  int forward=0;
-  for (; *path; ++path) {
-    if (*path=='/') ++forward;
-    if (*path=='\\') --forward;
-  }
-  if (forward>0) return '/';
-  else if (forward<0) return '\\';
-  else return 0;
+#ifdef unix
+  return '/';
+#else
+  return '\\';
+#endif
 }
 
-// Return the path to the install directory, e.g. "c:\zpaq\"
-// for finding config files and preprocessors
-String root(int argc, char** argv) {
-
-  // If zpaqdir is set then use it
-  if (zpaqdir)
-    return zpaqdir;
-
-  // If there is a command line path in argv[0], then use it
-  String self=argv[0];
-  for (int i=self.len()-1; i>=0; --i)  // find last slash
-    if (self(i)=='/' || self(i)=='\\' || (i==1 && self(i)==':'))
-      return self.sub(0, i+1);
-
-  // Look in current directory
-  if (exists(argv[0])) return "";
-  if (exists((String(argv[0])+".exe").c_str())) return "";
-
-  // Otherwise search PATH for this program with or without .exe extension
-  const char* path=getenv("PATH");
-  if (!path) error("no PATH");
-
-  // Guess OS to determine path separator : or ;
-  char slashchar=slash();
-  char sep=slashchar=='/' ? ':' : ';';
-
-  // Parse PATH. Look for both zpaq and zpaq.exe
-  while (*path) {  // for each dir
-    int i;
-    for (i=0; path[i] && path[i]!=sep; ++i) ;  // find end of dir
-    if (i>0) {
-      String dir=String(path).sub(0, i)+slashchar;
-      String file=dir+argv[0];
-      if (exists(file.c_str())) return dir;
-      String ext=file.sub(file.len()-4);
-      if (ext!=".exe" && exists((file+".exe").c_str())) return dir;
-    }
-    path+=i+(path[i]!=0);
-  }
-  error("ZPAQ install directory not found");
-  return "";
-}
-
-#ifndef OPT
+#ifdef OPT
 
 // Generate one case of predict()
 void opt_predict(FILE *out, const String& models, int p, int select) {
@@ -2175,14 +1388,13 @@ void dump(FILE* out, const String& models, int p, int n) {
 // Then compile and run it with argc, argv
 void optimize(const String& models, int argc, char** argv) {
 
-  // Find the command c, a, x, l, r, e
+  // Find the command c, a, x, l, r
   char cmd=0;
   for (int i=0; (cmd=argv[1][i])!=0; ++i)
-    if (strchr("caxlre", cmd))
+    if (strchr("caxlr", cmd))
       break;
 
   // Open output file
-  String rootdir=root(argc, argv);
   String filename="zpaqopt.cpp";
   FILE* out=fopen(filename.c_str(), "w");
   if (!out) perror(filename.c_str()), exit(1);
@@ -2211,11 +1423,10 @@ void optimize(const String& models, int argc, char** argv) {
   for (p=0, i=1; p<models.len()-2; p+=models(p)+models(p+1)*256+2, ++i)
     opt_predict(out, models, p, i);
   fprintf(out,
-    "    default: return %s;\n"
+    "    default: return predict0();\n"
     "  }\n"
     "}\n"
-    "\n",
-    cmd!='e' ? "predict0()" : "(error(\"model not implemented\"),0)");
+    "\n");
 
   // Write Predictor::update()
   fprintf(out,
@@ -2224,7 +1435,7 @@ void optimize(const String& models, int argc, char** argv) {
   for (p=0, i=1; p<models.len()-2; p+=models(p)+models(p+1)*256+2, ++i)
     opt_update(out, models, p, i);
   fprintf(out,
-    "    default: return %s;\n"
+    "    default: return update0(y);\n"
     "  }\n"
     "  c8+=c8+y;\n"
     "  if (c8>=256) {\n"
@@ -2237,8 +1448,7 @@ void optimize(const String& models, int argc, char** argv) {
     "  else\n"
     "    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);\n"
     "}\n"
-    "\n",
-    cmd!='e' ? "update0(y)" : "error(\"model not implemented\")");
+    "\n");
 
   // Write ZPAQL::run()
   fprintf(out,
@@ -2252,50 +1462,25 @@ void optimize(const String& models, int argc, char** argv) {
       "    }\n");
   }
   fprintf(out,
-    "    default: %s;\n"
+    "    default: run0(input);\n"
     "  }\n"
     "}\n"
     "}\n"
-    "\n",
-    cmd!='e' ? "run0(input)" : "err()");
-
-
-  // Set global zpaqdir
-  fprintf(out,
-    "const char* zpaqdir=\"");
-  for (int i=0; i<rootdir.len(); ++i) {
-    int c=rootdir(i);
-    if (c=='\\' || c=='\"' || c=='\?' || c=='\'')
-      fprintf(out, "\\%c", c);
-    else if (c<32 || c>126)
-      fprintf(out, "x%02X", c);
-    else
-      fprintf(out, "%c", c);
-  }
-  fprintf(out, "\";\n");
+    "\n");
 
   // Close output and make sure it exists
   fclose(out);
   testfile(filename.c_str());
   fprintf(stderr, "Created %s\n", filename.c_str());
 
-  // Make optimized self extractor
-  if (cmd=='e') {
-    String cmd=rootdir+"makezpsfx.bat";
-    run_cmd(cmd);
-    testfile("zpsfxopt.exe");
-    return;
-  }
-
   // Run makefile.bat with the same path as this program
   // to compile zpaqopt.cpp to zpaqopt.exe
   unlink("zpaqopt.exe");
-  String command=rootdir+"makezpaq.bat";
-  run_cmd(command);
+  run_cmd(OPT);
 
   // Run it
   testfile("zpaqopt.exe");
-  command=String(".")+slash()+"zpaqopt.exe";
+  String command=String(".")+slash()+"zpaqopt.exe";
   for (int i=1; i<argc; ++i) {
     command+=" ";
     command+=argv[i];
@@ -2309,46 +1494,9 @@ void optimize(const String& models, int argc, char** argv) {
   exit(0);
 }
 
-#endif // ifndef OPT
+#endif // ifdef OPT
 
 /////////////////////////// Decompress ///////////////////////
-
-// Print help message and exit
-void usage() {
-  fprintf(stderr, "ZPAQ v2.02 archiver, (C) 2010, Dell Inc.\n"
-    "Written by Matt Mahoney, " __DATE__ ".\n"
-    "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
-    "\n"
-    "To compress: zpaq [nsitokv][ca][N][F[,N...]] archive [folder/] files...\n"
-    "  n = don't store filenames (extraction will concatenate)\n"
-    "  s = don't store SHA1 checksums (saves 20 bytes)\n"
-    "  i = don't store file sizes as comments (saves a few bytes)\n"
-    "  t = append locator tag to non-ZPAQ data such as zpsfx.exe\n"
-    "  c = create new archive.zpaq with 1 block\n"
-    "  a = or append 1 block to existing archive or archive.zpaq\n"
-    "  N = compression level 1=fast, 2=mid, 3=max\n"
-    "  F = or use configuration file F.cfg\n"
-    "  ,N = pass numeric arguments to F.cfg\n"
-    "  folder/ = store path for extraction (default = filename only)\n"
-    "To list contents: zpaq [v]l archive\n"
-    "To extract: zpaq [ok]x[N] archive [folder/] [files...]\n"
-    "  N = extract only block N (1, 2, 3...)\n"
-    "  folder/ = extract to folder (default = stored paths)\n"
-    "  files... = rename extracted files (clobbers)\n"
-    "      otherwise use stored names (does not clobber)\n"
-    "To make self extracting archive.exe: zpaq [ok]e archive\n"
-    "To debug configuration file F.cfg: zpaq [ptokv]rF[,N...] [args...]\n"
-    "  p = run PCOMP (default is to run HCOMP)\n"
-    "  t = trace (single step), args are numeric inputs\n"
-    "      otherwise args are input, output (default stdin, stdout)\n"
-    "  ,N = pass numeric arguments to F\n"
-    "For all commands:\n"
-    "  o = compress or decompress faster (requires C++ compiler)\n"
-    "  k = with o, keep zpaqopt.cpp, zpaqopt.exe\n"
-    "  v = verbose (echo F.cfg)\n"
-    );
-  exit(0);
-}
 
 // Open archive. filename and mode are as in fopen().
 // In read or append mode check if filename exists, and if not
@@ -2423,10 +1571,8 @@ FILE* create(String filename) {
   if (slashpos<0)
     return fopen(filename.c_str(), "wb");
 
-  // Guess the OS by counting / (Linux) or \ (Windows) in PATH
-  char slashchar=slash();  // 0 if unknown
-
-  // Change slashes in filename per OS if known.
+  // Change slashes in filename per OS.
+  char slashchar=slash();
   for (int i=0; i<filename.len(); ++i) {
     if (slashchar=='/' && filename[i]=='\\') filename[i]='/';
     if (slashchar=='\\' && filename[i]=='/') filename[i]='\\';
@@ -2490,7 +1636,7 @@ void decompress(int argc, char** argv) {
     skip_block(d, block-1);
 
   // Optimize one block or entire archive
-#ifndef OPT
+#ifdef OPT
   if (ocmd)
     optimize(getModels(d, block!=0), argc, argv);
 #endif
@@ -2541,6 +1687,14 @@ void decompress(int argc, char** argv) {
         else {
           String newname=filename;
           if (path) newname=path+strip(filename);
+
+          // If the first segment is not named then use the archive
+          // name without .zpaq
+          if (newname=="") {
+            newname=argv[2];
+            if (newname.sub(newname.len()-5)==".zpaq")
+              newname=newname.sub(0, newname.len()-5);
+          }
           if (newname!=filename)
             fprintf(stderr, "-> %s ", newname.c_str());
           if (!path && !validate_filename(newname.c_str())) {
@@ -2605,12 +1759,12 @@ static bool is_file(const char* filename) {
   return true;
 }
 
-// Compress files: [onsitvk][ca][N][F[,N]...] archive [folder/] files...
+// Compress files: [onsiptvk][ca][N][F[,N]...] archive [folder/] files...
 static void compress(int argc, char** argv) {
   assert(argc>=3);
 
   // Get command options
-  bool ncmd=false, scmd=false, icmd=false, // options
+  bool ncmd=false, scmd=false, icmd=false, pcmd=false, // options
        tcmd=false, ocmd=false, acmd=false, ccmd=false;
   char *cmd=argv[1];
   while (cmd && cmd[0]) {
@@ -2618,6 +1772,7 @@ static void compress(int argc, char** argv) {
     else if (cmd[0]=='n') ncmd=true;
     else if (cmd[0]=='i') icmd=true;
     else if (cmd[0]=='s') scmd=true;
+    else if (cmd[0]=='p') pcmd=true;
     else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='o') ocmd=true;
     else if (cmd[0]=='k') keep_option=true;
@@ -2631,9 +1786,9 @@ static void compress(int argc, char** argv) {
 
   // Compile config file
   String hcomp, pcomp, pcomp_cmd;
-  int level=compile_cmd(cmd, hcomp, pcomp, pcomp_cmd, root(argc, argv));
+  int level=compile_cmd(cmd, hcomp, pcomp, pcomp_cmd);
 
-#ifndef OPT
+#ifdef OPT
   if (ocmd && level==0)
     optimize(combine(hcomp, pcomp), argc, argv);
 #endif
@@ -2661,7 +1816,7 @@ static void compress(int argc, char** argv) {
   int filecount=0;  // number of files compressed
   File out(0);  // output file
   double start=0;  // output byte count at start of each file
-  for (int i=3+(path!=0); i<argc; ++i) {
+  for (int i=3+(path!=0)-(argc==3); i<argc; ++i) {
 
     // Ignore directories
     if (!is_file(argv[i])) {
@@ -2693,7 +1848,7 @@ static void compress(int argc, char** argv) {
     if (pcomp!="") {
       fclose(in.f);
       in.count=0;
-      String cmd=root(argc, argv)+pcomp_cmd+" "+argv[i]+" "+tmp;
+      String cmd=pcomp_cmd+" "+argv[i]+" "+tmp;
       run_cmd(cmd);
 
       // Test whether post(pre(in)) == in
@@ -2715,6 +1870,7 @@ static void compress(int argc, char** argv) {
         fclose(in.f);
         continue;
       }
+
       rewind(in.f);
       in.count=0;
     }
@@ -2735,8 +1891,11 @@ static void compress(int argc, char** argv) {
     }
 
     // Write segment header
-    string filename=strip(argv[i]);
+    string filename=pcmd?argv[i]:strip(argv[i]);
     if (path) filename=path+filename;
+    if (!ncmd && !validate_filename(filename.c_str()))
+      fprintf(stderr, "Warning: filename %s not valid for extraction\n",
+          filename.c_str());
     c.startSegment(ncmd?0:filename.c_str(), icmd?0:comment);
     if (filecount==0)
       c.postProcess(pcomp=="" ? 0 : pcomp.c_str());
@@ -2860,12 +2019,26 @@ void printCode(const String& s, int i) {
   }
 }
 
-// Archive listing: [v]l archive
+// Archive listing: [okv]l archive
 // v = verbose. If not verbose, show for each block the filename
 // and comment. If verbose show also the SHA-1 checksum for each segment
 // and show the hcomp and pcomp code for each block in a format that
 // can be read back as a config file.
+// ok = optimize: generates zpaqopt.cpp, zpaqopt.exe but does not use.
+// The code may be used to speed extraction by other programs like zpsfx.
 static void list(int argc, char** argv) {
+
+  const char* cmd=argv[1];
+  assert(cmd);
+  bool ocmd=false;
+  while (*cmd) {
+    if (*cmd=='o') ocmd=true;
+    else if (*cmd=='k') keep_option=true;
+    else if (*cmd=='v') verbose=true;
+    else if (*cmd=='l') break;
+    else usage();
+    ++cmd;
+  }
 
   // Verbose?
   if (argv[1][0]=='v') verbose=true;
@@ -2888,6 +2061,15 @@ static void list(int argc, char** argv) {
   // Set the input to the archive
   File in(open_archive(argv[2], "rb"));
   d.setInput(&in);
+
+  // Optimize archive. The "o" command will generate optimized source
+  // code for a new version of zpaq and run it. This doesn't list any
+  // faster, but the code can be kept with "k" and used by other
+  // programs like zpsfx to speed extraction.
+#ifdef OPT
+  if (ocmd)
+    optimize(getModels(d, false), argc, argv);
+#endif
 
   // Search for the next block and return false when done.
   // If true, calculate memory required for decompression.
@@ -2947,6 +2129,7 @@ static void list(int argc, char** argv) {
           // the beginning of the first segment using the compression
           // algorithm described in hcomp. decompress(0) has the effect
           // of decompressing this string but stopping before decompressing
+
           // any data. On the other hand, decompress(n) would decompress
           // up to n bytes and return true if there is more data remaining.
           // d.decompress(-1) or d.decompress() would decompress the whole
@@ -3127,10 +2310,10 @@ void run(int argc, char** argv) {
 
   // Parse comma separated arguments after config file (now in cmd)
   String hcomp, pcomp, pcomp_cmd;
-  if (compile_cmd(cmd, hcomp, pcomp, pcomp_cmd, root(argc, argv)))
+  if (compile_cmd(cmd, hcomp, pcomp, pcomp_cmd))
     error("no config file");
 
-#ifndef OPT
+#ifdef OPT
   if (ocmd)
     optimize(combine(hcomp, pcomp), argc, argv);
 #endif
@@ -3172,76 +2355,6 @@ void run(int argc, char** argv) {
   }
 }
 
-////////////////////////////// sfx /////////////////////////
-
-// This code is for making self extracting archives
-
-// Append a file
-void copy(String from, String to) {
-  fprintf(stderr, "Appending from %s to %s\n", from.c_str(), to.c_str());
-
-  // Open files
-  FILE* in=fopen(from.c_str(), "rb");
-  if (!in) perror(from.c_str()), exit(1);
-  FILE* out=fopen(to.c_str(), "ab");
-  if (!out) perror(to.c_str()), exit(1);
-
-  // Copy
-  int c;
-  while ((c=getc(in))!=EOF)
-    putc(c, out);
-
-  // Close files
-  fclose(out);
-  fclose(in);
-}
-
-// Create self extracting archive.exe: [ok]e archive
-void sfx(int argc, char** argv) {
-
-  // Get command options
-  bool ocmd=false;
-  char *cmd=argv[1];
-  while (cmd && cmd[0]) {
-    if (cmd[0]=='o') ocmd=true;
-    else if (cmd[0]=='k') keep_option=true;
-    else if (cmd[0]=='e') break;
-    else usage();
-    ++cmd;
-  }
-
-  // Get file names
-  String rootdir=root(argc, argv);
-  String sfx=rootdir+"zpsfx.exe";
-  String input=argv[2];
-  if (!exists(input.c_str()))
-    input+=".zpaq";
-  testfile(input.c_str());
-  String output=input;
-  if (output.sub(output.len()-5)==".zpaq")
-    output=output.sub(0, output.len()-5);
-  output+=".exe";
-
-  // Optimize archive to zpsfxopt.exe
-#ifndef OPT
-  if (ocmd) {
-    libzpaq::Decompresser d;
-    File in(open_archive(argv[2], "rb"));
-    d.setInput(&in);
-    optimize(getModels(d, false), argc, argv);
-    fclose(in.f);
-    sfx="zpsfxopt.exe";
-  }
-#endif
-
-  // Make self extracting archive
-  unlink(output.c_str());
-  copy(sfx, output);
-  copy(rootdir+"zpsfx.tag", output);
-  copy(input, output);
-  testfile(output.c_str());
-}
-
 ///////////////////////////// Main ///////////////////////////
 
 // Command syntax as in usage()
@@ -3251,10 +2364,10 @@ int main(int argc, char** argv) {
   if (argc<2) 
     usage();
 
-  // Find the command c, a, x, l, r, e
+  // Find the command c, a, x, l, r
   char cmd=0;
   for (int i=0; (cmd=argv[1][i])!=0; ++i)
-    if (strchr("caxlre", cmd))
+    if (strchr("caxlr", cmd))
       break;
 
   // Do the command
@@ -3264,8 +2377,6 @@ int main(int argc, char** argv) {
     decompress(argc, argv);
   else if (argc>=3 && cmd=='l')
     list(argc, argv);
-  else if (cmd=='e')
-    sfx(argc, argv);
   else if (cmd=='r')
     run(argc, argv);
   else
