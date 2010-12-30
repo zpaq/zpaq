@@ -1,7 +1,7 @@
-/*  zpaq v2.03 archiver and file compressor.
+/*  zpaq v2.04 archiver and file compressor.
 
 (C) 2009-2010, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Dec. 23, 2010
+    Written by Matt Mahoney, matmahoney@yahoo.com, Dec. 29, 2010
 
     LICENSE
 
@@ -52,8 +52,7 @@ location that the OPT command must specify. Alternatively, OPT could be
 set to a script that contains the commands. zpaq will then execute the script.
 For example:
 
-  -DOPT="makezpaq"      (Windows)
-  -DOPT=\"makezpaq\"    (Linux)
+  -DOPT=\"makezpaq\"
 
 libzpaq.cpp and zpaq.cpp might be compiled in advance to .o files which
 will speed up the build of zpaqopt.exe. Build them like this:
@@ -63,39 +62,74 @@ will speed up the build of zpaqopt.exe. Build them like this:
 (Note that -DOPT is not used here. Thus, do not build zpaq or zpaq.exe
 from this zpaq.o).
 
-In Windows, you might have an installation directory like c:\zpaq
-with the following files:
+The script install.bat will install in Windows using either the MinGW g++,
+Visual C++, Borland, or Mars compiler. However, only g++ expands wildcards.
+Otherwise, a command like:
 
-  zpaq.o
-  libzpaq.o
-  libzpaq.h
+  zpaq c1 archive *.txt
 
-and OPT or makezpaq.bat might be as follows:
+won't compress all files with a .txt extension. It will fail because
+you don't have a file named exactly "*.txt".
 
-  g++ -O3 c:\zpaq\zpaq.o c:\zpaq\libzpaq.o -Ic:\zpaq zpaqopt.cpp -o zpaqopt
+To use the installation script:
+
+  install c:\bin g++.exe
+
+This will create the following files:
+
+  c:\bin\zpaq.exe
+  c:\bin\zpaq\zpaq.o
+  c:\bin\zpaq\libzpaq.o
+  c:\bin\zpaq\libzpaq.h
+
+You should have c:\bin in your PATH. If not, then either add it or choose
+another destination for the first argument to install.bat that is already
+in your PATH. The other 3 files will be placed in a subdirectory zpaq under
+the installation directory. Those files are needed to use the "o" modifier.
+The second argument can be one of the following (ordered from fastest to
+slowest):
+
+  g++.exe     (MinGW g++)
+  cl.exe      (Microsoft Visual C++)
+  bcc32.exe   (Borland)
+  dmc.exe     (Mars)
+
+The compiler must be in your PATH when you run install.bat and whenever you
+run zpaq.exe with "o". For most compilers, you probably did this when you
+installed it. For Visual C++, there are several environment variables to
+set. The easiest way to set them is to start the Visual Studio and
+select "Tools/Open command line window" from the menu, then use that window
+to run install.bat or zpaq.exe. For the other compilers the normal
+installation path is:
+
+  c:\mingw\bin\g++.exe
+  c:\borland\bin\bcc32.exe
+  c:\dm\bin\dmc.exe
 
 In Linux, the files might be installed:
 
+  /usr/bin/zpaq
   /usr/lib/zpaq/zpaq.o
   /usr/lib/zpaq/libzpaq.o
   /usr/include/libzpaq.h
 
-and OPT or an executable script called makezpaq might be as follows:
+To create the installation files:
 
-  #!/bin/bash
-  g++ -O3 /usr/lib/zpaq/zpaq.o /usr/lib/zpaq/libzpaq.o zpaqopt.cpp \
-      -o zpaqopt.exe
+  g++ -O3 -DNDEBUG -c zpaq.cpp libzpaq.cpp
+  g++ -O3 -DNDEBUG zpaq.cpp libzpaq.cpp libzpaqo.cpp -o zpaq \
+    -DOPT="\"g++ -O3 zpaqopt.cpp /usr/lib/zpaq/zpaq.o /usr/lib/zpaq/libzpaq.o -o zpaqopt.exe\""
 
 -DNDEBUG has no effect on zpaqopt.cpp so it is not needed.
 
 You can customize compiler optimizations to your local machine.
-Some options to try are -s -march=native -fomit-frame-pointer.
+Recommended options are:
 
-You could also use other compilers. For example, with Borland
-(Windows) you might use:
+  g++ -O3 -s -march=native -fomit-frame-pointer -DNDEBUG
+  cl /Ox /GL /DNDEBUG
+  bcc32 -O -6 -DNDEBUG
+  dmc -o -6 -DNDEBUG
 
-  bcc32 -O -6 -Ic:\zpaq c:\zpaq\zpaq.obj c:\zpaq\libzpaq.obj zpaqopt.cpp
-
+All compilers understand -D, -I and -c  (for cl: /D, /I, /c).
 */
 
 #include <stdio.h>
@@ -104,8 +138,6 @@ You could also use other compilers. For example, with Borland
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
-#include <string>
-using std::string;
 
 #ifdef unix
 #include <sys/types.h>
@@ -117,7 +149,7 @@ using std::string;
 
 // Print help message and exit
 void usage() {
-  fprintf(stderr, "ZPAQ v2.03 archiver, (C) 2009-2010, Dell Inc.\n"
+  fprintf(stderr, "ZPAQ v2.04 archiver, (C) 2009-2010, Dell Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -191,16 +223,164 @@ struct File: public libzpaq::Reader, public libzpaq::Writer {
   }
 };
 
+/////////////////////////////// String ////////////////////////////
+
+// Sort of like std::string but with get(), put() for libzpaq
+class String: public libzpaq::Writer, public libzpaq::Reader {
+  char* a;  // NUL terminated array
+  int size; // allocated size
+  int len_; // user size, len() < size
+  void resize(int n);  // increase allocation to allow len() == n
+public:
+  String(const char* s=0, int n=-1);  // Create with length n, default strlen
+  explicit String(char c);  // convert to length 1 String
+  String(const String& s);  // copy constructor
+  String& operator=(const String& s);  // assignment
+  ~String() {if (a) free(a);}  // destructor
+  const char* c_str() const {return a?a:"";}  // convert to const char*
+  int len() const {return len_;}  // user length
+  void put(int c);  // append c
+  int get();  // read and remove first char or -1 if empty
+  char& operator[](int i) {assert(i>=0 && i<len()); return a[i];}  // char
+  int operator()(unsigned int i) const {  // byte, or 0 if out of bounds
+    return i<(unsigned int)len() ? (a[i]&255) : 0;}
+  String& operator += (const String& s);  // append
+  String sub(int i, int n) const;  // substring from i, length n with clipping
+  String sub(int i) const {return sub(i, len()-i);}  // substring from i to end
+};
+
+// Increase size > n to allow len() == n
+// if a == 0 then init len() = 0, else leave unchanged
+void String::resize(int n) {
+  n=(n+64)&-64;
+  assert(n>=0);
+  if (!a) size=len_=0;
+  if (n>size) {
+    char* tmp=(char*)calloc(n, 1);
+    if (!tmp) libzpaq::error("String out of memory");
+    if (a) {
+      memcpy(tmp, a, size);
+      free(a);
+    }
+    a=tmp;
+    size=n;
+  }
+  assert(a);
+  assert(size>len());
+  assert(len()>=0);
+}
+
+// Convert n (default to NUL) chars of s to String
+String::String(const char* s, int n): a(0) {
+  if (s==0)
+    size=len_=0;
+  else {
+    if (n<0) n=strlen(s);
+    resize(n);
+    memcpy(a, s, n);
+    a[len_=n]=0;
+    assert(size>=len());
+  }
+}
+
+// Convert char to 1 character String
+String::String(char c): a(0) {
+  resize(1);
+  a[0]=c;
+  a[1]=0;
+  len_=1;
+  assert(size>len());
+}
+
+// Copy constructor
+String::String(const String& s): a(0) {
+  resize(s.len());
+  memmove(a, s.a, s.len()+1);
+  len_=s.len();
+  assert(size>len());
+}
+
+// Assignment
+String& String::operator=(const String& s) {
+  if (&s==this) return *this;
+  if (a) free(a);
+  a=0;
+  resize(s.len());
+  len_=s.len();
+  assert(a);
+  assert(size>len());
+  assert(s.size>len());
+  memcpy(a, s.a, s.len()+1);
+  return *this;
+}
+
+// Concatenate
+String& String::operator+=(const String& s) {
+  resize(len()+s.len());
+  assert(size>len()+s.len());
+  memcpy(a+len(), s.c_str(), s.len());
+  len_+=s.len();
+  assert(size>len());
+  a[len()]=0;
+  return *this;
+}
+
+// Append a char
+void String::put(int c) {
+  resize(len()+1);
+  a[len()]=c;
+  a[++len_]=0;
+  assert(size>len());
+}
+
+// Return n chars starting at i, clipping if out of range
+String String::sub(int i, int n) const {
+  if (!a) return "";
+  if (i<0) n+=i, i=0;
+  if (i+n>len()) n=len()-i;
+  if (n<=0) return "";
+  return String(a+i, n);
+}
+
+// Read a char
+int String::get() {
+  if (len()==0) return -1;
+  int c=(*this)(0);
+  *this=sub(1);
+  return c;
+}
+
+// Concatenate Strings
+String operator+(String s1, const String& s2) {
+  return s1+=s2;
+}
+
+// Compare Strings
+bool operator==(const String& s1, const String& s2) {
+  return s1.len()==s2.len() && memcmp(s1.c_str(), s2.c_str(), s1.len())==0;
+}
+
+bool operator!=(const String& s1, const String& s2) {
+  return !(s1==s2);
+}
+
+/*
+// Alternate but equivalent String class (not used)
+// Does not work with Mars compiler
+
+#include <string>
+
 // Improved std:string with output by appending to it
-struct String: public libzpaq::Writer, public libzpaq::Reader, public string {
-  String(const string& s): string(s) {} // base to derived conversions
-  String(const char* s=""): string(s) {}
+struct String: public libzpaq::Writer, public libzpaq::Reader, public std::string {
+  String(const std::string& s): std::string(s) {} // base to derived conversions
+  String(const char* s=""): std::string(s) {}
+  explicit String(char c): std::string(1, c) {}
   void put(int c) {*this+=char(c);}     // append 1 byte
   int get();                            // read and remove first byte or EOF
   int len() const {return int(size());} // size as a signed int
   int operator()(unsigned int i) const; // i'th byte, bounds checked
-  string sub(int i, int n) const;       // clipped substr(i, n)
-  string sub(int i) const;              // clipped substr(i)
+  String sub(int i, int n) const;       // clipped substr(i, n)
+  String sub(int i) const;              // clipped substr(i)
 };
 
 int String::get() {
@@ -216,16 +396,17 @@ int String::operator()(unsigned int i) const {
   return (*this)[i]&255;
 }
 
-string String::sub(int i, int n) const {
+String String::sub(int i, int n) const {
   if (i<0) n+=i, i=0;
   if (i+n>len()) n=len()-i;
   if (n<=0) return "";
   return substr(i, n);
 }
 
-string String::sub(int i) const {
+String String::sub(int i) const {
   return sub(i, len()-i);
 }
+*/
 
 //////////////////////////////// compile ///////////////////////////
 
@@ -621,6 +802,7 @@ void compile(FILE* in, String& hcomp, String& pcomp, String& pcomp_cmd) {
 
     // Compute header size
     int hsize=pcomp.len()-2;
+    assert(hsize>=0);
     pcomp[0]=hsize&255;
     pcomp[1]=hsize>>8;
   }
@@ -645,7 +827,7 @@ int compile_cmd(const char* cmd, String& hcomp,
       if (*p==',')
         args[argnum++]=atoi(p+1);
       else if (argnum==0)
-        filename+=*p;
+        filename.put(*p);
     }
 
     // Add .cfg extension
@@ -673,6 +855,7 @@ int compile_cmd(const char* cmd, String& hcomp,
 void fix_pcomp(const String& hcomp, String& pcomp) {
   if (hcomp.len()>=8 && pcomp.len()>=2) {
     pcomp=hcomp.sub(0, 8)+pcomp.sub(2);
+    assert(pcomp.len()>7);
     pcomp[0]=(pcomp.len()-2)&255;  // new length of PCOMP
     pcomp[1]=(pcomp.len()-2)>>8;
     pcomp[6]=pcomp[7]=0;  // n=0 components
@@ -699,7 +882,7 @@ void testfile(const char* filename) {
 }
 
 // Print and run a command
-int run_cmd(const string& cmd) {
+int run_cmd(const String& cmd) {
   fprintf(stderr, "%s\n", cmd.c_str());
   return system(cmd.c_str());
 }
@@ -1480,7 +1663,7 @@ void optimize(const String& models, int argc, char** argv) {
 
   // Run it
   testfile("zpaqopt.exe");
-  String command=String(".")+slash()+"zpaqopt.exe";
+  String command=String(".")+String(slash())+"zpaqopt.exe";
   for (int i=1; i<argc; ++i) {
     command+=" ";
     command+=argv[i];
@@ -1489,6 +1672,9 @@ void optimize(const String& models, int argc, char** argv) {
   if (!keep_option) {
     unlink("zpaqopt.exe");
     unlink("zpaqopt.cpp");
+    unlink("zpaqopt.obj");
+    unlink("zpaqopt.map");
+    unlink("zpaqopt.tds");
     fprintf(stderr, "zpaqopt.cpp and zpaqopt.exe deleted\n");
   }
   exit(0);
@@ -1548,10 +1734,10 @@ void skip_block(libzpaq::Decompresser& d, int n) {
 }
 
 // Remove path from filename
-string strip(const string& filename) {
-  for (int i=int(filename.size())-1; i>=0; --i) {
-    if (filename[i]=='/' || filename[i]=='\\' || (i==1 && filename[i]==':'))
-      return filename.substr(i+1);
+String strip(const String& filename) {
+  for (int i=filename.len()-1; i>=0; --i) {
+    if (filename(i)=='/' || filename(i)=='\\' || (i==1 && filename(i)==':'))
+      return filename.sub(i+1);
   }
   return filename;
 }
@@ -1584,7 +1770,7 @@ FILE* create(String filename) {
 
   // If this doesn't work, try creating a directory for it using "mkdir"
   if (slashchar) {
-    string cmd = slashchar=='\\' ? "mkdir " : "mkdir -p ";
+    String cmd = slashchar=='\\' ? "mkdir " : "mkdir -p ";
     cmd+=filename.sub(0, slashpos);
     fprintf(stderr, "\n");
     run_cmd(cmd);
@@ -1810,7 +1996,7 @@ static void compress(int argc, char** argv) {
   pp.setSHA1(&sha2);
   if (hcomp.len()>5)
     pp.init(hcomp(4), hcomp(5));  // ph, pm array sizes
-  String tmp=string(argv[2])+".zpaq.pre";  // preprocessed input filename
+  String tmp=String(argv[2])+".zpaq.pre";  // preprocessed input filename
 
   // Compress files in argv[3...argc-1]
   int filecount=0;  // number of files compressed
@@ -1891,7 +2077,7 @@ static void compress(int argc, char** argv) {
     }
 
     // Write segment header
-    string filename=pcmd?argv[i]:strip(argv[i]);
+    String filename=pcmd?String(argv[i]):strip(argv[i]);
     if (path) filename=path+filename;
     if (!ncmd && !validate_filename(filename.c_str()))
       fprintf(stderr, "Warning: filename %s not valid for extraction\n",
@@ -1933,15 +2119,15 @@ static void compress(int argc, char** argv) {
 
 // Print component statistics
 int libzpaq::Predictor::stat(int) {
-  printf("\nMemory utilization:\n");
+  fprintf(stderr, "\nMemory utilization:\n");
   int cp=7;
   for (int i=0; i<z.header[6]; ++i) {
     assert(cp<z.header.size());
     int type=z.header[cp];
     assert(compsize[type]>0);
-    printf("%2d %s", i, compname[type]);
+    fprintf(stderr, "%2d %s", i, compname[type]);
     for (int j=1; j<compsize[type]; ++j)
-      printf(" %d", z.header[cp+j]);
+      fprintf(stderr, " %d", z.header[cp+j]);
     Component& cr=comp[i];
     if (type==MATCH) {
       assert(cr.cm.size()>0);
@@ -1949,8 +2135,9 @@ int libzpaq::Predictor::stat(int) {
       int count=0;
       for (int j=0; j<cr.cm.size(); ++j)
         if (cr.cm[j]) ++count;
-      printf(": buffer=%d/%d index=%d/%d (%1.2f%%)", cr.limit/8, cr.ht.size(),
-        count, cr.cm.size(), count*100.0/cr.cm.size());
+      fprintf(stderr, ": buffer=%d/%d index=%d/%d (%1.2f%%)",
+        cr.limit/8, cr.ht.size(), count, cr.cm.size(),
+        count*100.0/cr.cm.size());
     }
     else if (type==SSE) {
       assert(cr.cm.size()>0);
@@ -1959,7 +2146,7 @@ int libzpaq::Predictor::stat(int) {
         if (int(cr.cm[j])!=(squash((j&31)*64-992)<<17|z.header[cp+3]))
           ++count;
       }
-      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
         count*100.0/cr.cm.size());
     }
     else if (type==CM) {
@@ -1967,7 +2154,7 @@ int libzpaq::Predictor::stat(int) {
       int count=0;
       for (int j=0; j<cr.cm.size(); ++j)
         if (cr.cm[j]!=0x80000000) ++count;
-      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
         count*100.0/cr.cm.size());
     }
     else if (type==MIX) {
@@ -1976,25 +2163,25 @@ int libzpaq::Predictor::stat(int) {
       assert(m>0);
       for (int j=0; j<cr.cm.size(); ++j)
         if (int(cr.cm[j])!=65536/m) ++count;
-      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
         count*100.0/cr.cm.size());
     }
     else if (type==MIX2) {
       int count=0;
       for (int j=0; j<cr.a16.size(); ++j)
         if (int(cr.a16[j])!=32768) ++count;
-      printf(": %d/%d (%1.2f%%)", count, cr.a16.size(),
+      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.a16.size(),
         count*100.0/cr.a16.size());
     }
     else if (cr.ht.size()>0) {
       int hcount=0;
       for (int j=0; j<cr.ht.size(); ++j)
         if (cr.ht[j]>0) ++hcount;
-      printf(": %d/%d (%1.2f%%)",
+      fprintf(stderr, ": %d/%d (%1.2f%%)",
           hcount, cr.ht.size(), hcount*100.0/cr.ht.size());
     }
     cp+=compsize[type];
-    printf("\n");
+    fprintf(stderr, "\n");
   }
   return 0;
 }     
