@@ -1,7 +1,7 @@
-/*  zpaq v2.04 archiver and file compressor.
+/*  zpaq v2.05 archiver and file compressor.
 
-(C) 2009-2010, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Dec. 29, 2010
+(C) 2009-2011, Dell Inc.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Jan. 5, 2010
 
     LICENSE
 
@@ -149,7 +149,7 @@ All compilers understand -D, -I and -c  (for cl: /D, /I, /c).
 
 // Print help message and exit
 void usage() {
-  fprintf(stderr, "ZPAQ v2.04 archiver, (C) 2009-2010, Dell Inc.\n"
+  fprintf(stderr, "ZPAQ v2.05 archiver, (C) 2009-2011, Dell Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -295,7 +295,8 @@ String::String(char c): a(0) {
 // Copy constructor
 String::String(const String& s): a(0) {
   resize(s.len());
-  memmove(a, s.a, s.len()+1);
+  assert(a);
+  if (s.a) memmove(a, s.a, s.len()+1);
   len_=s.len();
   assert(size>len());
 }
