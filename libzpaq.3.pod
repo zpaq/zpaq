@@ -1,0 +1,1422 @@
+#   Copyright
+#
+#      Copyright (C) 2011 Matt Mahoney <matmahoney@yahoo.com>
+#
+#   License
+#
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 3 of the License, or
+#       (at your option) any later version.
+#
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#       GNU General Public License for more details.
+#
+#       You should have received a copy of the GNU General Public License
+#       along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+#   Description
+#
+#	To learn what TOP LEVEL section to use in manual pages,
+#	see POSIX/Susv standard and "Utility Description Defaults" at
+#	http://www.opengroup.org/onlinepubs/009695399/utilities/xcu_chap01.html#tag_01_11
+#
+#	This is manual page in Perl POD format. Read more at
+#	http://perldoc.perl.org/perlpod.html or run command:
+#
+#	    perldoc perlpod | less
+#
+#	To check the syntax:
+#
+#	    podchecker *.pod
+#
+#	Create manual page with command:
+#
+#	    pod2man PAGE.N.pod > PAGE.N
+
+=pod
+
+=head1 NAME
+
+libzpaq - ZPAQ compression API
+
+=head1 SYNOPSIS
+
+    #include "libzpaq.h"
+
+    namespace libzpaq {
+
+    extern void error(const char* msg);
+
+    class Reader {
+    public:
+        virtual int get() = 0;
+        virtual ~Reader() {}
+    };
+
+    class Writer {
+    public:
+        virtual void put(int c) = 0;
+        virtual ~Writer() {}
+    };
+
+    class SHA1 {
+    public:
+        SHA1();
+        void put(int c);
+        double size() const;
+        const char* result();
+    };
+
+    class Compressor {
+    public:
+        Compressor();
+        void setOutput(Writer* out);
+        void writeTag();
+        void startBlock(int level);
+        void startBlock(const char* hcomp);
+        void startSegment(const char* filename = 0,
+                          const char* comment = 0);
+        void setInput(Reader* i);
+        void postProcess(const char* pcomp = 0);
+        bool compress(int n = -1);
+        void endSegment(const char* sha1string = 0);
+        void endBlock();
+    };
+
+    class Decompresser {
+    public:
+        Decompresser();
+        void setInput(Reader* in);
+        bool findBlock(double* memptr = 0);
+        void hcomp(Writer* out);
+        bool findFilename(Writer* = 0);
+        void readComment(Writer* = 0);
+        void setOutput(Writer* out);
+        void setSHA1(SHA1* sha1ptr);
+        bool decompress(int n = -1);
+        bool pcomp(Writer* out);
+        void readSegmentEnd(char* sha1string = 0);
+    };
+
+    void compress(Reader* in, Writer* out, int level);
+
+    void decompress(Reader* in, Writer* out);
+    }
+
+=head1 DESCRIPTION
+
+I<libzpaq> is a public domain C++ API for compressing or decompressing
+files or objects in memory comforming to the ZPAQ level 1 standard
+(see I<availability>).
+
+ZPAQ provides a high level of data compression in a streaming
+(single pass) self-describing format that supports single or multiple
+named objects (such as archives) with optional integrity checking.
+
+The library provides 3 default compression levels but supports
+custom algorithms. The performance of the default levels is
+shown in the table below for the 14 file Calgary corpus as
+a tar file. Compression and decompression times are in seconds
+on a 2 GHz T3200 running on one of two cores. Memory required
+to compress or decompress is in MB. Some popular formats
+are shown for comparison.
+
+    Program       Format       Size     Time (C, D)   Memory
+    -----------   ------     ---------  -----------   ------
+    Uncompresed   .tar       3,152,896
+    compress      .tar.Z     1,319,521    1.6   0.2    .1 MB
+    gzip -9       .tar.gz    1,022,810    0.7   0.1    .1 MB
+    bzip2 -9      .tar.bz2     860,097    0.6   0.4     5 MB
+    7zip          .tar.7z      824,573    1.5   0.1   195 MB
+    zpaq 1 (fast) .tar.zpaq    806,959    2     2      38 MB
+    zpaq 2 (mid)  .tar.zpaq    699,191    8     8     112 MB
+    zpaq 3 (max)  .tar.zpaq    644,190   20    20     246 MB
+
+A ZPAQ stream consists of one or more blocks, possibly mixed with
+other data, that can be decompressed independently in any order.
+Each block consists of one or more segments that must be decompressed
+in order from the beginning of the block. Each block header contains
+a description of the decompression algorithm. Each segment consists
+of an optional filename string, an optional comment string,
+self delimiting compressed data, and an optional SHA-1 checksum.
+If ZPAQ blocks are mixed with other data, they must be
+preceded by an identifying 13 byte tag which does not
+appear in that data.
+
+ZPAQ compression is based on the PAQ context mixing model.
+An array of components predict the probability of the next bit
+of input, either independently or depending on the predictions
+of earlier components. The final prediction is arithmetic coded.
+Each component inputs a context computed from earlier input
+by a program written in ZPAQL byte code which runs on a virtual
+machine. Both the component array description and the ZPAQL
+code are encoded in a string called HCOMP in each block header.
+
+A block may optionally specify a post-processor, a program
+(also in ZPAQL) which takes the decoded data as input and
+outputs the decompressed output. This program, if present,
+is encoded as a string called PCOMP which is compressed
+in the first segment prior to the compressed data. The first
+decoded byte from the first segment is a flag indicating
+whether a PCOMP string is present.
+
+The format of the ZPAQL byte code in the HCOMP and PCOMP
+strings is specified in the ZPAQ level 1 specification.
+I<libzpaq> will execute any legal byte code by interpreting
+it. However it is possible to approximately double compression and
+decompression speed by translating the byte code into C++
+and linking it into the application so that it can be executed
+directly. I<libzpaq> provides three default compression models
+called I<fast>, I<mid>, and I<max> which are so optimized.
+These default models may be selected during compression as
+an alternative to specifying the corresponding HCOMP strings.
+(These models do not post-process). A decompresser will
+match the block header to optimized models,
+and if a match is found, will execute the optimized code for them.
+
+It is inconvenient to write ZPAQL byte code. Normally, compression
+models are specified as configuration files, which zpaq(1)
+can translate into byte code. zpaq(1) can also compile them
+into C++ source code that can be linked into an application
+and executed directly in place of the 3 built-in models.
+
+=head2 API Organization
+
+The I<libzpaq> API consists of 3 files.
+
+=over
+
+=item libzpaq.h
+
+Header file to include in your application.
+
+=item libzpaq.cpp
+
+Source code file to link to your application.
+
+=item libzpaqo.cpp
+
+Source code and HCOMP strings for optimized models
+I<fast>, I<mid>, and I<max> models.
+
+=back
+
+An application would have the line C<#include "libzpaq.h"> and
+link to the two source code files. If zpaq(1) is used to
+generate optimized code, then that code would replace
+F<libzpaqo.cpp>. In either case, the interface is the same.
+
+The API provides two classes, C<Compressor> and C<Decompresser>
+which write or read respectively each of the syntactic elements
+of a ZPAQ stream. The two functions C<compress()> and
+C<decompress()> provide simple interfaces for the most common
+uses. In either case, the user must create classes derived
+from the abstract base classes C<Reader> and C<Writer> and
+define methods C<get()> and C<put()> which the code
+will use to read and write bytes. The user must also define
+a callback error handler.
+
+All of the API code is contained in the namespace C<libzpaq>.
+
+=head2 Callback Functions
+
+The following three functions must be defined by the user.
+
+=over
+
+=item C<extern void error(const char* msg);>
+
+This function must be defined by the user to handle errors
+from libzpaq. The library will call the function with
+an English language message passed to C<msg>. Errors may
+result from bad input during decompression, out of memory,
+or illegal arguments or calling sequences to libzpaq
+functions. Errors should be considered unrecoverable.
+
+=item C<int Reader::get() = 0;>
+
+The user must create a class derived from Reader with an
+implementation for C<get()> that reads one byte of input
+and returns its value in the range 0...255, or returns
+EOF (-1) at end of input. Objects of the derived type
+would then be passed to functions that require a C<Reader>.
+
+=item C<void Writer::put(int c) = 0;>
+
+The user must create a class derived from Writer with
+an implemenation of C<put()> which is expected to take
+a byte value C<c> in the range 0...255 and write it to
+output. Objects of the derived type
+would then be passed to functions that require a C<Writer>.
+
+=back
+
+=head2 Simple Compression
+
+=over
+
+=item C<void compress(Reader* in, Writer* out, int level);>
+
+C<compress()> compresses from C<in> to C<out> until C<get()>
+returns EOF. It writes a single segment in a single block
+with empty filename, comment, and checksum fields. C<level>
+must be 1, 2, or 3, to select models I<fast>, I<mid>, or
+I<max> respectively. Higher levels compress smaller but
+take longer to compress and subsequently decompress.
+
+If the application is linked with compiled ZPAQL byte
+code generated by zpaq(1) rather than F<libzpaqo.cpp>, then
+C<level> selects one of the models defined in this file,
+where 1 selects the first model.
+
+=item C<void decompress(Reader* in, Writer* out);>
+
+C<decompress()> decompresses any valid ZPAQ stream from
+C<in> to C<out> until C<get()> returns EOF. Any
+non-ZPAQ data in the input is ignored. Any ZPAQ blocks
+following non-ZPAQ must be preceded by a marker tag
+to be recognized. Each block is decoded according to the
+instructions in the block header. The contents of the
+filename, comment, and checksum fields are ignored.
+Data with bad checksums will be decoded anyway. If there
+is more than one segment, then all of the output
+data will be concatenated.
+
+If the application is linked with compiled ZPAQL byte
+code generated by zpaq(1) rather than F<libzpaqo.cpp>,
+then there is no change in behavior except for speed.
+
+=back
+
+=head2 class SHA1
+
+The SHA1 class is used to compute SHA-1 checksums for compression
+and verify them for decompression. It is believed to be
+computationally infeasible to find two different strings
+with the same hash value. Its member functions
+are as follows:
+
+=over
+
+=item C<SHA1();>
+
+The constructor creates a new SHA1 object representing the
+hash of an empty string.
+
+=item C<void put(int c);>
+
+Appends one byte c (0...255) to the string whose hash is represented.
+
+=item C<double size() const;>
+
+Returns the length of the string whose hash is represented.
+The largest possible value returned is
+2^61 - 1 = 2305843009213693951.0. The initial value is 0.0.
+
+=item C<const char* result();>
+
+Computes the 20 byte SHA-1 hash and resets the string back
+to a size of 0.0. The returned pointer points to an array
+inside the SHA1 object whose
+contents remain unchanged until the next call to C<result()>.
+
+=back
+
+=head2 class Compressor
+
+The C<Compressor> class has member functions to write
+each of the syntactic elements of a ZPAQ stream and to specify
+their values. It will compress using either built-in or
+user supplied models.
+
+=over
+
+=item C<Compressor();>
+
+The constructor creates a Compression object. No input source,
+output destination, or compression model is specified.
+
+=item C<void setOutput(Writer* out);>
+
+Specifies a destination for output. Must be specified before
+calling any function that writes data.
+
+=item C<void writeTag();>
+
+Writes a 13 byte marker tag which can be used to identify
+the start of a block following non-ZPAQ data.
+
+=item C<void startBlock(int level);>
+
+Writes a block header and specifies a compression model.
+If linked with F<libzpaqo.cpp>, then C<level> must be 1, 2, or 3
+to specify I<fast>, I<mid>, or I<max> respectively. Higher numbers
+compress smaller but more slowly. If linked with F<zpaqopt.cpp>
+produced by zpaq(1), then C<level> specifies one of the models
+in that file, where 1 is the first model.
+
+=item C<void startBlock(const char* hcomp);>
+
+Writes a block header and specifies the HCOMP portion of the
+compression model. The first two bytes of the string should
+encode the length of the rest of the string as a 16 bit unsigned
+number with the least significant bit first. The meaning of the
+rest of the string is defined in the ZPAQ level 1 standard.
+
+=item C<void startSegment(const char* filename = 0, const char* comment = 0);>
+
+Writes a segment header. C<filename> and
+C<comment> are NUL terminated strings. If specified, then their
+values are stored. Normally, C<filename> would be a file name
+when compressing to an archive or omitted otherwise. For
+archives, C<comment> is normally the file size as a decimal
+number which is displayed when listing the archive contents.
+Omitting it does not affect decompression.
+
+=item C<void postProcess(const char* pcomp = 0);>
+
+Specifies the optional PCOMP string used for post-processing.
+It must be called from within the first segment
+of each block prior to compressing any data, but not from within
+any other segment.
+If C<pcomp> is 0 or no argument is passed, then the decompresser
+will not post-process the data. The effect is to compress a
+0 byte to indicate to the decompresser that no PCOMP string
+is present.
+
+If C<pcomp> is not 0, then the first two bytes must encode
+the length of the rest of the string as a 16 bit unsigned number
+with the least significant byte first. The format of the remainder
+of the string is described in the ZPAQ level 1 standard.
+The effect is to compress a 1 byte
+to indicate the presence of PCOMP, followed by the two length
+bytes and the string as passed. For example,
+C<pcomp("\x02\x00\x05\x08");>
+would compress the 5 bytes 1, 2, 0, 5, 8.
+The user is responsible for pre-processing the input
+prior to compression so that PCOMP restores the original data.
+
+=item C<void setInput(Reader* in);>
+
+Specifies the input source for compression. It must be set
+prior to the first call to C<compress()>.
+
+=item C<bool compress(int n = -1);>
+
+Compress n bytes of data, or until EOF is input, whichever comes
+first. If n < 0 or omitted, then compress until EOF.
+Returns true if there is more input available, or false if EOF
+was read.
+
+=item C<void endSegment(const char* sha1string = 0);>
+
+Stop compressing and write the end of a segment. If
+C<sha1string> is specified, it should be a 20 byte string
+as returned by C<SHA1::result()> on the input data for
+this segment I<before> pre-processing.
+
+=item C<void endBlock();>
+
+Finish writing the current block.
+
+=back
+
+In order to create a valid ZPAQ stream, the components must
+be written in the following order:
+
+    for each block do {
+        if any non-ZPAQ data then {
+            write non-ZPAQ data
+            writeTag()
+        }
+        startBlock()
+        for each segment do {
+            startSegment()
+            if first segment in block then {
+                postProcess()
+            }
+            while (compress(n)) ;
+            endSegment()
+        }
+        endBlock()
+    }
+
+=head2 class Decompresser
+
+The class Decompresser has member functions to read each of the
+syntactic elements of a ZPAQ stream.
+
+=over
+
+=item C<Decompresser()>
+
+The constructor creates a Decompresser object. No input source or
+output destination is specified.
+
+=item C<void setInput(Reader* in);>
+
+Specifies where the ZPAQ stream will be read from. Must be called
+before any function that reads the stream.
+
+=item C<bool findBlock(double* memptr = 0);>
+
+Scan the input to find the start of the next block. If a block
+does not start immediately, then the block must be preceded by
+a marker tag (written with C<Compressor::writeTag()>) or it will
+not be found. If C<memptr> is not 0, then write the approximate
+memory requirement (in bytes) to decompress to C<*memptr>). The
+memory will be allocated by the first call to C<decompress()>.
+It returns true if a block is found, or false if it reads to EOF
+without finding a block.
+
+=item C<void hcomp(Writer* out);>
+
+Write the HCOMP string of the current block to C<out>.
+It will be in a format suitable
+for passing to C<Compressor::startBlock()>. The first 2 bytes will
+encode the length of the rest of the string as a 16 bit unsigned
+integer with the least significant byte first. The format of the
+remainder of the string is described in the ZPAQ level 1
+specification.
+
+=item C<bool findFilename(Writer* out = 0);>
+
+Find the start of the next segment. If another segment is found
+within the current block then return true. If the end of the block
+is found first, then return false. If a segment is found, the
+filename field is not empty, and C<out>
+is not 0, then write the filename (without a terminating NUL byte)
+to C<out>.
+
+=item C<void readComment(Writer* out = 0);>
+
+Read or skip past the comment field following the filename field
+in the segment header. If C<out> is not 0 and the comment field is
+not empty, then write the comment
+(without a terminating NUL byte) to C<out>.
+
+=item C<void setOutput(Writer* out);>
+
+Specify the destination for decompression. It must be set before
+any data can be decompressed.
+
+=item C<void setSHA1(SHA1* sha1ptr);>
+
+Specify the address of a SHA1 object for computing the checksum
+of the decompressed data (after post-processing). As each byte C<c>
+is output, it is also passed to C<sha1ptr-E<gt>put(c)>. In order to
+compute the correct checksum, the SHA1 object should be in its
+initial state, either newly created, or by calling C<SHA1::result()>,
+before the first call to C<decompress()>. When the end of the segment
+is reached, the value returned by C<sha1ptr-E<gt>result()> should match
+the stored checksum, if any.
+
+=item C<bool decompress(int n = -1);>
+
+Decode n byte or until the end of segment, whichever comes
+first. Return false if the end of segment is reached first. If
+n < 0 or not specified, then decompress to the end of segment
+and return false. C<n> is the number of bytes prior to post-processing.
+If the data is post-processed, then the size of the output may
+be different.
+
+=item C<bool pcomp(Writer* out);>
+
+Write the PCOMP string, if any, for the current block to C<out>.
+If there is no PCOMP string (no post-processor) then return false.
+Otherwise write the string to C<out> in a format suitable for
+passing to C<Compressor::postProcess()> and return true. If written,
+then the first 2 bytes will encode the length of the rest of the
+string as a 16 bit unsigned integer with the least significant
+bit first. The format of the rest of the string is descibed in
+the ZPAQ level 1 standard.
+
+C<pcomp()> is only valid after the first call to C<decompress()>
+in the current block. To read the PCOMP string without decompressing any
+data, then call C<decompress(0)> first. It is not necessary to
+call C<setOutput()> in this case.
+
+=item C<void readSegmentEnd(char* sha1string = 0);>
+
+Skip any compressed data in the current segment that has not yet
+been decompressed and advance to the end of the segment.
+Then if C<sha1string> is not 0 then write into
+the 21 byte array that it points to. If a checksum is present,
+then write a 1 into C<sha1string[0]> and write the stored checksum
+in C<sha1string[1...20]>. Otherwise write a 0 in C<sha1string[0]>.
+
+=back
+
+A valid sequence of calls is as follows:
+
+    while (findBlock()) {
+        while (findFilename()) {
+            readComment();
+            if first segment in block then { (optional)
+                decompress(0)
+                pcomp()
+            }
+            while (decompress(n)) ; (optional)
+            readSegmentEnd();
+        }
+    }
+
+=head1 EXAMPLES
+
+The following program F<listzpaq.cpp>
+lists the contents of a ZPAQ archive
+read from standard input.
+
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include "libzpaq.h"
+
+    // Implement Reader and Writer interfaces for file I/O
+    class File: public libzpaq::Reader, public libzpaq::Writer {
+        FILE* f;
+    public:
+        File(FILE* f_): f(f_) {}
+        int get() {return getc(f);}
+        void put(int c) {putc(c, f);}
+    };
+
+    // Implement error handler
+    namespace libzpaq {
+        void error(const char* msg) {
+            fprintf(stderr, "Error: %s\n", msg);
+            exit(1);
+        }
+    }
+
+    // List the contents of an archive. For each block, show
+    // the memory required to decompress. For each segment,
+    // show the filename and comment.
+    void list(FILE* input, FILE* output) {
+        libzpaq::Decompresser d;
+        File in(input), out(output);
+        double memory;
+        d.setInput(&in);
+        for (int block=1; d.findBlock(&memory); ++block) {
+            printf("Block %d needs %1.0f MB\n", block, memory/1e6);
+            while (d.findFilename(&out)) {  // print filename
+                printf("\t");
+                d.readComment(&out);  // print comment
+                printf("\n");
+                d.readSegmentEnd();  // skip compressed data
+            }
+        }
+    }
+
+    int main() {
+        list(stdin, stdout);
+        return 0;
+    }
+
+The program could be compiled as follows:
+
+    g++ listzpaq.cpp libzpaq.cpp libzpaqo.cpp -DNDEBUG
+
+The following code compresses a list of files into one block
+written to stdout. Each file is compressed to a separate
+segment. For each segment, the filename, comment, and SHA-1
+checksum are stored. The comment, as conventional, is the
+file size as a decimal string.
+
+    // Compress one file to one segment
+    void compress_file(libzpaq::Compressor& c,
+                       const char* filename,
+                       bool first_segment) {
+
+        // Open input file
+        FILE* f;
+        f=fopen(filename, "rb");
+        if (!f) return;
+
+        // Compute SHA-1 checksum and file size
+        libzpaq::SHA1 sha1;
+        int ch;
+        while ((ch=getc(f))!=EOF)
+            sha1.put(ch);
+
+        // Write file size as a comment.
+        // The size can have at most 19 digits.
+        char comment[20];
+        sprintf(comment, "%1.0f", sha1.size());
+
+        // Compress segment
+        rewind(f);
+        File in(f);
+        c.startSegment(filename, comment);
+        if (first_segment)
+            c.postProcess();
+        c.setInput(&in);
+        c.compress();
+        c.endSegment(sha1.result());
+
+        // Close input file
+        fclose(f);
+    }
+
+    // Compress a list of argc files in argv[0...argc-1] into one
+    // ZPAQ block to stdout at level 2.
+    void compress_list(int argc, char** argv) {
+        libzpaq::Compressor c;
+        File out(stdout);
+        c.setOutput(&out);
+        c.startBlock(2);
+        for (int i=0; i<argc; ++i)
+            compress_file(c, argv[i], i==0);
+        c.endBlock();
+    }
+
+The following function decompresses from stdin to stdout.
+Filenames and comments are ignored, but checksums are verified
+if present.
+
+    void decompress() {
+        libzpaq::Decompresser d;
+        File in(stdin), out(stdout);
+        d.setInput(&in);
+        while (d.findBlock()) {
+            while (d.findFilename()) {
+                d.readComment();
+                libzpaq::SHA1 sha1;
+                d.setSHA1(&sha1);
+                d.setOutput(&out);
+                d.decompress();
+                char sha1string[21];
+                d.readSegmentEnd(sha1string);
+                if (sha1string[0]==1
+                         && memcmp(sha1string+1, sha1.result(), 20))
+                    libzpaq::error("checksum verify error");
+            }
+        }
+    }
+
+C<Compressor::compress()> and C<Decompresser::decompress()> can
+be passed an argument n to display progress every n bytes,
+for example:
+
+    for (int i=1; d.decompress(1000000); ++i)
+        fprintf(stderr, "Decompressed %d MB\n", i);
+
+To compress or decompress to and from objects in memory, derive
+appropriate classes from C<Reader> and C<Writer>. For example, it is
+possible to compress or decompress to a C<std::string> using
+the following class.
+
+    struct String: public libzpaq::Writer {
+        std::string s;
+        void put(int c) {s+=char(c);}
+    };
+
+This class is also useful for reading the filename and comment
+fields during decompression as follows:
+
+    String filename, comment;
+    while (d.findFilename(&filename)) {
+        d.readComment(&comment);
+        // ...
+
+=head1 ADVANCED API FEATURES
+
+I<libzpaq> has additional classes and methods for advanced uses
+such as collecting modeling statistics, running and debugging ZPAQL code,
+and testing post-processing code. These functions are used
+by zpaq(1) to assist in compression algorithm development.
+All classes are in C<namespace libzpaq>.
+
+=head2 Types
+
+    typedef unsigned char U8;
+    typedef unsigned short U16;
+    typedef unsigned int U32;
+
+These should be set appropriately for your machine
+to represent 8, 16, and 32 bit two's complement
+unsigned integers, respectively.
+These settings will work on most machines but are not
+guaranteed by the C/C++ standard.
+In particular, C<int> could be 16 bits.
+C<U32> really ought to be defined as C<uint32_t>, but some
+older compilers don't support this.
+
+=head2 Array
+
+An C<Array> is used for memory allocation of simple types without
+constructors. The memory is allocated on a 64 byte address boundary,
+which can improve performance by decreasing cache misses. When
+an Array is created or resized, the memory is initialized to
+zero bits. Arrays cannot be copied or assigned. When compiled
+without -DNDEBUG, element accesses are bounds checked. The maximum
+size is 2^30 - 1 bytes (under 1 GB).
+
+    template <typename T>
+    class Array {
+    public:
+        Array(int sz=0, int ex=0);
+        void resize(int sz, int ex=0);
+        int size() const;
+        T& operator[](int i);
+        T& operator()(int i);
+    };
+
+=over
+
+=item C<template <typename T>>
+
+C<T> is the type of the element. It should be a simple type without
+constructors.
+
+=item C<Array(int sz=0, int ex=0);>
+
+Creates an Array with C<sz> * 2^C<ex> elements.
+(The size is specified this way because C<sz E<lt>E<lt> ex>
+might overflow). If C<ex> is omitted, then
+the size is C<sz> elements. If C<sz> is omitted, then no memory is
+allocated. If the requested size exceeds 1^30 - 1 (for
+example, C<Array<int> a(1, 100);>) then it calls C<error("Array too big")>.
+If allocation fails, then it calls C<error("Out of memory")>.
+
+=item C<resize(int sz=0, int ex=0);>
+
+Changes the size of the Array as with creation and zeros the memory.
+
+=item C<int size() const;>
+
+Returns the number of elements.
+
+=item C<T& operator[](int i);>
+
+Returns a reference to the i'th element
+(e.g. C<a[i]>) where i is in the range 0...C<size()-1>.
+
+=item C<T& operator()(int i);>
+
+(e.g. C<a(i)>) returns a reference to the element indexed by
+the low log2(C<size()>) bits of C<i>. The size must be a power of 2.
+
+=back
+
+=head2 ZPAQL
+
+A C<ZPAQL> object is a virtual machine for executing ZPAQL
+code, either the HCOMP string (model context computation) or
+the PCOMP string (post-processor). It contains a machine
+state (registers and memory) and program code.
+
+    class ZPAQL {
+    public:
+        ZPAQL();
+        void clear();
+        int read(Reader* in);
+        bool write(Writer* out);
+        void inith();
+        void initp();
+        double memory();
+        void run(U32 input);
+        int step(U32 input, int mode);
+
+        Writer* output;
+        SHA1* sha1;
+
+        // Program
+        Array<U8> header;
+        int cend;
+        int hbegin, hend;
+        int select;
+    private:
+        void run0(U32 input);
+        int execute();
+
+        // Machine state
+        Array<U8> m;
+        Array<U32> h;
+        Array<U32> r;
+        U32 a, b, c, d;
+        int f;
+        int pc;
+    };
+
+=over
+
+=item C<ZPAQL()>
+
+Creates an empty ZPAQL object with no program code.
+
+=item C<clear()>
+
+Initializes a ZPAQL object as with creation. Any allocated
+memory is freed. Normally called at the end of a ZPAQ block.
+
+=item C<int read(Reader* in);>
+
+Load the ZPAQL object with program code. The first 2 bytes
+is the length of the rest of the input, LSB first. The
+rest of the string should have the following format
+for an HCOMP string:
+
+    len0 len1 h m x x n COMP 0 HCOMP 0
+
+or for a PCOMP string:
+
+    len0 len1 x x h m 0 0 PCOMP 0
+
+The total length is len0 + 256*len1 + 2. I<x> is
+irrelevant. I<h> and I<m> are the log sizes of
+the virtual machine H and M arrays, respectively. COMP is a
+list of n components, n > 0. For a PCOMP string, n = 0
+and COMP is omitted. HCOMP and PCOMP are strings
+of ZPAQL code.
+
+=item C<bool write(Writer* out);>
+
+Write the program code. If there is no code to write, then
+return false. Otherwise, if the loaded program has the
+form of an HCOMP string (n > 0), then write it in the same
+format as it was read, which is also the format
+expected by C<Compressor::startBlock()> and written
+by C<Decompresser::hcomp()>.
+
+If the loaded program has the form of a PCOMP string (n = 0),
+then write in the format:
+
+    len0 len1 PCOMP
+
+such that PCOMP has length len0 + 256*len1. This is the
+format expected by C<Compressor::postProcess()> and
+returned by C<Decompresser::pcomp()>.
+
+=item C<double memory();>
+
+Return the approximate memory required (in bytes)
+to initialize the loaded program (mostly
+the H and M arrays).
+
+=item C<void inith()>
+
+Initialize the virtual machine state, as for the beginning
+of a block. An HCOMP string must be loaded. This allocates
+the H and M arrays. It is required before the program can
+be run.
+
+=item C<void initp()>
+
+Initialize as with C<inith()> but for a PCOMP string.
+
+=item C<void run(U32 input);>
+
+Execute the loaded program. The input is loaded into the A
+register. Execution continues until it executes a HALT
+instruction. Execution semantics is described in the ZPAQ level 1
+standard.
+
+C<run()> is implemented in I<libzpaqo> or in I<zpaqopt> which
+is generated by zpaq(1). It may contain optimized code
+(ZPAQL translated into C++).
+
+=item C<int step(U32 input, int mode);>
+
+This function is not implemented. It is available to
+allow user access to private members. In zpaq(1), it traces
+execution, displaying register contents after each instruction
+is executed and dumps memory on return.
+
+=item C<Writer* output;>
+
+Points to the destination of the OUT instruction. It calls
+output->put(A) for each output byte A. If 0, then
+OUT does not write anything. It is normally set only for PCOMP.
+
+=item C<SHA1* sha1;>
+
+Points to the destination of the OUT instruction for computing
+SHA-1 checksums. It calls sha1->put(A) for each output byte A.
+If sha1 is 0, no checksum is computed. It is normally set only
+for PCOMP when the user code verifies checksums.
+
+=item Program
+
+The program is loaded into the array C<header> as described
+in C<read()> except that 128
+extra 0 bytes are inserted before and after the code (so that
+jumps out of bounds are easily detected. 0 is the ERROR opcode).
+C<cend> points to the first byte after COMP. C<hbegin> and
+C<hend> point to the first byte of code and 1 past the
+last byte, respectively.
+
+=item C<int select;>
+
+C<select> tells C<run()> whether to interpret the code in
+C<header> or to execute the optimized code in I<libzpaqo>
+or linked from I<zpaqopt> generated by zpaq(1). If it
+is positive, then it selects the corresponding section
+of optimized code. If it is 0, then the code is interpreted
+by C<run0()>. C<select> is set by C<inith()> and C<initp()>
+by comparing the loaded program to a list of optimized
+programs in the array C<models[]> in I<libzpaqo> (for
+I<fast>, I<mid>, and I<max>), or a list generated
+by zpaq(1) in I<zpaqopt>. C<models[]> is declared in
+one of these files as:
+
+    const char models[];
+
+and initialized to a linked list of
+strings each with the format:
+
+    len0 len1 hh hm ph pm n COMP 0 HCOMP 0
+
+where in the case of a PCOMP string, n = 0 and COMP is empty.
+Otherwise, n > 0 is the number of components in COMP.
+In either case it is in the format expected by C<read()>,
+and the total length is len0 + 256*len1 + 2. The end of
+the list is marked with two 0 bytes. C<select> is set
+by scanning the list for the first match of COMP and HCOMP
+starting at C<n> and setting it to the number of strings
+compared when the match is found (1 or more).
+
+=item C<int execute();>
+
+Execute one instruction. This updates the machine state
+and possibly outputs a byte if an OUT instruction is
+executed. Returns 0 after executing HALT and 1 otherwise.
+
+=item Machine state
+
+The ZPAQL machine state consists of registers A, B, C, D,
+R0 through R255 (allocated in C<r>), variable sized arrays
+M and H, condition flag F, and a program counter PC. In HCOMP,
+H supplies the contexts to COMP. In PCOMP, H has no special
+meaning, and output is by the OUT instruction. Input is
+passed to A. PC points to the next instruction to execute
+in C<header[hbegin...hend-1]>. See the ZPAQ level 1
+specification for the meanings of instructions.
+
+=back
+
+=head2 Predictor
+
+A Predictor is used for modeling. It predicts the next bit to
+be arithmetic coded or decoded. After coding, the Predictor should be
+updated with that bit.
+
+    class Predictor {
+    public:
+        Predictor(ZPAQL& z);
+        void init(); 
+        int predict();
+        void update(int y);
+        int stat(int);
+    private:
+        int predict0();
+        void update0(int y);
+
+        ZPAQL& z;
+        Component comp[256];
+    };
+
+=over
+
+=item C<Predictor(ZPAQL& z);>
+
+A Predictor should be initialized with an external ZPAQL
+object containing the HCOMP code that will be used to
+compute the contexts for its model. The Predictor's model
+is initialized from the COMP section of this code.
+
+=item C<void init();>
+
+Initializes the model state (including z) at the beginning
+of a ZPAQ block.
+
+=item C<int predict();>
+
+Returns the probability that the next update will be a 1.
+The probability is a 15 bit number p in 0...32767 representing
+a probability of (p*2+1)/65536.
+
+=item C<void update(int y);>
+
+Updates the model with bit C<y>, which should be 0 or 1.
+
+C<predict()> and C<update()> are defined in either
+I<libzpaqo> or I<zpaqopt> generated by zpaq(1).
+If z.select is 0, then C<predict()> calls C<predict0()>
+and C<update()> calls C<update0()> to
+interpret the COMP section of z. If it is positive, then
+the predictor executes optimized code which is equivalent
+but faster.
+
+=item C<int stat(int);>
+
+This function is not implemented. It is to provides user access
+to private members. zpaq(1) uses it to print statistics for
+the model. The data structures of interest are C<comp>, an
+array of n = z.header[6] (up to 255) components, and the corresponding
+ZPAQL byte code string COMP in z.header[7...z.cend-1].
+Each component element in C<comp> has the form:
+
+    struct Component {
+        int limit;
+        U32 cxt; 
+        int a, b, c; 
+        Array<U32> cm;
+        Array<U8> ht;
+        Array<U16> a16;
+    };
+
+COMP contains a list of components, which are variable length
+strings. The first byte is the component type defined by the
+enumeration:
+
+    typedef enum {NONE,CONS,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE} CompType;
+
+The length in bytes of each description is given by
+
+    extern const int compsize[256];
+
+For example, compsize[CONS] = 2, meaning that a byte CONS in
+z.header is followed by 1 more byte.
+The meanings of the data members of a Component depend on the type
+and not all are used.
+The possible component descriptions are as follows. Refer to
+zpaq(1) or the ZPAQ level 1 specification
+for the meanings of these descriptions.
+
+=over
+
+=item CONS c
+
+Constant (CONST) prediction of C<c>.
+No members of C<Component> are used.
+
+=item CM s limit
+
+Direct context model. C<cm> is the prediction table of size 2^C<s>
+elements. The high 22 bits of each element
+is the prediction, representing a probability between 0 and 1.
+The low 10 bits is the count, which controls the update rate and is
+limited to C<limit>, which is initialized to I<limit>*4.
+
+=item ICM s
+
+Indirect context model. C<ht> is a hash table of size 2^(I<s>+6)
+that maps contexts to bit histories. C<cm> is a prediction table
+of size 256 that maps bit histories to predictions and counts
+as with a CM.
+
+=item MATCH s b
+
+Match model. C<ht> is a history buffer of size 2^I<b> bytes.
+C<cm> is a hash table of size 2^I<s> elements that point into
+the history buffer.
+
+=item AVG j k wt
+
+Fixed weight 2 input mixer with inputs I<j> and I<k> and weight
+I<wt>. No members are used.
+
+=item MIX2 s j k rate mask
+
+Two input mixer with inputs I<j> and I<k> and a specified
+update rate. C<a16> is an array
+of C<c> = 2^I<s> weights selected by a masked context.
+A weight is a 16 bit unsigned fixed point number
+between 0 and 1.
+
+=item MIX s j m rate mask
+
+C<m> input mixer with inputs I<j>...I<j>+I<m>-1 with
+specified update rate. C<cm> is a (C<c> = 2^I<s>) by I<m>
+array of weights (e.g. C<weight[c][m]>). A weight is a 20
+bit signed fixed point number between -8 and 8 in increments
+of 2^-16.
+
+=item ISSE s j
+
+Indirect secondary symbol estimator with input I<j>. C<ht>
+is a hash table of 2^(I<s>+6) bit histories mapped from
+contexts. C<cm> is a 256 by 2 array of 20 bit signed weights
+mapping a bit history to a pair of weights as in a 2 input
+MIX. The weights are for the input from component C<j> and
+a fixed constant, respectively.
+
+=item SSE s j start limit
+
+Secondary symbol estimator with input I<j>. C<cm> is a
+2^I<s> by 32 array of elements mapping an I<s> bit context
+and an input prediction quantized to 32 steps to a prediction
+and a count. The prediction is in the high 22 bits of the
+element and the count (initialized to I<start> with maximum
+C<limit> = I<limit> * 4) in the low 10 bits.
+
+=back
+
+The members C<a>, C<b>, C<c>, C<cxt>, and C<limit> are sometimes
+used as temporary variables to store values between predictions
+and subsequent updates. C<cxt> usually stores the prediction context
+which is used to select the elements to be updated.
+In a MATCH, C<a> stores the length of the current match,
+C<b> is the offset to the start of the match, C<c> is
+the predicted bit, C<limit> is the current location in the
+history buffer, in bits, and C<cxt> = 256/length is updated
+on byte boundaries to reduce the number of division operations.
+
+=back
+
+=head2 Decoder
+
+A Decoder decompresses ZPAQ data using arithmetic coding with
+an internal Predictor to assign bit probabilities. A compressed
+stream never contains 4 consecutive zero bytes except at the
+end.
+
+    class Decoder {
+    public:
+        Decoder(ZPAQL& z);
+        Reader* in;
+        void init()
+        int decompress();
+        int skip();
+        int stat(int x);
+    };
+
+=over
+
+=item C<Decoder(ZPAQL& z);>
+
+Creates a Decoder. C<z> is a ZPAQL object which must already
+be loaded with an HCOMP string but not yet initialized with
+C<z.inith()>. An internal Predictor will be created from
+the COMP section of the loaded string in C<z>. It will use
+the HCOMP section of that string to compute contexts.
+
+=item C<Reader* in;>
+
+Specifies the compressed data source. It must be set to the
+first byte of compressed data before any decompression.
+
+=item C<void init();>
+
+Initializes the Decoder at the beginning of each block. It
+must be called before decompression of each block (but not
+each segment). It calls
+C<Predictor::init()>, which in turn calls C<z.inith()>.
+
+=item C<int decompress();>
+
+Decompresses and returns one byte (0...255) or -1 (EOF) at
+the end of a segment. After EOF, no further decoding will
+be possible until C<in> is advanced to the start of the
+compressed data in the next segment.
+
+=item C<int skip();>
+
+Skips the rest of the compressed data segment and returns the next
+byte following. That should be an end of segment marker,
+either 253 if a 20 byte SHA-1 checksum follows, or 254
+otherwise. It is an error to call C<decompress()> after
+C<skip()> in the same block. Any remaining segments must also be
+skipped.
+
+=item C<int stat(int x);>
+
+Returns C<Predictor::stat(x)>.
+
+=back
+
+=head2 PostProcessor
+
+A PostProcessor filters decoded data according to any PCOMP
+string that might be present in the beginning of the first
+segment of a block. The decoder returns a string in one of
+two forms.
+
+    0 DATA
+
+if no PCOMP string is present, in which case DATA is output, or
+
+    1 len0 len1 PCOMP DATA
+
+in which case PCOMP specifies a post-processor in ZPAQL byte code
+of length len0+256*len1. PCOMP (executing in a ZPAQL object) is
+called once for each byte of DATA and once more with EOS
+(unsigned -1 or 0xFFFFFFFF) at the end of each segment. The
+output of the decompresser is the output of this program. Subsequent
+segments in the same block contain only DATA in either case.
+
+    class PostProcessor {
+    public:
+        ZPAQL z;
+        PostProcessor();
+        void init(int h, int m);
+        void setOutput(Writer* out);
+        void setSHA1(SHA1* sha1ptr);
+        int write(int c);
+        int getState();
+        int getModel();
+    };
+
+=over
+
+=item C<ZPAQL z;>
+
+C<z> is the ZPAQL machine that executes the post-processing
+code, if any. It need not be initialized by the user. It is available
+so that its state can be read.
+
+=item C<PostProcessor();>
+
+Creates a new object.
+
+=item C<void init(int h, int m);>
+
+Specifies the log sizes of the H and M arrays in C<z>. This information
+is not available in the PCOMP string. It is obtained from header[4]
+and header[5] of the HCOMP string in the archive header which is
+normally read into the other ZPAQL object. It must be called
+at the beginning of each ZPAQ block before passing any decoded
+data to it.
+
+=item C<void setOutput(Writer* out);>
+
+Specifies the output destination. If 0 or not set,
+then nothing is written.
+
+=item C<void setSHA1(SHA1* sha1ptr);>
+
+Specifies the output destination for computing checksums. If
+0 or not set, then no checksum is computed. It is called once
+for each output byte.
+
+=item C<int write(int c);>
+
+Write one byte from the Decoder. The PostProcessor will
+parse the PCOMP string, if any, and initialize C<z> from
+this string and the values set by C<init()>. All of the
+decoded bytes including EOS at the end of each segment
+should be passed to C<write()>. If there is no PCOMP
+string, then all of DATA (but not the leading 0 or trailing
+EOS after each segment) will be copied to output.
+
+=item C<int getState();>
+
+Returns the parse state. Initially it is 0. It is 1
+when DATA will be copied without post-processing. It is 2,
+3, or 4 when the PCOMP string is being read, and 5 after
+all of PCOMP is read and any data written will be post-processed.
+It stays in state 1 or 5 until the next call to init().
+
+=item C<int getModel();>
+
+Returns C<z.select>, which is 1 or higher if PCOMP matches
+a string in models[] for which optimized code exists, or 0
+if no match is found and the code is interpreted. In this
+case, it will execute more slowly.
+
+=back
+
+=head2 Encoder
+
+An Encoder, similar to a Decoder, compresses data using arithmetic
+coding modeled by an internal Predictor. Unlike decoding, there
+is no corresponding PreProcessor. If post-processing is used, then
+the user is responsible for preprocessing before encoding.
+
+    class Encoder {
+    public:
+        Encoder(ZPAQL& z);
+        void init();
+        Writer* out;
+        void compress(int c);
+        int stat(int x);
+    };
+
+=over
+
+=item C<Encoder(ZPAQL& z);>
+
+Creates an Encoder. Its internal Predictor is initialized according
+to the HCOMP string that must be loaded into C<z> before it
+is created.
+
+=item C<void init();>
+
+Initializes the internal Predictor and C<z>. Must be called before
+compressing any data at the start of each block (but not segment).
+
+=item C<Writer* out;>
+
+Specifies the destination for compressed data. C<out> should be
+positioned at the end of a segment header.
+
+=item C<void compress(int c);>
+
+If C<c> is in 0...255, then compress one byte. If C<c> is EOS (-1),
+then mark the end of the segment. A segment trailer and new segment
+header must be written to C<out> before any more compression. To
+compress to a new block, a new Encoder should be created.
+
+=item C<int stat(int x);>
+
+Returns C<Predictor::stat(x)>.
+
+=back
+
+=head2 Decompresser and Compressor
+
+The following additional methods are available to indicate if
+optimized code is detected, or to obtain access to the model.
+
+    class Decompresser {
+    public:
+        int getModel() const {return z.select;}
+        int getPostModel() const {return pp.getModel();}
+        int stat(int x) {return dec.stat(x);}
+    };
+
+    class Compressor {
+    public:
+        int getModel() const {return z.select;}
+        int stat(int x) {return enc.stat(x);}
+    }
+
+=over
+
+=item C<int getModel();>
+
+Returns C<ZPAQL::select>, which is 0 if the HCOMP code is
+interpreted, or positive if the model is optimized to run faster
+by matching one of the strings in C<models[]> in I<libzpaqo>
+or I<zpaqopt>. If the application is linked to I<libzpaqo>, then
+1, 2, or 3 mean I<fast>, I<mid>, or I<max> respectively.
+
+=item C<getPostModel();>
+
+Returns C<PostProcessor.getModel()> which has the same meaning
+as C<getModel()> to indicate if PCOMP is optimized. It is 0 if
+there is no post-processsor, as is always the case when linking
+with I<libzpaqo>.
+
+=item C<int stat(int x);>
+
+Returns C<Predictor::stat(x)>.
+
+=back
+
+=head1 AVAILABILITY
+
+I<libzpaq>, I<zpaq>, and the ZPAQ level 1 specification are
+available from L<http://mattmahoney.net/dc/zpaq.html>.
+
+=head1 SEE ALSO
+
+C<zpaq(1)>
+C<sha1(1SSL)>
+
+=cut
+
+
