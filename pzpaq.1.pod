@@ -1,0 +1,408 @@
+#   Copyright
+#
+#      Copyright (C) 2011, Dell Inc.
+#      Written by Matt Mahoney <matmahoney@yahoo.com>
+#
+#   License
+#
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 3 of the License, or
+#       (at your option) any later version.
+#
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#       GNU General Public License for more details.
+#
+#       You should have received a copy of the GNU General Public License
+#       along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+#   Description
+#
+#	To learn what TOP LEVEL section to use in manual pages,
+#	see POSIX/Susv standard and "Utility Description Defaults" at
+#	http://www.opengroup.org/onlinepubs/009695399/utilities/xcu_chap01.html#tag_01_11
+#
+#	This is manual page in Perl POD format. Read more at
+#	http://perldoc.perl.org/perlpod.html or run command:
+#
+#	    perldoc perlpod | less
+#
+#	To check the syntax:
+#
+#	    podchecker *.pod
+#
+#	Create manual page with command:
+#
+#	    pod2man PAGE.N.pod > PAGE.N
+
+=pod
+
+=head1 NAME
+
+pzpaq - Parallel ZPAQ file compressor and archiver
+
+=head1 SYNOPSIS
+
+pzpaq [-123cdehklvx] [-bI<blocksize>] [-mI<memory>]
+[-sI<suffix>] [-tI<threads>] [I<files>] ...
+
+=head1 GENERAL
+
+I<pzpaq> compresses and decompresses files in the open
+standard ZPAQ format to achieve a high level of compression.
+The format is compatible with all ZPAQ level 1 compliant
+software including zpaq(1), zpipe(1), and libzpaq(3).
+I<pzpaq> is primarily a file compressor but it can also
+create and extract archives containing more than one file.
+
+I<pzpaq> supports 3 built in compression levels, but understands others.
+The three levels are equivalent to the I<fast>, I<mid>, and I<max>
+levels used in zpaq(1), zp(1), and zpipe(1). Unlike these programs,
+I<pzpaq> can speed up compression and decompression by dividing
+input files into independent blocks (losing some compression
+and requiring more memory) and process them in parallel
+on multi-core machines.
+
+The following table compares the 3 levels (B<-1>, B<-2>, B<-3>)
+each with one or two threads (B<-t1>, B<-t2>)
+with some popular formats on the 14 file Calgary benchmark as a
+tar(1) file. Compressed size is in bytes. Compression and decompression
+times are wall (real) times measured on a lightly loaded
+dual core 2 GHz T3200 under 64 bit Linux. pbzip2 and p7zip are
+parallel versions of bzip2 and 7zip that run on 2 cores.
+Memory shows the requirement for compression and decompression
+respectively.
+
+    Program        Size     Compress Decompress   Memory
+    -------      ---------  -------- ----------  --------
+    Uncompressed 3,152,896
+    compress     1,325,806    0.2 sec  0.05 sec  <1    <1 MB
+    gzip -9      1,022,810    0.5      0.05      <1    <1
+    bzip2          860,097    0.6      0.3        7     4
+    pbzip2         857,292    0.4      0.3       25    16
+    p7zip          824,573    1.5      0.1      192    18
+    pzpaq -1 -t1   806,972    2.4      2.5       38    38
+    pzpaq -1 -t2   818,007    1.5      1.6       76    76
+    pzpaq -2 -t1   699,191    7.4      7.5      112   112
+    pzpaq -2 -t2   708,526    4.6      4.8      224   224
+    pzpaq -3 -t1   644,203   19.6     19.8      247   247
+    pzpaq -3 -t2   653,100   13.2     13.5      494   494
+
+The command line interface is similar to that of
+C<compress(1)>, C<gzip(1)>, and C<bzip2(1)>.
+The default behavior of I<pzpaq> is to compress each of the
+files on the command line and replace each I<file> with a
+single file archive I<file>C<.zpaq>, saving the original filename
+with a path as specified on the command line,
+and the original size as a comment. Archives can be concatenated
+together to produce multi-file archives, or can be compressed
+all at once to a solid archive to standard output with B<-c>
+for better compression.
+
+Decompression with B<-d> replaces each I<file>C<.zpaq> with
+the original I<file>, ignoring any saved filenames. You can
+also extract using the saved filenames to the current directory
+with B<-e> or the originally specified directory with B<-x>.
+File attributes other than the filename such as owner, permissions,
+or modification date are not preserved.
+
+If any output files or temporary files already exists then
+they are overwritten.
+
+If no file names are given, then I<pzpaq> compresses or decompresses from
+standard input to standard output. Data from standard input cannot
+be processed in parallel. Original filenames and sizes are
+not saved during compression and are ignored during decompression.
+
+=head1 OPTIONS
+
+Options and files may be in any order. Options with arguments
+should be written without spaces, like B<-t4>. Options without
+arguments may have other options appended, like B<-3ct4>
+for B<-3 -c -t4>. If conflicting options from the set B<-123dexl>
+are used, then only the last one has any effect.
+
+=over
+
+=item --
+
+Stop option processing. Any arguments afterward are treated
+as file names even if they start with C<->.
+
+=item -1 -2 -3
+
+Select fast, medium, or best compression respectively.
+The default is B<-2> (medium). Higher numbers
+compress better but are slower and require more memory. Decompression
+will require about the same time and memory as compression.
+
+=item -bI<N>
+
+For compression, divide the input into blocks of N bytes
+which can be compressed in parallel by multiple threads for
+better speed. B<-b0> selects a block of effectively infinite
+size, which means that only one thread can compress each file.
+Otherwise, the allowed range of block sizes is 4096
+to 2147483647 (2^31 - 1). Arguments outside this range
+will be adjusted to the nearest allowed value.
+
+The default block size is the total size of all input files divided
+by the number of threads selected by B<-t>, rounding up, but within
+the permitted range. If any input file has an unknown size, such
+as when compressing from standard input, then the default is
+B<-b0>.
+
+If a file is split across blocks, then each input
+block after the first is compressed to separate temporary archive
+and then concatenated.
+The temporary files are named I<file>C<.zpaq.tmp1>, I<file>C<.zpaq.tmp2>,
+etc. for the second and subsequent blocks.
+Likewise, when it is decompressed, temporary files are created by adding
+the extensions C<.tmp1>, C<.tmp2>, etc. to the output file name.
+If writing to standard output with B<-c>, then temporary files are
+named as above where I<file> is the empty string. Any existing file
+by the same name as a temporary file is overwritten and deleted.
+If reading from standard input or B<-b0> is used,
+then no temporary files are created. The temporary filename
+extension can be changed with B<-s>.
+
+Note that a small block size generally makes compression worse,
+but a large block size can be slower because there cannot be
+more threads running at once than there are blocks.
+The default balances the load among threads.
+
+=item -c
+
+Compress or decompress to standard output and do not delete the input
+files when done (implies B<-k>).
+This often compresses better than compressing files individually.
+
+=item -d
+
+Decompress and replace each I<file>C<.zpaq> with I<file>,
+ignoring any saved filenames.
+
+=item -e
+
+Extract the contents I<file>C<.zpaq> to the current directory
+using the saved filenames, ignoring any saved path. Any unnamed
+data is extracted to I<file>. Existing files are overwritten.
+Keep I<file>C<.zpaq> (implies B<-k>).
+
+=item -h
+
+Print a help message.
+
+=item -k
+
+Keep input files after successful compression or decompression.
+The default is to delete them.
+
+=item -l
+
+List the archive contents of I<files>
+to standard output. If no files are specified, then list from
+standard input.
+
+A listing displays for each block in each file, the memory in
+MB (1,000,000 bytes, rounding up) required to decompress it.
+For each segment in the block, the first 8 hexadecimal digits
+of the checksum (if any), saved filename (if any), and
+comment (if any) are shown.
+
+=item -mI<N>
+
+Limit the number of threads that can run at one time so that
+the total memory used is not more than N MB (N million bytes).
+The default is B<-b500>, which is sufficient for B<-3 -t2>.
+If any single block still requires more than N MB, then it
+will still attempt to run.
+
+=item -sI<suffix>
+
+Specify the extension for temporary files created when a file
+is split into blocks. The default is B<-s.tmp>
+
+=item -tI<N>
+
+Use up to N threads. The default is B<-t2>. The effect
+is to speed up compression or decompression when more than
+one core or processor is available by processing up to N blocks
+in parallel. Memory usage is equal to the sum of the memory
+requirements of all blocks being processed at the same time.
+
+Reading from standard input implies B<-t1>.
+Specifying N greater than the number of
+available cores or processors or greater than the number of
+input blocks does not increase speed.
+
+=item -v
+
+Verbose. Report progress to standard error. Normally there
+is no output unless there is an error. Errors and warnings
+are always printed to standard error in either case.
+
+=item -x
+
+Extract the contents of I<file>C<.zpaq>  using the saved
+filenames like B<-e> but including the saved path.
+Interpret backslashes (\) in the path as forward slashes (/).
+Existing files are overwritten. It is an error if the
+path specifies a directory that does not exist. If no filename
+is saved then extract to I<file>. Keep I<file>C<.zpaq>
+(implies B<-k>).
+
+=back
+
+=head1 EXIT STATUS
+
+Returns 1 if there is an error or 0 otherwise.
+
+=head1 ENVIRONMENT
+
+None.
+
+=head1 FILES
+
+None.
+
+=head1 CONFORMING TO
+
+I<pzpaq> reads and writes archives in ZPAQ level 1 format
+(see I<availability>).
+
+=head1 NOTES
+
+The ZPAQ level 1 standard defines a ZPAQ archive as a sequence
+of one or more blocks possibly mixed with other data. If
+a block is preceded by any non-ZPAQ data, then a 13 byte marker
+tag must immediately precede the block. Otherwise the tag is
+optional.
+
+Each block contains a description of the decompression algorithm
+followed by one or more segments. Blocks are independent, but
+segments must be compressed or decompressed in order from the
+beginning of the block.
+
+Each segment contains an optional filename, an optional comment,
+compressed data, and an optional 20 byte SHA-1 checksum. If the
+filename field is empty, it denotes that the data should be
+concatenated to the previous segment, which might be in the
+previous block.
+
+The archive format is such that block and segment headers and
+trailers can be read quickly in a single pass without decompressing.
+The memory required to decompress can be calculated from the block header
+
+The default format for a ZPAQ archive produced by I<pzpaq> is one
+or more blocks with a marker tag before the first block. Each block
+contains one segment per file or file fragment if the whole file
+would not fit in the block. The checksum
+is always computed and saved, and verified during decompression
+if present. The filename is saved as specified on the command line
+unless compressing from standard input. The comment is saved
+with the original file size as a decimal string unless compressing
+from standard input. If a file is split into blocks then the comment
+has the form "size+offset" where the size is for the portion in the
+current block and the offset is the starting point in the original
+file if greater than 0. If the size is unknown then it is saved as "-1".
+
+I<pzpaq> will read any valid ZPAQ archive, including compression
+models other than those produced by B<-1>, B<-2> or B<-3>,
+such as those produced using zpaq(1) configuration files.
+I<pzpaq> contains speed optimizations for the default levels, however.
+Other models will take about twice as long to decompress as they
+would with optimization. You can sometimes decompress such archives
+faster with zpaq(1), which automatically optimizes by translating the
+decompression algorithm description into C++ source code and
+recompiling itself. However, I<pzpaq> is faster for the built in
+models because zpaq(1) is not multithreaded.
+
+Speedup with B<-t> is typically not linear due to the need to share
+memory, cache, and CPU units, or because some processors
+reduce clock speed in response to temperature or the number of
+cores in use.
+
+=head1 EXAMPLE
+
+To compress the files in directory F<calgary>, e.g.
+replace F<calgary/book1> to F<calgary/book1.zpaq>:
+
+    pzpaq calgary/*
+
+To decompress and restore the original files:
+
+    pzpaq -d calgary/*.zpaq
+
+To put files into an archive with one block per file:
+
+    pzpaq calgary/*
+    cat calgary/*.zpaq > calgary.zpaq
+
+Or for better compression, packing files into 2 blocks:
+
+    pzpaq -c calgary/* > calgary.zpaq
+
+For best possible compression, packing files into 1 block:
+
+    pzpaq -c -3 -b0 calgary/* > calgary.zpaq
+
+To list contents (F<calgary/book1>, etc.):
+
+    pzpaq -l calgary.zpaq
+
+To extract and restore the original files:
+
+    pzpaq -x calgary.zpaq
+
+=head1 BUGS
+
+Output files and temporary files are clobbered without warning.
+
+It is possible to make small archives that fill up the disk
+when decompressed.
+
+Small block sizes, lots of threads, and a high memory limit
+can strain system resources.
+
+There is no check for archives containing two or more files
+with the same name (with same or different paths).
+Multithreaded extraction will probably corrupt both of them
+and still report valid checksums.
+
+Probably others.
+
+=head1 AVAILABILITY
+
+I<pzpaq>, I<libzpaq>,
+and the ZPAQ level 1 standard specification and reference
+decoder are available at L<http://mattmahoney.net/dc/zpaq.html>.
+
+=head1 AUTHORS
+
+I<pzpaq> is written by Matt Mahoney.
+
+I<pzpaq> is copyright 2011, Dell Inc.
+It is licensed under the GNU General Public License
+(GPL) version 3, or at your option, any higher version.
+See L<http://www.gnu.org/licenses/>.
+
+=head1 SEE ALSO
+
+C<bzip2(1)>
+C<cat(1)>
+C<compress(1)>
+C<gzip(1)>
+C<p7zip(1)>
+C<tar(1)>
+C<sha1sum(1)>
+C<zpaq(1)>
+C<zpipe(1)>
+C<libzpaq(3)>
+
+=cut
+
+
+
