@@ -1,4 +1,4 @@
-/* pzpaq.cpp v0.01 - Parallel ZPAQ compressor
+/* pzpaq.cpp v0.02 - Parallel ZPAQ compressor
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -34,9 +34,7 @@ To compile in Linux:
 
 To compile in Windows
 
-  g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp -lpthreadGC2 -DX32
-
-When compiled with -DX32, the program will not work with files over 2 GB.
+  g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp -lpthreadGC2
 
 For Windows you also need these files from pthreads-win32 from
 http://sourceware.org/pthreads-win32/
@@ -62,9 +60,14 @@ http://sourceware.org/pthreads-win32/
 #include <string>
 #include <vector>
 
+// Borland: compile with -Dint64_t=__int64
+#ifndef int64_t
+#include <stdint.h>
+#endif
+
 void usage() {
   fprintf(stderr,
-  "pzpaq 0.01 - Parallel ZPAQ compressor\n"
+  "pzpaq 0.02 - Parallel ZPAQ compressor\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -85,20 +88,43 @@ void usage() {
   "-v    Verbose\n"
   "-x    Extract to original directory using saved paths, keep input files\n"
   "--    Stop option processing\n"
-#ifdef X32
-  "Does not work with files larger than 2 GB\n"
-#endif
   );
+#ifdef unix
+  if (sizeof(off_t)!=8)
+    fprintf(stderr, "Does not work with files larger than 2 GB\n");
+#endif
   exit(1);
 }
 
-// If fseeko() and ftello() are not supported then compile
-// with -X32 to use fseek() and ftell(). pzpaq will not work
-// with files larger than 2 GB in this case.
-#ifdef X32
-#define fseeko(f,n,w) fseek(f,n,w)
-#define ftello(f) ftell(f)
+// Seek f to 64 bit pos, return true if successful
+int fseek64(FILE* f, int64_t pos) {
+#ifdef unix
+  return fseeko(f, pos, SEEK_SET)==0;
+#else
+  rewind(f);
+  HANDLE h=(HANDLE)_get_osfhandle(_fileno(f));
+  LONG low=pos, high=pos>>32;
+  errno=0;
+  SetFilePointer(h, low, &high, FILE_BEGIN);
+  return GetLastError()==ERROR_SUCCESS;
 #endif
+}
+
+// Return size of an open file as a 64 bit number
+int64_t filesize(FILE* f) {
+#ifdef unix
+  int64_t pos=ftello(f);
+  fseeko(f, 0, SEEK_END);
+  int64_t result=ftello(f);
+  fseeko(f, pos, SEEK_SET);
+  return result;
+#else
+  HANDLE h=(HANDLE)_get_osfhandle(_fileno(f));
+  DWORD high;
+  DWORD low=GetFileSize(h, &high);
+  return int64_t(high)<<32|low;
+#endif
+}
 
 // Call f and check that the return code is 0
 #define check(f) { \
@@ -138,7 +164,7 @@ pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER; // protects cv
 // A filename and a size
 struct FileSize {
   const char* filename;  // input file, "" for stdin
-  off_t size;  // input size, -1 if unknown
+  int64_t size;  // input size, -1 if unknown
   FileSize(const char* f=0, int s=-1): filename(f), size(s) {}
 };
 
@@ -147,7 +173,7 @@ struct Job {
   State state;        // job state, protected by mutex
   std::vector<FileSize> input;  // list of files to input
   std::string output; // output file, "" for stdout, saved names override
-  off_t start;        // where to start input of first file
+  int64_t start;      // where to start input of first file
   int memory;         // how much memory is needed in MB (for scheduler)
   int part;           // position in sequence for concatenation, 0=first
   pthread_t tid;      // thread ID (for scheduler)
@@ -185,7 +211,7 @@ struct File: public libzpaq::Reader, public libzpaq::Writer {
 // To count bytes read or written
 struct FileCount: public libzpaq::Reader, public libzpaq::Writer {
   FILE* f;
-  double count;
+  int64_t count;
   FileCount(FILE* f_): f(f_), count(0) {}
   int get() {int c=getc(f); count+=(c!=EOF); return c;}
   void put(int c) {putc(c, f); count+=1;}
@@ -217,7 +243,7 @@ std::string strip(const std::string& filename) {
 }
 
 // Convert int to string
-std::string itos(off_t x) {
+std::string itos(int64_t x) {
   std::string s;
   if (x==0) return "0";
   if (x<0) return "-"+itos(-x);
@@ -252,7 +278,7 @@ bool append(const char* file1, const char* file2) {
   while ((n=fread(buf, 1, BUFSIZE, in))>0)
     fwrite(buf, 1, n, out);
   if (verbose)
-    fprintf(stderr, "%1.0f\n", double(ftello(out)));
+    fprintf(stderr, "%1.0f\n", double(filesize(out)));
   if (out!=stdout) fclose(out);
   if (in!=stdin) fclose(in);
   if (in!=stdin && remove(file2))
@@ -291,8 +317,8 @@ void decompress(const Job& job) {
     }
 
     // Find start of block in first file
-    if (i==0 && job.start>0 && fseeko(in.f, job.start, SEEK_SET))
-      libzpaq::error("fseeko");
+    if (i==0 && job.start>0 && !fseek64(in.f, job.start))
+      libzpaq::error("fseek64");
 
     // Decompress file
     libzpaq::Decompresser d;
@@ -419,8 +445,8 @@ void compress(const Job& job) {
       }
       c.setInput(&in);
       if (i==0 && job.start>0) {
-        if (fseeko(in.f, job.start, SEEK_SET))
-          libzpaq::error("fseeko failed");
+        if (!fseek64(in.f, job.start))
+          libzpaq::error("fseek64 failed");
       }
       if (verbose) {
         fprintf(stderr, "Compressing %s", job.input[i].filename);
@@ -441,7 +467,7 @@ void compress(const Job& job) {
       }
       if (verbose) {
         fprintf(stderr, "%s %1.0f -> %s %1.0f\n", job.input[i].filename,
-            in.sha1.size(), output.c_str(), out.count);
+            in.sha1.size(), output.c_str(), double(out.count));
       }
       c.endSegment(in.sha1.result());
       if (in.f!=stdin) fclose(in.f);
@@ -483,7 +509,7 @@ void list(const char* filename) {
         else
           printf("           ");
         printf("%s %s -> %1.0f\n",
-            name.s.c_str(), comment.s.c_str(), in.count);
+            name.s.c_str(), comment.s.c_str(), double(in.count));
         name.s="";
         comment.s="";
         in.count=0;
@@ -580,8 +606,7 @@ int main(int argc, char** argv) {
         files.pop_back();
       }
       else {
-        if (!fseeko(f, 0, SEEK_END))
-          files[i].size=ftello(f);
+        files[i].size=filesize(f);
         if (files[i].size==-1)
           perror(files[i].filename);
         fclose(f);
@@ -592,7 +617,7 @@ int main(int argc, char** argv) {
   // Get default block size. If any sizes are unknown then
   // default is -b0 (no blocks)
   if (bopt<0 && isdigit(command)) {
-    off_t sum=0;
+    int64_t sum=0;
     for (int i=0; i<size(files); ++i) {
       if (files[i].size<0) { // unknown size
         sum=-1;
@@ -603,7 +628,7 @@ int main(int argc, char** argv) {
     if (sum<0)
       bopt=0;
     else {
-      off_t t=(sum+topt-1)/topt;
+      int64_t t=(sum+topt-1)/topt;
       bopt=t<MAX_BOPT ? int(t) : MAX_BOPT;
       if (bopt<MIN_BOPT) bopt=MIN_BOPT;
     }
@@ -660,7 +685,7 @@ int main(int argc, char** argv) {
         else {
 
           // Open input file
-          File in(fopen(files[i].filename, "rb"));
+          FileCount in(fopen(files[i].filename, "rb"));
           if (!in.f)
             perror(files[i].filename);
           else {
@@ -677,7 +702,7 @@ int main(int argc, char** argv) {
             }
 
             // Scan input for blocks
-            off_t offset=0;
+            int64_t offset=0;
             libzpaq::Decompresser d;
             d.setInput(&in);
             double memory;
@@ -698,7 +723,7 @@ int main(int argc, char** argv) {
               while (d.findFilename(&filename)) {
                 d.readComment();
                 d.readSegmentEnd();
-                offset=ftello(in.f)+1;  // start of next block after EOB
+                offset=in.count+1;  // start of next block after EOB
                 if (filename.s!="" && command!='d' && !copt) {
                   if (command=='e')
                     output=strip(filename.s);
@@ -737,7 +762,7 @@ int main(int argc, char** argv) {
   if (isdigit(command)) {
     const int memory[]={38, 112, 247};  // command -> MB needed
     int fn=0;    // number of files scheduled
-    off_t len=0; // number of bytes of files[fn] scheduled
+    int64_t len=0; // number of bytes of files[fn] scheduled
     int part=0;  // number of jobs since start of file
     while (fn<size(files)) {  // until all input is scheduled
       Job job;  // Schedule 1 job per loop
@@ -751,7 +776,7 @@ int main(int argc, char** argv) {
       // else job is 1 block or rest of file whichever is smaller.
       // If -b0 then block has infinite size.
       // If file size is unknown then pretend it is 0.
-      for (off_t remaining=bopt-(bopt==0); remaining && fn<size(files);) {
+      for (int64_t remaining=bopt-(bopt==0); remaining && fn<size(files);) {
         job.input.push_back(files[fn]);
         job.input.back().size-=len;
 
