@@ -1,4 +1,4 @@
-/* pzpaq.cpp v0.03 - Parallel ZPAQ compressor
+/* pzpaq.cpp v0.04 - Parallel ZPAQ compressor
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -35,16 +35,7 @@ To compile in Linux without optimized decompression:
 
 Or to compile in Windows:
 
-  g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp -lpthreadGC2
-
-For Windows you also need these files from pthreads-win32 from
-http://sourceware.org/pthreads-win32/
-  
-  libpthreadGC2.a   in C:\mingw\lib or -L
-  pthread.h         in C:\mingw\include or -I
-  sched.h
-  semaphore.h
-  pthreadGC2.dll    in PATH (to run)
+  g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp
 
 Version 0.03 and higher will speed up decompression of archives created
 with non-default compression (other than levels -1 -2 -3 created by
@@ -83,18 +74,22 @@ Recommended installation for Windows, assuming that MinGW g++
 is installed in c:\mingw and that c:\bin is in your PATH.
 
   c:\bin\pzpaq.exe
-  c:\bin\pthreadGC2.dll
   c:\bin\zpaq\pzpaq.o
   c:\bin\zpaq\libzpaq.o
-  c:\mingw\lib\libpthreadGC2.a
-  c:\mingw\include\pthread.h
   c:\mingw\include\libzpaq.h or c:\bin\zpaq\libzpaq.h
 
-For Windows without g++, you only need the first 2 files.
+For Windows without g++, you only need pzpaq.exe.
 
 If you also have zpaq installed and configured to work with g++, then
 libzpaq.h and libzpaq.o are already installed and may be shared by both
 programs.
+
+History:
+
+v0.01 - initial release.
+v0.02 - fix >2GB file handling for Windows.
+v0.03 - adds decompression optimization for nonstandard compression levels.
+v0.04 - native thread support in Windows, no longer needs pthread-win32.
 
 */
 
@@ -105,16 +100,23 @@ programs.
 #include <ctype.h>
 #include <time.h>
 #include <assert.h>
-#include <pthread.h>
 #include <string>
 #include <vector>
 #include <fcntl.h>
 
 #ifdef unix
+#define PTHREAD 1
 #include <sys/types.h>
 #include <unistd.h>
 #else
 #include <windows.h>
+#include <io.h>
+#endif
+
+// Compile with -DPTHREAD to use http://sourceware.org/pthreads-win32/
+// instead of Windows native threads.
+#ifdef PTHREAD
+#include <pthread.h>
 #endif
 
 // Borland: compile with -Dint64_t=__int64
@@ -124,7 +126,7 @@ programs.
 
 void usage() {
   fprintf(stderr,
-  "pzpaq 0.03 - Parallel ZPAQ compressor\n"
+  "pzpaq 0.04 - Parallel ZPAQ compressor\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -211,15 +213,19 @@ bool verbose=false;  // -v
 
 // Possible job states. A thread is initialized as READY. When main()
 // is ready to start the thread it is set to RUNNING and runs  it. When
-// the thread finishes, it sets its state to FINISHED, signals
-// main (using cv, protected by mutex), and exits with a status
-// of 0 or a pointer to an error message as a static string.
-// main then waits on the thread, receives the return status, and
+// the thread finishes, it sets its state to FINISHED or FINISHED_ERR
+// if there is an error, signals main (using cv, protected by mutex),
+// and exits. main then waits on the thread, receives the return status, and
 // updates the state to OK or ERR.
-typedef enum {READY, RUNNING, FINISHED, ERR, OK} State;
+typedef enum {READY, RUNNING, FINISHED_ERR, FINISHED, ERR, OK} State;
 
+#ifdef PTHREAD
 pthread_cond_t cv=PTHREAD_COND_INITIALIZER;  // to signal FINISHED
 pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER; // protects cv
+#else
+HANDLE mutex;  // protects Job::state
+typedef HANDLE pthread_t;
+#endif
 
 // A filename and a size
 struct FileSize {
@@ -1370,7 +1376,12 @@ void list(const char* filename) {
 }
 
 // Worker thread
-void *thread(void *arg) {
+#ifdef PTHREAD
+void*
+#else
+DWORD
+#endif
+thread(void *arg) {
 
   // Do the work and receive status in msg
   Job* job=(Job*)arg;
@@ -1386,11 +1397,17 @@ void *thread(void *arg) {
   }
 
   // Let controlling thread know we're done and the result
+#ifdef PTHREAD
   check(pthread_mutex_lock(&mutex));
-  job->state=FINISHED;
+  job->state=result?FINISHED_ERR:FINISHED;
   check(pthread_cond_signal(&cv));
   check(pthread_mutex_unlock(&mutex));
-  return (void*)result;
+#else
+  WaitForSingleObject(mutex, INFINITE);
+  job->state=result?FINISHED_ERR:FINISHED;
+  ReleaseMutex(mutex);
+#endif
+  return 0;
 }
 
 int main(int argc, char** argv) {
@@ -1434,6 +1451,10 @@ int main(int argc, char** argv) {
     files.push_back("");  // add stdin to list
   }
   kopt |= copt || command=='e' || command=='x';
+#ifndef PTHREAD
+  if (topt>MAXIMUM_WAIT_OBJECTS)
+    topt=MAXIMUM_WAIT_OBJECTS;  // max 64 threads in Windows
+#endif
 
   // set stdin and stdout to binary mode in Windows
 #ifndef unix
@@ -1690,13 +1711,18 @@ int main(int argc, char** argv) {
   int memory_count=0;  // MB in use, not to exceed mopt
   int thread_count=0;  // number RUNNING, not to exceed topt
   int job_count=0;     // number of jobs with state OK or ERR
-  pthread_attr_t attr; // thread joinable attribute
-  check(pthread_attr_init(&attr));
-  check(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE));
 
   // Aquire lock on jobs[i].state.
   // Threads can access only while waiting on a FINISHED signal.
-  check(pthread_mutex_lock(&mutex));
+#ifdef PTHREAD
+  pthread_attr_t attr; // thread joinable attribute
+  check(pthread_attr_init(&attr));
+  check(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE));
+  check(pthread_mutex_lock(&mutex));  // locked
+#else
+  mutex=CreateMutex(NULL, FALSE, NULL);  // not locked
+#endif
+
   while(job_count<size(jobs)) {
 
     // If there is more than 1 thread then run the biggest jobs first
@@ -1720,7 +1746,12 @@ int main(int argc, char** argv) {
       jobs[bi].state=RUNNING;
       ++thread_count;
       memory_count+=jobs[bi].memory;
+#ifdef PTHREAD
       check(pthread_create(&jobs[bi].tid, &attr, thread, &jobs[bi]));
+#else
+      jobs[bi].tid=CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)thread,
+          &jobs[bi], 0, NULL);
+#endif
     }
 
     // If no jobs can start then wait for one to finish
@@ -1729,23 +1760,52 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Not enough memory, try larger -m\n");
         break;
       }
-      check(pthread_cond_wait(&cv, &mutex));  // wait
+#ifdef PTHREAD
+      check(pthread_cond_wait(&cv, &mutex));  // wait on cv
 
       // Join any finished threads. Usually that is the one
       // that signaled it, but there may be others.
       for (int i=0; i<size(jobs); ++i) {
-        if (jobs[i].state==FINISHED) {
-          void* status;
+        if (jobs[i].state==FINISHED || jobs[i].state==FINISHED_ERR) {
+          void* status=0;
           check(pthread_join(jobs[i].tid, &status));
-          jobs[i].state=status?ERR:OK;
+          if (jobs[i].state==FINISHED) jobs[i].state=OK;
+          if (jobs[i].state==FINISHED_ERR) jobs[i].state=ERR;
           ++job_count;
           --thread_count;
           memory_count-=jobs[i].memory;
         }
       }
+#else
+      // List of running jobs
+      HANDLE joblist[MAXIMUM_WAIT_OBJECTS];
+      int jobptr[MAXIMUM_WAIT_OBJECTS];
+      DWORD njobs=0;
+      WaitForSingleObject(mutex, INFINITE);
+      for (int i=0; i<size(jobs) && njobs<MAXIMUM_WAIT_OBJECTS; ++i) {
+        if (jobs[i].state==RUNNING || jobs[i].state==FINISHED
+            || jobs[i].state==FINISHED_ERR) {
+          jobptr[njobs]=i;
+          joblist[njobs++]=jobs[i].tid;
+        }
+      }
+      ReleaseMutex(mutex);
+      DWORD id=WaitForMultipleObjects(njobs, joblist, FALSE, INFINITE);
+      if (id>=WAIT_OBJECT_0 && id<WAIT_OBJECT_0+njobs) {
+        id-=WAIT_OBJECT_0;
+        id=jobptr[id];
+        if (jobs[id].state==FINISHED) jobs[id].state=OK;
+        if (jobs[id].state==FINISHED_ERR) jobs[id].state=ERR;
+        ++job_count;
+        --thread_count;
+        memory_count-=jobs[id].memory;
+      }
+#endif
     }
   }
+#ifdef PTHREAD
   check(pthread_mutex_unlock(&mutex));
+#endif
 
   // Append temporary files if both tmp and destination are OK.
   // If destination is ERR and tmp is OK then delete tmp.
