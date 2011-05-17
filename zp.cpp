@@ -1,4 +1,4 @@
-/* zp.cpp v1.01 - Parallel ZPAQ compressor
+/* zp.cpp v1.02 - Parallel ZPAQ compressor
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -149,7 +149,10 @@ debugging checks. -s strips debugging info.
 
 History:
 
-zp 1.00 is derived from pzpaq. zp and unzp together replace it.
+zp 1.01 is derived from pzpaq (not from zp 1.00).
+zp and unzp together replace pzpaq.
+
+zp 1.02 - fixed -t option.
 
 */
 
@@ -189,7 +192,7 @@ int numberOfProcessors();  // Default for -t
 
 void usage() {
   fprintf(stderr,
-  "zp v1.01 - Parallel ZPAQ compressor\n"
+  "zp v1.02 - Parallel ZPAQ compressor\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -674,7 +677,7 @@ int main(int argc, char** argv) {
         case 'b': bopt=atoi(argv[i]+2); break;
         case 'c': copt=true; break;
         case 'r': ropt=true; break;
-        case 't': topt=atoi(argv[i]+1); break;
+        case 't': topt=atoi(argv[i]+2); break;
         case 'v': verbose=true; break;
         default: usage();  // -h or others
       }
