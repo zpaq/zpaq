@@ -1,4 +1,4 @@
-/* wbpe.cpp v1.0 - Preprocessor for text compression
+/* wbpe.cpp v1.1 - Preprocessor for text compression
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -29,19 +29,21 @@ commands:
   d = decode
 
 The encoded format is a 256 word dictionary followed by a byte sequence
-where each byte is either a dictionary code, ESC, or CAP. ESC means
+where each byte is either a dictionary code, ESC, CAP, or UPPER. ESC means
 that the next byte should be output without decoding. CAP means that
-bit 5 of the next byte to be output should be toggled first. This has
-the effect of switching between upper case and lower case letters.
-The dictionary consists of the bytes ESC and CAP followed by
-256 strings beginning with a length byte.
+bit 5 of the next byte to be output should be toggled first. UPPER
+means that all of the characters decoded by the the next code should
+be converted as with CAP. This has the effect of switching between
+upper case and lower case letters. The dictionary consists of the
+bytes ESC, CAP, and UPPER followed by 256 strings (3 unused)
+beginning with a length byte.
 
 A dictionary is built by byte pair encoding. The idea is to encode
 the most frequent pair of bytes with the least frequent single
 byte. Occurrences of the single byte must be coded as 2 bytes by
 preceding it with ESC. The process is repeated until no more
-space is saved. The original 2 least frequent bytes are reserved
-to code ESC and CAP.
+space is saved. The original 3 least frequent bytes are reserved
+to code ESC, CAP, and UPPER.
 
 For text files, it is advantageous to not combine bytes of different
 types. Letters are paired only with letters, digits with digits,
@@ -60,22 +62,19 @@ pair encoding would not count "rP" as a possibility. The hash table
 stores up to 256K different words. Only the first 2 GB of input is
 used to construct the dictionary.
 
-The dictionary is then sorted. Codes 0 and 1 are reserved
-for ESC and CAP, and the remaining 254 codes are assigned strings.
-In a second pass, the input is coded using greedy parsing to find
-the longest match. A match may differ in the case (bit 5) of the
-first letter, in which case a CAP is emitted followed by the code.
+The dictionary is then sorted in the order whitepace, punctuation,
+digits, upper case letters, and lower case letters.
+Codes 0..2 are reserved for ESC, CAP, and UPPER, and the remaining
+253 codes are assigned strings. In a second pass, the input is coded
+using greedy parsing to find the longest match. A match may differ
+in the case (bit 5) of the first letter, in which case a CAP is
+emitted followed by the code, or in the case of all letters, in which
+an UPPER is emitted followed by the code.
 If no match is found, then the next byte is output preceded by an ESC.
 
-If encoded with the "c" command, then the hash table is built
-with capitalized words converted to lower case. Only words where
-the first but not the second letter is capitalized is converted.
-Thus, "Power" would be stored as "power" but "PC" would be stored
-as "PC". The effect is that the 254 word dictionary usually does
-not contain codes for upper case letters. This usually results
-in a larger output because more CAP codes have to be emitted, but
-better compression because the semantics of capitalization is
-separated from the capitalized word by a byte boundary.
+If encoded with the "c" command, then the hash table and dictionary
+are built with all upper case converted to lower case. This usually
+improves compression although the initial size is larger.
 
 */
 
@@ -88,10 +87,10 @@ using namespace std;
 int chartype(int c) {
   c&=255;
   if (c<=32) return 1;  // whitespace
-  if (c>='A' && c<='Z') return 2;  // uppercase letter
-  if (c>='a' && c<='z') return 2;  // lowercase letter
-  if (c>=128) return 2;  // unicode letter
-  if (c>='0' && c<='9') return 3;  // digit
+  if (c>='A' && c<='Z') return 257;  // uppercase letter
+  if (c>='a' && c<='z') return 257;  // lowercase letter
+  if (c>=128) return 257;  // unicode letter
+  if (c>='0' && c<='9') return 256;  // digit
   return c;  // punctuation
 }
 
@@ -101,6 +100,22 @@ int isupper(int c) {
 }
 
 const int LEN=19;  // maximum string length
+enum {TEXT=256, ESC, CAP, UPPER};  // decoding states
+
+// Compare s[0..len-1] and t[0..len-1]. If equal return TEXT.
+// If equal except case of first byte then return CAP.
+// If equal except case of all bytes is opposite then return UPPER.
+// Otherwise return ESC.
+int match(const unsigned char* s, const unsigned char* t, int len) {
+  if (len<1 || !memcmp(s, t, len))
+     return TEXT;
+  if ((s[0]^t[0])==32 && (len<2 || !memcmp(s+1, t+1, len-1)))
+     return CAP;
+  for (int i=0; i<len; ++i)
+    if ((s[i]^t[i])!=32)
+      return ESC;
+  return UPPER;
+}
 
 // Decode c in dict[dn][3] to out where out[0] is current length
 // dict[i][0..2] means that dict[i][0] decodes recursively to
@@ -137,6 +152,9 @@ struct Element {
 // true if Element a < b (for sorting)
 bool less(const Element& a, const Element& b) {
   for (int i=1; i<=a.s[0] && i<=b.s[0]; ++i) {
+    int ac=chartype(a.s[i]), bc=chartype(b.s[i]);
+    if (ac<bc) return true;
+    if (ac>bc) return false;
     if (a.s[i]<b.s[i]) return true;
     if (a.s[i]>b.s[i]) return false;
   }
@@ -212,17 +230,17 @@ void Hashtable::print() {
   printf("%d of %d hash table entries used.\n", types, N);
 }
 
-// Encode. cmd is 'c' or 'e'. If 'c' then favor capitalization modeling.
+// Encode. cmd is 'c' or 'e'. If 'c' then use capitalization modeling.
 void encode(FILE* in, FILE* out, int cmd) {
 
   // Parse input into a Hashtable and count. A token consists
-  // of up to LEN characters of the same type such that there is
-  // no lowercase letter followed by an uppercase letter.
-  // If cmd is 'c' then store capitalized words as lower case.
+  // of up to LEN characters of the same type such that all
+  // letters are the same case or only the first letter is upper case.
+  // If cmd is 'c' then store as lower case.
   int c;        // input byte
   int chars=0;  // input limited to 2 GB to prevent int overflows
   Hashtable ht; // list of input words with counts
-  unsigned char s[LEN+1];  // input buffer
+  unsigned char s[LEN+1]={0};  // input buffer
   int len=0;    //length of s in 0..LEN
   int n1[256]={0};  // char count
   printf("Pass 1, building dictionary...");
@@ -231,10 +249,13 @@ void encode(FILE* in, FILE* out, int cmd) {
     if (len==0)
       s[len++]=c;
     else if (len<LEN && chartype(c)==chartype(s[len-1])
-        && isupper(s[len-1])>=isupper(c))
+        && isupper(c)<=isupper(s[0])
+        && (len==1 || isupper(c)==isupper(s[len-1])))
       s[len++]=c;
     else {
-      if (cmd=='c' && isupper(s[0]) && !isupper(s[1])) s[0]+='a'-'A';
+      if (cmd=='c')  // convert to lower case
+        for (int i=0; i<len && isupper(s[i]); ++i)
+          s[i]^=32;
       ht.count(s, len);
       len=1;
       s[0]=c;
@@ -245,15 +266,16 @@ void encode(FILE* in, FILE* out, int cmd) {
   printf("\nRead first %d characters.\n", chars);
   ht.print();
 
-  // Find 2 least freqent bytes to represent ESC and CAP
-  int esc=0;
-  for (int i=1; i<256; ++i)
-    if (n1[i]<n1[esc]) esc=i;
-  int cap=(esc+1)&255;
+  // Find 3 least freqent bytes to represent ESC, CAP, UPPER
+  int esc=-1, cap=-1, upper=-1;
   for (int i=0; i<256; ++i)
-    if (i!=esc && n1[i]<n1[cap]) cap=i;
-  printf("Assigned codes ESC=%d (count %d) CAP=%d (count %d)\n",
-    esc, n1[esc], cap, n1[cap]);
+    if (esc<0 || n1[i]<n1[esc]) esc=i;
+  for (int i=0; i<256; ++i)
+    if (i!=esc && (cap<0 || n1[i]<n1[cap])) cap=i;
+  for (int i=0; i<256; ++i)
+    if (i!=esc && i!=cap && (upper<0 || n1[i]<n1[upper])) upper=i;
+  printf("Assigned codes ESC=%d (count %d) CAP=%d (%d) UPPER=%d (%d)\n",
+    esc, n1[esc], cap, n1[cap], upper, n1[upper]);
 
   // Reduce using byte code pairing
   printf("Byte pair encoding...\n");
@@ -279,7 +301,8 @@ void encode(FILE* in, FILE* out, int cmd) {
     // Find least frequent byte
     int min0=-1;
     for (int i=0; i<256; ++i)
-      if (n1[i]>=0 && (min0<0 || n1[i]<n1[min0]) && i!=cap && i!=esc)
+      if (n1[i]>=0 && (min0<0 || n1[i]<n1[min0])
+          && i!=cap && i!=esc && i!=upper)
         min0=i;
     if (min0<0) break;
 
@@ -325,6 +348,7 @@ void encode(FILE* in, FILE* out, int cmd) {
     printto(dict, dn, i, dict2[i].s);
   dict2[cap].s[0]=0;  // empty
   dict2[esc].s[0]=0;
+  dict2[upper].s[0]=0;
 
   // Bubble sort alphabetically. ESC and CAP will move to the front.
   for (int i=255; i>=0; --i) {
@@ -350,8 +374,10 @@ void encode(FILE* in, FILE* out, int cmd) {
   // Write output header
   esc=0;
   cap=1;
+  upper=2;
   putc(esc, out);
   putc(cap, out);
+  putc(upper, out);
   for (int i=0; i<256; ++i) {
     for (int j=0; j<=dict2[i].s[0]; ++j)
       putc(dict2[i].s[j], out);
@@ -370,24 +396,24 @@ void encode(FILE* in, FILE* out, int cmd) {
     if (len<1)
       break;
 
-    // Find longest match in dict2. Try without CAP first, then
-    // with case change if longer.
-    int bi=256, bestmatch=0;
-    for (int i=0; i<2; ++i) {
-      for (int j=idx[s[0]]; j<256 && dict2[j].s[1]==s[0]; ++j) {
-        if (j!=cap && j!=esc && dict2[j].s[0]<=len
-            && !memcmp(s, dict2[j].s+1, dict2[j].s[0])
-            && dict2[j].s[0]>bestmatch) {
+    // Find longest match in dict2. Try both upper and lower case.
+    int bi=256, bestmatch=0, bestmode=ESC, mode=ESC;
+    for (int i=0; i<=32; i+=32) {
+      for (int j=idx[s[0]^i]; j<256 && dict2[j].s[0]>0
+           && dict2[j].s[1]==(s[0]^i); ++j) {
+        if (dict2[j].s[0]<=len && dict2[j].s[0]>bestmatch
+            && (mode=match(s, dict2[j].s+1, dict2[j].s[0]))!=ESC) {
           bestmatch=dict2[j].s[0];
           bi=j;
+          bestmode=mode;
         }
       }
-      s[0]^=32;
     }
 
     // Encode match
     if (bi<256) {
-      if (s[0]!=dict2[bi].s[1]) putc(cap, out), ++dict2[cap].count;
+      if (bestmode==CAP) putc(cap, out), ++dict2[cap].count;
+      if (bestmode==UPPER) putc(upper, out), ++dict2[upper].count;
       putc(bi, out);
       ++dict2[bi].count;
       len-=bestmatch;
@@ -413,20 +439,23 @@ void encode(FILE* in, FILE* out, int cmd) {
     "Code   Count   Meaning\n"
     "---  --------- -------\n");
   for (int i=0; i<256; ++i) {
-    printf("%3d ", i);
-    if (i==cap) printf("%10d CAP\n", dict2[i].count);
-    else if (i==esc) printf("%10d ESC\n", dict2[i].count);
-    else dict2[i].print();
+    if (dict2[i].count>=0) {
+      printf("%3d ", i);
+      if (i==cap) printf("%10d CAP\n", dict2[i].count);
+      else if (i==esc) printf("%10d ESC\n", dict2[i].count);
+      else if (i==upper) printf("%10d UPPER\n", dict2[i].count);
+      else dict2[i].print();
+    }
   }
   printf("\n%d strings encoded\n", tokens);
 }
 
 // Decode file
 void decode(FILE* in, FILE* out) {
-  enum {TEXT=256, CAP, ESC};
   int i=0, j=0, c;
   int esc=getc(in);
   int cap=getc(in);
+  int upper=getc(in);
   unsigned char dict[256][256];
   while ((c=getc(in))!=EOF) {
     if (i<TEXT) {  // load dict
@@ -440,12 +469,13 @@ void decode(FILE* in, FILE* out) {
     }
     else if (c==esc) i=ESC;
     else if (c==cap) i=CAP;
+    else if (c==upper) i=UPPER;
     else {
       for (j=1; j<=dict[c][0]; ++j) {
-        if (i==CAP) putc(dict[c][j]^32, out);
-        else putc(dict[c][j], out);
-        i=TEXT;
+        putc(dict[c][j]^(i==TEXT?0:32), out);
+        if (i==CAP) i=TEXT;
       }
+      i=TEXT;
     }
   }
 }
@@ -456,7 +486,7 @@ int main(int argc, char** argv) {
   int cmd;
   if (argc<4 || ((cmd=argv[1][0])!='c' && cmd!='d' && cmd!='e')) {
     fprintf(stderr, 
-      "wbpe v1.0 preprocessor for text compression\n"
+      "wbpe v1.1 preprocessor for text compression\n"
       "(C) 2011, Dell Inc. Written by Matt Mahoney on %s\n"
       "This program is licensed under GPL v3,"
       " http://www.gnu.org/licenses/gpl.html\n"
