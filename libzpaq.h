@@ -1,14 +1,18 @@
-/* libzpaq.h 
-LIBZPAQ Version 2.02
-Written by Matt Mahoney, Nov. 13, 2010
+/* libzpaq.h - LIBZPAQ Version 3.00.
+
+  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so without restriction.
+  This Software is provided "as is" without warranty.
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
 http://mattmahoney.net/dc/zpaq1.pdf
-
-The LIBZPAQ software is placed in the public domain. It may be used
-without restriction. LIBZPAQ is provided "as is" with no warranty.
-
 See accompanying libzpaq.txt for documentation.
 */
 
@@ -17,16 +21,18 @@ See accompanying libzpaq.txt for documentation.
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdint.h>
 
 namespace libzpaq {
 
-// 1, 2, 4 byte unsigned integers
-typedef unsigned char U8;
-typedef unsigned short U16;
-typedef unsigned int U32;
+// 1, 2, 4, 8 byte unsigned integers
+typedef uint8_t U8;
+typedef uint16_t U16;
+typedef uint32_t U32;
+typedef uint64_t U64;
 
 // Standard library prototypes redirected to libzpaq.cpp
-void* calloc(int, int);
+void* calloc(size_t, size_t);
 void free(void*);
 
 // Callback for error handling
@@ -60,40 +66,43 @@ extern const char  models[];
 template <typename T>
 class Array {
 private:
-  T *data; // user location of [0] on a 64 byte boundary
-  int n;   // user size-1
+  T *data;     // user location of [0] on a 64 byte boundary
+  size_t n;    // user size
   int offset;  // distance back in bytes to start of actual allocation
   void operator=(const Array&);  // no assignment
   Array(const Array&);  // no copy
 public:
-  Array(int sz=0, int ex=0): data(0), n(-1), offset(0) {
+  Array(int sz=0, int ex=0): data(0), n(0), offset(0) {
     resize(sz, ex);} // [0..sz-1] = 0
-  void resize(int sz, int ex=0); // change size, erase content to zeros
+  void resize(size_t sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
-  int size() const {return n+1;}  // get size
-  T& operator[](int i) {assert(n>=0 && i>=0 && U32(i)<=U32(n)); return data[i];}
-  T& operator()(int i) {assert(n>=0 && (n&(n+1))==0); return data[i&n];}
+  size_t size() const {return n;}  // get size
+  int isize() const {return int(n);}  // get size as an int
+  T& operator[](size_t i) {assert(n>0 && i<n); return data[i];}
+  T& operator()(size_t i) {assert(n>0 && (n&(n-1))==0); return data[i&(n-1)];}
 };
 
 // Change size to sz<<ex elements of 0
 template<typename T>
-void Array<T>::resize(int sz, int ex) {
+void Array<T>::resize(size_t sz, int ex) {
+  assert(size_t(-1)>0);  // unsigned type?
   while (ex>0) {
-    if (sz<0 || sz>=(1<<30)) error("Array too big");
+    if (sz>sz*2) error("Array too big");
     sz*=2, --ex;
   }
-  if (sz<0) error("Array too big");
-  if (n>-1) {
+  if (n>0) {
     assert(offset>0 && offset<=64);
     assert((char*)data-offset);
     free((char*)data-offset);
   }
-  n=-1;
-  if (sz<=0) return;
-  n=sz-1;
-  data=(T*)calloc(64+(n+1)*sizeof(T), 1);
+  n=0;
+  if (sz==0) return;
+  n=sz;
+  const size_t nb=64+n*sizeof(T);  // test for overflow
+  if (nb<=64 || (nb-64)/sizeof(T)!=n) error("Array too big");
+  data=(T*)calloc(nb, 1);
   if (!data) error("Out of memory");
-  offset=64-int((ptrdiff_t)data&63);
+  offset=64-(((char*)data-(char*)0)&63);
   assert(offset>0 && offset<=64);
   data=(T*)((char*)data+offset);
 }
@@ -179,9 +188,9 @@ private:
 // or SSE (without or with).
 
 struct Component {
-  int limit;      // max count for cm
-  U32 cxt;        // saved context
-  int a, b, c;    // multi-purpose variables
+  size_t limit;   // max count for cm
+  size_t cxt;     // saved context
+  size_t a, b, c; // multi-purpose variables
   Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
   Array<U8> ht;   // ICM hash table[0..size1][0..15] of bit histories; MATCH buf
   Array<U16> a16; // multi-use
@@ -242,7 +251,7 @@ private:
   void train(Component& cr, int y) {
     assert(y==0 || y==1);
     U32& pn=cr.cm(cr.cxt);
-    int count=pn&0x3ff;
+    U32 count=pn&0x3ff;
     int error=y*32767-(cr.cm(cr.cxt)>>17);
     pn+=(error*dt[count]&-1024)+(count<cr.limit);
   }
@@ -274,7 +283,7 @@ private:
   }
 
   // Get cxt in ht, creating a new row if needed
-  int find(Array<U8>& ht, int sizebits, U32 cxt);
+  size_t find(Array<U8>& ht, int sizebits, U32 cxt);
 };
 
 ////////////////////////////// Decoder ////////////////////////////
@@ -340,7 +349,7 @@ public:
   void startBlock(const char* hcomp);
   void startSegment(const char* filename = 0, const char* comment = 0);
   void setInput(Reader* i) {in=i;}
-  void postProcess(const char* pcomp = 0);
+  void postProcess(const char* pcomp = 0, int len = 0);
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
   void endBlock();

@@ -1,16 +1,19 @@
-/* libzpaqo.cpp
+/* libzpaqo.cpp - Part of LIBZPAQ Version 3.00
 
-Part of LIBZPAQ Version 2.02
-See accompanying libzpaq.txt for documentation.
+  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
-Written by Matt Mahoney, Nov. 13, 2010
-
-The LIBZPAQ software is placed in the public domain. It may be used
-without restriction. LIBZPAQ is provided "as is" with no warranty.
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so without restriction.
+  This Software is provided "as is" without warranty.
 
 This file contains optimized versions of
 models[], ZPAQL::run(), Predictor::predict() and Predictor::update()
 for fast.cfg, mid.cfg, and max.cfg.
+See accompanying libzpaq.txt for more documentation.
 
 It was generated using zpaq 2.02 as follows:
 

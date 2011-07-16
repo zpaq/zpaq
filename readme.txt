@@ -1,75 +1,74 @@
-README for pzpaq 0.05 - Feb. 10, 2011.
+README for zpaq v3.00 - July 16, 2011.
+Matt Mahoney, matmahoney@yahoo.com
 
-pzpaq is a parallel ZPAQ compatible file compressor and
-decompressor for Windows and Linux.
+zpaq is an archiver and a tool for developing new compression algorithms.
+This package contains source code and a 32 bit Windows executable.
+The current version has only been tested in Windows. A Linux
+version is planned. The latest version of this software, documenation,
+and associated configuration files can be found at
+http://mattmahoney.net/dc/zpaq.html
 
-pzpaq is (C) 2011, Dell Inc. It is written by Matt Mahoney.
-pzpaq is licensed under the GNU General Public License v3.
-See http://www.gnu.org/licenses/gpl.html
+zpaq creates, extracts, and lists archives conforming to the ZPAQ
+level 1 standard as described in the document and reference decoder
+from the above website. There are 4 built in compression levels
+(-m1 through -m4) plus the ability to describe your own compression
+algorithms in configuration (.cfg) files. Docmumenation and examples
+are available from the above website. zpaq also includes tools
+for testing and debugging config files.
 
-For quick help, type pzpaq -h
-Don't run with no arguments because it will try to compress
-from standard input to standard output and just beep at you.
+zpaq is designed for high performance. The following shows compressed
+size of the 14 file Calgary corpus and compression and decompression
+times in seconds on a dual core 2.0 GHz T3200 under 32 bit Windows.
+zpaq (and 7zip) use both cores.
 
-For complete user documentation, see http://mattmahoney.net/dc/pzpaq
+  Compressor   size      C/D time
+  ---------- ---------  ---------
+  zip        1,028,059   0.4  0.1
+  bzip2        828,347   0.7  0.4
+  7zip         824,296   1.7  0.3
+  zpaq -m1     843,572   0.8  0.8
+  zpaq -m2     784,373   1.2  1.3
+  zpaq -m3     722,197   5.3  5.5
+  zpaq -m4     666,624  14.5 15.0
 
-The latest version of pzpaq is available from
-http://mattmahoney.net/dc/zpaq.html#pzpaq
+See zpaq.cpp for command line usage documentation and installation.
 
-Contents:
-  pzpaq.exe - Windows executable
-  pzpaq.cpp - Source code. You also need libzpaq from
-              http://mattmahoney.net/dc/zpaq.html#libzpaq
-  install_pzpaq.bat - Installation script for Windows
-  install_pzpaq.sh - Installation script for Linux
-  pzpaq.1.pod - pod2man documentation source.
+I did not yet include documentation in this package on writing
+config files. That documentation is available at the above website
+(for an earlier version of zpaq, but the format has not changed).
 
-Only use the installation script if you have g++ installed
-(MinGW in Windows). In Windows if you don't have g++ then
-you can just put pzpaq.exe somewhere in your PATH and use it
-right away.
-
-If you have g++ installed then pzpaq can be installed with
-an option for faster decompression of files created with other
-ZPAQ compatible programs. In Windows:
-
-  install_pzpaq c:\bin g++.exe
-
-where c:\bin is the place you want to put pzpaq.exe (preferably
-in your PATH) and g++.exe is your compiler. The script
-experimentally supports cl.exe (Visual C++) if you have a bunch
-of environment variables set to compile from the command line.
-It doesn't support other compilers.
-
-If you don't have all the files you need then the script will
-tell you to get libzpaq. You will need:
-
-  libzpaq.cpp
-  libzpaqo.cpp
-  libzpaq.h
-
-from http://mattmahoney.net/dc/zpaq.html#libzpaq
-which the script will compile to .o files and put in c:\bin\zpaq
-
-In Linux:
-
-  chmod +x install_pzpaq.sh
-  sudo ./install_pzpaq.sh
-
-There are no arguments. You will need g++ and bash. You will also
-need pod2man to install the man page.
-It will install the following files:
-
-  /usr/bin/pzpaq
-  /usr/lib/zpaq/libzpaq.o
-  /usr/lib/zpaq/pzpaq.o
-  /usr/include/libzpaq.h
-  /usr/share/man/man1/pzpaq.1.gz
-
-If you want them elsewhere, you can change the variables BIN, LIB,
-INC, and MAN, in the script.
-
-In either Windows or Linux, the files libzpaq.o and libzpaq.h are
-shared with zpaq, so you should probably put both in the same place.
+libzpaq is a library API in C++ that provides services for compressing,
+decompressing, and listing ZPAQ archives or byte streams. See libzpaq.txt
+or the above website for usage.
 
 
+LICENSE
+
+The source code has 3 parts:
+
+- zpaq - main program.
+- libzpaq - library API providing compression and decompression.
+- libdivsufsort-lite - BWT compression for zpaq methods -m1 and -m2.
+
+The main program, zpaq, and library API, libzpaq are (C) 2011, Dell Inc.
+and written by Matt Mahoney. zpaq is licensed under GPL v3.
+(see http://www.gnu.org/copyleft/gpl.html). It may be used freely but
+any distribution must include source code, including modifications,
+under the same license. libzpaq is licensed under a modified MIT license
+allowing unrestricted use as described in the source code.
+
+libdivsufsort-lite v2.01 is (C) 2003-2008 by Yuta Mori, available
+at http://code.google.com/p/libdivsufsort/
+It is distributed under a standard MIT license allowing unrestricted
+use except that the copyright notice must be included, as described
+in the source code.
+
+This readme file may be freely distributed.
+
+
+HISTORY
+
+zpaq v3.00 merges the features of zpaq 2.05 (archiving and config
+file development) with zp 1.03 (multithreaded compression and
+decompression and BWT mode compression). It also includes a block
+editing command for reordering archive contents.
