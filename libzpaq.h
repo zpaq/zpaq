@@ -29,7 +29,6 @@ namespace libzpaq {
 typedef uint8_t U8;
 typedef uint16_t U16;
 typedef uint32_t U32;
-typedef uint64_t U64;
 
 // Standard library prototypes redirected to libzpaq.cpp
 void* calloc(size_t, size_t);
@@ -72,7 +71,7 @@ private:
   void operator=(const Array&);  // no assignment
   Array(const Array&);  // no copy
 public:
-  Array(int sz=0, int ex=0): data(0), n(0), offset(0) {
+  Array(size_t sz=0, int ex=0): data(0), n(0), offset(0) {
     resize(sz, ex);} // [0..sz-1] = 0
   void resize(size_t sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
