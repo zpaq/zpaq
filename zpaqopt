@@ -1,0 +1,2 @@
+g++ -O3 -s -march=native -lpthread -DNDEBUG $1.cpp ~/zpaq/libzpaq.o ~/zpaq/zpaq.o -I~/zpaq -o $1.exe
+

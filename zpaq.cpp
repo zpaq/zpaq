@@ -1,4 +1,4 @@
-/* zpaq.cpp v3.00 - A parallel, self optimizing, configurable ZPAQ compressor
+/* zpaq.cpp v3.01 - Archiver and compression development tool.
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -15,206 +15,21 @@
     General Public License for more details at
     Visit <http://www.gnu.org/copyleft/gpl.html>.
 
-zpaq is a ZPAQ file compressor and archiver. zpaq 3.00 combines the
-features of zpaq 2.04 (configuration file compression and development)
-and zp 1.03 (multithreading and fast BWT methods). It supports JIT
-self optimization if an external C++ compiler is available.
+See http://mattmahoney.net/dc/zpaq.html for the latest version
+of this program and for online documentation. This program
+creates, lists, and extracts compressed archives in the
+ZPAQ level 1 format described in the above specification.
+It has 4 built in compression levels and also accepts algorithms
+described in configuration files and optional external
+preprocessors. It uses multithreaded compression and decompression
+for archives that have more than one ZPAQ block. It uses just-in-time
+(JIT) speed optimization with an external C++ compiler for non
+built-in compression levels if a C++ compiler is available.
+It can run or trace ZPAQL code in configuration files as a
+tool for debugging them.
 
-zpaq compresses, extracts, and lists archives in the ZPAQ level 1
-format as described in http://mattmahoney.net/dc/zpaq.html
-ZPAQ archives contain a description of the decoding algorithm,
-which allows older versions of the program to read archives produced
-using algorithms introduced in newer versions (and vice versa). zpaq
-has 4 built in compression levels but allows you to specify others using
-configuration (.cfg) files. zpaq includes tools for debugging
-config files. Some config files are available at the above website.
-
-Usage: zpaq [-options] command [arguments...]
-Commands:
-  c|a archive files...     Compress|append to archive.zpaq
-  e|x archive [files...]   Extract to files or as saved without|with paths
-  l archive                List contents
-  b archive output [N[-N]...]  Append listed blocks to output.zpaq
-  r [input [output]]       Run config file F.cfg (specified by -m)
-  t [N...]                 Trace F.cfg with decimal/hex inputs
-Options:
-  -f   Force overwrite of output files
-  -m1 ... -m4  Compress faster...smaller (default -m1)
-  -mF[,N...]   Compress using F.cfg with up to 9 numeric arguments
-  -bN  Compress in N MB blocks, -b0 = file, -bs = solid (default -b16)
-  -v   Verbose
-  -tN  Use N threads (default -t2)
-  -p   Ignore/don't save paths
-  -n   Ignore/don't save filenames
-  -s   Ignore/don't save checksums
-  -i   Don't save comments
-  -h   Save locator tag. With r or t run HCOMP (default PCOMP)
-  -j0 ... -j3  No JIT, JIT, keep source, exe (default -j1)
-  -q   Don't test F.cfg postprocessor during compression
-
-Command "a" compresses and appends to archive.zpaq or creates
-it if it doesn't exist. The .zpaq extension is added automatically if
-not specified. File names are saved in the archive as specified
-on the command line. Existing files are not replaced. Rather, another
-copy is appended.
-
-Command "c" is the same as "-f a" overwriting archive.zpaq if it exists.
-
-Command "x" extracts from archive.zpaq. Output files and directories are
-created using the saved names. If no name is saved, then archive.zpaq
-is decompressed to archive by dropping ".zpaq". Files are not clobbered
-unless -f is specified. Otherwise it is an error if an output file exists.
-If a list of files follow, then those files are created (and clobbered
-implying -f) by extracting in the order they were saved.
-
-Command "e" is the same as "-p x" extracting to the current directory
-by default. It is exactly like "x" if a list of files follow.
-
-Command "l" lists the contents of archive.zpaq showing files and
-blocks. A block may contain a file, a part of a file, or multiple
-files. Each file or segment shows the name (blank except for the
-first segment of a file), comment (normally size, but may be absent),
-compressed size, and first 32 bits of the 160 bit SHA1 checksum in hex
-if present.
-
-Blocks are independent so they can be compressed or
-decompressed in parallel by separate threads at the same time.
-The memory required to decompress each block is
-shown. If multiple threads are running, then memory usage is is the
-total of all blocks being processed at the same time. Larger blocks
-usually improve compression but reduce speed by reducing the number
-of threads that can run, and sometimes require more memory.
-
-Command "b" extracts blocks from archive.zpaq and appends them to
-output.zpaq. The blocks are listed as arguments in the form N or N-N.
-For example "zpaq b in out 1-3 5" would append the first, second,
-third, and fifth blocks of in.zpaq to out.zpaq. This is a faster way
-to extract part of an archive than extracting all of it and deleting
-the files you don't want. Blocks do not have to be extracted in order.
-Reordering and concatenating blocks has the same effect as reordering
-the data it represents. If the first segment of a block is not named
-then the data is appended to the last named segment in an earlier block.
-
-Command "r" runs the program in F.cfg specified by -m as a stand
-alone program reading from input (default stdin) and writing to
-output (default stdout). Normally F.cfg is used to specify a compression
-algorithm. It contains two programs written in ZPAQL called HCOMP
-and PCOMP. HCOMP is normally used to compute contexts for the
-context mixing model and PCOMP (if present) post-processes the
-output. The command runs PCOMP unless option -h specifies HCOMP.
-Either program is run once for each byte of input. PCOMP is run
-once more with EOF (-1) as input. The command is useful for testing
-and debugging configuration files.
-
-Command "t" traces F.cfg running it once for each numeric argument
-which can be either a decimal or hex number. After each instruction
-the register content is displayed in the same base (decimal or hex)
-as the input. Hex numbers have a leading "x". When the program
-halts, memory is dumped. -h selects the HCOMP section as with "r".
-For example, "zpaq -mmin -h t 255 xff" would run the HCOMP section
-of min.cfg twice with input 255 displaing the second run in hex.
-The command is used for debugging configuration files.
-
-Option -f allows the "x" command to overwrite existing files. When used
-with "a", archive.zpaq is overwritten rather than appended. With
-"e" or "x", output files are clobbered if they exist.
-
--m1 through -m4 select the compression level from fastest to smallest.
-These require memory per thread as follows:
-
-  Opt  Config     Memory
-  ---  ------     ------
-  -m1  -mbwtrle1  5x block size after rounding up to a power of 2.
-  -m2  -mbwt2     5x block size after rounding up to a power of 2.
-  -m3  -mmid      111 MB.
-  -m4  -mmax      246 MB.
-
-The default block size is 16 MB, so -m1 and -m2 use 80 MB per thread
-by default.
-
-Equivalent configurations are shown. Configuration files are available
-from the above website. A .cfg extension is assumed.
-Some can take arguments, separated by commas without spaces.
-For example, -mmid,1 means to use mid.cfg with argument 1, which in
-this case doubles memory usage.
-
-Option -bN means to compress large files in blocks of size
-N * 1000000 bytes. Blocks can be compressed and
-decompressed in parallel in separate threads for better speed,
-but small blocks make compression worse. For -m1 and -m2, larger
-blocks use more memory, for example, -b100 would require 640 MB
-memory per thread (because 100 rounds up to 128). Decompression
-requires the same memory as compression. -b0 means don't
-split files into blocks no matter how large. -bs means to pack
-all files into one block. This improves compression for files of
-similar type, but is slower because only one thread can be used.
-Compression methods -m1 and -m2 require blocks not larger than
-256 MB - 257 bytes, equivalent to -b268.435199
--b0, -bs, or a larger block size will automatically select this
-value.
-
-Option -v displays more output progress. It is only useful for
-debugging. With "l" it displays the saved decompression algorithm
-for each block in a format that can be saved to a .cfg file.
-
-Option -t sets the number of threads. The default is equal to
-the number of processors detected (for example -t2). Thus, a
-higher number does not improve speed. A lower number will run
-slower but can save memory during either compression or decompression
-because memory usage is proportional to number of threads.
-
-Option -p means to save filenames without a path or to ignore the
-path when extracting. The result in either case is that files are
-extracted to the current directory. Command "e" is equivalent
-to "-p x".
-
-Option -n means don't save filenames, or to ignore them when
-extracting. The result in either case is that all of the data is
-concatenated to a single file when extracting, and that the output
-file name must be given or defaults by dropping the ".zpaq"
-extension.
-
-Option -i means don't save the file segment size as a commment.
-This saves a few bytes and only affects the display when listing.
-
-Option -s means don't save checksums. This saves 20 bytes, but
-disables error detection during extraction.
-
-Option -h with commands "c" or "a" means put a block header
-locator tag at the beginning of the archive. This adds 13 bytes.
-A tag is only needed if the block is to be appended to non-ZPAQ
-data such as a self extracting archive stub. With commands "r"
-or "t" the meaning is to run the HCOMP section rather than PCOMP.
-
-Options -j0 through -j3 select whether to use JIT optimization
-and save the generated code. Whenever zpaq reads a configuration
-file or archive that does not use one of the built-in compression
-levels -m1 through -m4, it will generate source code to build
-an optimized version of itself, compile it with an external C++
-compiler, link it to files prepared during installation, run the
-new program with the same arguments, then delete this temporary
-program. If the generated code does not compiler (for example,
-no external C++ compiler is available), then zpaq will still
-work but take about twice as long. Option -j0 says not to attempt
-to compile. -j2 says not to delete the generated source code.
--j3 says not to delete the executable either.
-
-Option -q says not to test the postprocessor when compressing
-from a config file. Normally if a config file specifies pre/post
-processing (like bwtrle1.cfg and bwt2.cfg), then zpaq will first
-preprocess the input to a temporary file, save the postprocessing
-code in the archive, and compress the temporary file. The
-postprocessing code should restore the original program, but
-might not if the code is incorrect. Normally, before compression,
-zpaq will run the temporary file through the postprocessor and
-compare the output checksum with the input checksum and raise
-an error if they don't match. -q says not to do this check, which
-can save time. Use it only if you are sure the code is correct.
-Options -m1 and -m2 normally skip this check.
-
-
-Installation:
-
+This program needs libzpaq from the above website and
+libdivsufsort-lite from http://code.google.com/p/libdivsufsort/
 To compile for Windows with MinGW:
 
   g++ -O3 zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq
@@ -223,14 +38,14 @@ With Visual C++
 
   cl /O2 zpaq.cpp libzpaq.cpp divsufsort.c
 
-In Linux, also use -lpthread -fopenmp
+In Linux, also use options -lpthread -fopenmp
 Other optimization options may be appropriate.
 
 To enable JIT, The script zpaqopt (zpaqopt.bat in Windows) needs to be in
 your PATH and configured along with an external C++ compiler and this
 source code to enable acceleration. Otherwise, zpaq will still work but
-won't be as fast when compressing with config files or decompressing archives
-that were not compressed with one of the 4 built in levels.
+won't be as fast when compressing with config files or decompressing
+archives that were not compressed with one of the 4 built in levels.
 
 To configure for acceleration, code needs to be prepared in advance
 to link to the generated source code in a place where the script
@@ -254,7 +69,7 @@ Then zpaqopt.bat should contain:
 
 A typical Linux configuration would look like this:
 
-  /usr/lib/zpaq/zpaq.o     (g++ -O3 -c -DOPT -lpthread zpaq.cpp)
+  /usr/lib/zpaq/zpaq.o     (g++ -O3 -c -DOPT zpaq.cpp)
   /usr/lib/zpaq/libzpaq.o  (g++ -O3 -c libzpaq.cpp)
   /usr/include/libzpaq.h
   /usr/bin/zpaq
@@ -264,13 +79,10 @@ where zpaqopt contains:
 
   g++ -O3 $1.cpp /usr/lib/zpaq/zpaq.o /usr/lib/zpaq/libzpaq.o -o $1.exe -lpthread
 
-The argument %1 or $1 would be a temporary file in %TEMP%, $TMPDIR, or /tmp
-(searching in that order) of the form "zpaqtmp{PID}_0 where {PID}
-is the process ID, for example, /tmp/zpaqtmp2318_0
+The argument %1 or $1 is the base name of a source code file
+produced by zpaq in a temporary directory.
 
 */
-
-// #define NDEBUG 1
 #include "libzpaq.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -317,7 +129,7 @@ extern const char* pcomp_cmd_string;
 
 void usage() {
   fprintf(stderr,
-  "zpaq v3.00 - ZPAQ archiver and compression algorithm development tool.\n"
+  "zpaq v3.01 - ZPAQ archiver and compression algorithm development tool.\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney. Compiled " __DATE__ ".\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -333,7 +145,7 @@ void usage() {
   "  -f   Force overwrite of output files\n"
   "  -m1 ... -m4  Compress faster...smaller (default -m1)\n"
   "  -mF[,N...]   Compress using F.cfg with up to 9 numeric arguments\n"
-  "  -bN  Compress in N MB blocks, -b0 = file, -bs = solid (default -b16)\n"
+  "  -bN  Compress in N MB blocks, -b0 = file, -bs = solid\n"
   "  -v   Verbose\n"
   "  -tN  Use N threads (default -t%d)\n"
   "  -p   Ignore/don't save paths\n"
@@ -369,7 +181,7 @@ int ncmd=0;            // length of cmd
 bool verbose=0;        // -v verbose option
 bool fopt=false;       // -f force overwrite (c or x/e with filenames)
 int mopt=1;            // -m compression method 1..4, 0 = config file
-int64_t bopt=16000000; // -b in bytes, -1 = -bs
+int64_t bopt=-2;       // -b in bytes, -1 = -bs (solid), -2 = default
 bool nopt=false;       // -n no names
 bool popt=false;       // -p no paths or run/trace PCOMP
 bool iopt=false;       // -i no comments
@@ -535,53 +347,53 @@ int libzpaq::Predictor::stat(int id) {
     if (type==MATCH) {
       assert(cr.cm.size()>0);
       assert(cr.ht.size()>0);
-      int count=0;
+      size_t count=0;
       for (size_t j=0; j<cr.cm.size(); ++j)
         if (cr.cm[j]) ++count;
-      fprintf(stderr, ": buffer=%d/%d index=%d/%d (%1.2f%%)",
-        cr.limit/8, cr.ht.size(), count, cr.cm.size(),
+      fprintf(stderr, ": buffer=%1.0f/%1.0f index=%1.0f/%1.0f (%1.2f%%)",
+        cr.limit/8.0, double(cr.ht.size()), double(count), double(cr.cm.size()),
         count*100.0/cr.cm.size());
     }
     else if (type==SSE) {
       assert(cr.cm.size()>0);
-      int count=0;
+      size_t count=0;
       for (size_t j=0; j<cr.cm.size(); ++j) {
         if (int(cr.cm[j])!=(squash((j&31)*64-992)<<17|z.header[cp+3]))
           ++count;
       }
-      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
-        count*100.0/cr.cm.size());
+      fprintf(stderr, ": %1.0f/%1.0f (%1.2f%%)", double(count),
+        double(cr.cm.size()), count*100.0/cr.cm.size());
     }
     else if (type==CM) {
       assert(cr.cm.size()>0);
-      int count=0;
+      size_t count=0;
       for (size_t j=0; j<cr.cm.size(); ++j)
         if (cr.cm[j]!=0x80000000) ++count;
-      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
-        count*100.0/cr.cm.size());
+      fprintf(stderr, ": %1.0f/%1.0f (%1.2f%%)", double(count),
+        double(cr.cm.size()), count*100.0/cr.cm.size());
     }
     else if (type==MIX) {
-      int count=0;
+      size_t count=0;
       int m=z.header[cp+3];
       assert(m>0);
       for (size_t j=0; j<cr.cm.size(); ++j)
         if (int(cr.cm[j])!=65536/m) ++count;
-      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.cm.size(),
-        count*100.0/cr.cm.size());
+      fprintf(stderr, ": %1.0f/%1.0f (%1.2f%%)", double(count),
+        double(cr.cm.size()), count*100.0/cr.cm.size());
     }
     else if (type==MIX2) {
-      int count=0;
+      size_t count=0;
       for (size_t j=0; j<cr.a16.size(); ++j)
         if (int(cr.a16[j])!=32768) ++count;
-      fprintf(stderr, ": %d/%d (%1.2f%%)", count, cr.a16.size(),
-        count*100.0/cr.a16.size());
+      fprintf(stderr, ": %1.0f/%1.0f (%1.2f%%)", double(count),
+        double(cr.a16.size()), count*100.0/cr.a16.size());
     }
     else if (cr.ht.size()>0) {
-      int hcount=0;
+      double hcount=0;
       for (size_t j=0; j<cr.ht.size(); ++j)
         if (cr.ht[j]>0) ++hcount;
-      fprintf(stderr, ": %d/%d (%1.2f%%)",
-          hcount, cr.ht.size(), hcount*100.0/cr.ht.size());
+      fprintf(stderr, ": %1.0f/%1.0f (%1.2f%%)",
+          double(hcount), double(cr.ht.size()), hcount*100.0/cr.ht.size());
     }
     cp+=compsize[type];
     fprintf(stderr, "\n");
@@ -1025,7 +837,9 @@ void compress(Job& job) {
     c.endSegment(sopt ? 0 : in.sha1());
     fprintf(stderr, "[%d] %s", job.id, input);
     if (job.start>0) fprintf(stderr, "+%1.0f", double(job.start));
-    fprintf(stderr, " %1.0f -> %1.0f\n", double(insize), out.count-outsize);
+    fprintf(stderr, " %1.0f -> %1.0f (%1.4f bpc)\n",
+        double(insize), out.count-outsize,
+        (out.count-outsize)*8.0/(insize+1e-6));
     outsize=out.count;
   }
   c.endBlock();
@@ -1337,6 +1151,12 @@ int main(int argc, char** argv) {
       if (cmd[0][1]) usage();
       break;
     default: usage(); break;
+  }
+
+  // Set default block size to -b16 for -m1, -m2, else -b0
+  if (bopt<-1) {
+    if (mopt==1 || mopt==2) bopt=16000000;
+    else bopt=0;
   }
 
   // Check for valid -m, -t, -b, -j
@@ -2199,7 +2019,7 @@ int ZPAQL::step(U32 input, int ishex) {
   }
 
   // Print R, skipping rows of 4 zeros
-  printf("\n\nR (size %d) = (rows of all 0 omitted)\n", r.size());
+  printf("\n\nR (size %1.0f) = (rows of all 0 omitted)\n", double(r.size()));
   for (int i=0; i<r.isize(); i+=4) {
     if (r(i) || r(i+1) || r(i+2) || r(i+3))
       printf(ishex ? "%8X: %08X %08X %08X %08X\n"
@@ -2208,7 +2028,7 @@ int ZPAQL::step(U32 input, int ishex) {
   }
 
   // Print H, skipping rows of 4 zeros
-  printf("\nH (size %d) = (rows of all 0 omitted)\n", h.size());
+  printf("\nH (size %1.0f) = (rows of all 0 omitted)\n", double(h.size()));
   for (int i=0; i<h.isize(); i+=4) {
     if (h(i) || h(i+1) || h(i+2) || h(i+3))
       printf(ishex ? "%8X: %08X %08X %08X %08X\n"
@@ -2217,7 +2037,7 @@ int ZPAQL::step(U32 input, int ishex) {
   }
 
   // Print M, skipping rows of 16 zeros
-  printf("\nM (size %d) = (rows of all 0 omitted)\n", m.size());
+  printf("\nM (size %1.0f) = (rows of all 0 omitted)\n", double(m.size()));
   for (int i=0; i<m.isize(); i+=16) {
     bool found=false;
     for (int j=0; j<16; ++j)
@@ -2260,7 +2080,6 @@ void printCode(const StringWriter& s, int i) {
 void list(const char* filename) {
   FileCount in(stdin);
   if (filename && *filename) {
-    printf("%s\n", filename);
     in.f=fopen(filename, "rb");
     if (!in.f) {
       perror(filename);
@@ -2270,13 +2089,20 @@ void list(const char* filename) {
   try {
     libzpaq::Decompresser d;
     in.count=1;
+    double insize=0, outsize=0;  // total uncompressed, compressed sizes
     d.setInput(&in);
-    double memory=0;
+    double memory=0, max_memory=0;  // per block and largest
     StringWriter name, comment;
     char s[21];  // checksum
+    printf("Block Checksum File Comment -> Compressed size for %s\n",
+         filename);
     for (int i=1; d.findBlock(&memory); ++i) {
-      printf("\nBlock %d model %d needs %1.3f MB\n", i, d.getModel(),
-          memory*0.000001);
+      if (memory>max_memory) max_memory=memory;
+
+      // Verbose listing showing ZPAQL block header code
+      if (verbose)
+        printf("\nBlock %d model %d needs %1.3f MB\n", i, d.getModel(),
+            memory*0.000001);
       bool firstSegment=true;
       while (d.findFilename(&name)) {
         d.readComment(&comment);
@@ -2318,23 +2144,27 @@ void list(const char* filename) {
         }
         firstSegment=false;
         d.readSegmentEnd(s);
+
+        // Display block number, checksum, file, size, compressed size
+        printf("[%3d]", i);
         if (s[0])
-          printf("  %02x%02x%02x%02x ",
+          printf(" %02x%02x%02x%02x ",
               s[1]&255, s[2]&255, s[3]&255, s[4]&255);
         else
-          printf("           ");
+          printf("          ");
         printf("%s %s -> %1.0f\n",
             name.s.c_str(), comment.s.c_str(), double(in.count));
+        insize+=atof(comment.s.c_str());
+        outsize+=in.count;
         name.s="";
         comment.s="";
         in.count=0;
       }
     }
+    printf("Total %1.0f -> %1.0f. %1.3f MB memory per thread needed.\n",
+      insize, outsize, max_memory*1e-6);
   }
   catch (const char* msg) {}
-  if (in.f!=stdin) fclose(in.f);
-  in.f=0;
-  printf("\n");
 }
 
 /////////////////////////// block_append //////////////////
