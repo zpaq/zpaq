@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 3.00.
+/* libzpaq.h - LIBZPAQ Version 4.00.
 
   Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
@@ -11,14 +11,20 @@
   This Software is provided "as is" without warranty.
 
 LIBZPAQ is a C++ library for compression and decompression of data
-conforming to the ZPAQ level 1 standard described in
-http://mattmahoney.net/dc/zpaq1.pdf
-See accompanying libzpaq.txt for documentation.
+conforming to the ZPAQ level 1 standard. See http://mattmahoney.net/zpaq/
+
+By default, LIBZPAQ uses JIT (just in time) acceleration. This only
+works on x86-32 and x86-64 processors that support the SSE2 instruction
+set. To disable JIT, compile with -DNOJIT. To enable run time checks,
+compile with -DDEBUG. Both options will decrease speed.
 */
 
 #ifndef LIBZPAQ_H
 #define LIBZPAQ_H
 
+#ifndef DEBUG
+#define NDEBUG 1
+#endif
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -29,6 +35,7 @@ namespace libzpaq {
 typedef uint8_t U8;
 typedef uint16_t U16;
 typedef uint32_t U32;
+typedef uint64_t U64;
 
 // Standard library prototypes redirected to libzpaq.cpp
 void* calloc(size_t, size_t);
@@ -53,9 +60,6 @@ public:
 // Read 16 bit little-endian number
 int toU16(const char* p);
 
-// A list of headers for which optimizations are available
-extern const char  models[];
-
 // An Array of T is cleared and aligned on a 64 byte address
 //   with no constructors called. No copy or assignment.
 // Array<T> a(n, ex=0);  - creates n<<ex elements of type T
@@ -64,7 +68,6 @@ extern const char  models[];
 // a.size() - gets n
 template <typename T>
 class Array {
-private:
   T *data;     // user location of [0] on a 64 byte boundary
   size_t n;    // user size
   int offset;  // distance back in bytes to start of actual allocation
@@ -97,8 +100,8 @@ void Array<T>::resize(size_t sz, int ex) {
   n=0;
   if (sz==0) return;
   n=sz;
-  const size_t nb=64+n*sizeof(T);  // test for overflow
-  if (nb<=64 || (nb-64)/sizeof(T)!=n) error("Array too big");
+  const size_t nb=128+n*sizeof(T);  // test for overflow
+  if (nb<=128 || (nb-128)/sizeof(T)!=n) error("Array too big");
   data=(T*)calloc(nb, 1);
   if (!data) error("Out of memory");
   offset=64-(((char*)data-(char*)0)&63);
@@ -118,6 +121,7 @@ public:
     if ((len0&511)==0) process();
   }
   double size() const {return len0/8+len1*536870912.0;} // size in bytes
+  U64 usize() const {return len0/8+(U64(len1)<<29);} // size in bytes
   const char* result();  // get hash and reset
   SHA1() {init();}
 private:
@@ -139,6 +143,7 @@ extern const int compsize[256];
 class ZPAQL {
 public:
   ZPAQL();
+  ~ZPAQL();
   void clear();           // Free memory, erase program, reset machine state
   void inith();           // Initialize as HCOMP to run
   void initp();           // Initialize as PCOMP to run
@@ -156,7 +161,6 @@ public:
   Array<U8> header;   // hsize[2] hh hm ph pm n COMP (guard) HCOMP (guard)
   int cend;           // COMP in header[7...cend-1]
   int hbegin, hend;   // HCOMP/PCOMP in header[hbegin...hend-1]
-  int select;         // Which optimized version of run()? (default 0)
 
 private:
   // Machine state for executing HCOMP
@@ -166,9 +170,11 @@ private:
   U32 a, b, c, d;     // machine registers
   int f;              // condition flag
   int pc;             // program counter
+  U8* rcode;          // JIT code for run()
+  int rcode_size;     // length of rcode
 
   // Support code
-  void selectModel(); // Find optimized code
+  int assemble();  // put JIT code in rcode
   void init(int hbits, int mbits);  // initialize H and M sizes
   int execute();  // execute 1 instruction, return 0 after HALT, else 1
   void run0(U32 input);  // default run() when select==0
@@ -191,8 +197,8 @@ struct Component {
   size_t cxt;     // saved context
   size_t a, b, c; // multi-purpose variables
   Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
-  Array<U8> ht;   // ICM hash table[0..size1][0..15] of bit histories; MATCH buf
-  Array<U16> a16; // multi-use
+  Array<U8> ht;   // ICM/ISSE hash table[0..size1][0..15] and MATCH buf
+  Array<U16> a16; // MIX weights
   void init();    // initialize to all 0
   Component() {init();}
 };
@@ -202,11 +208,11 @@ struct Component {
 // Next state table generator
 class StateTable {
   enum {N=64}; // sizes of b, t
-  U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
   int num_states(int n0, int n1);  // compute t[n0][n1][1]
   void discount(int& n0);  // set new value of n0 after 1 or n1 after 0
   void next_state(int& n0, int& n1, int y);  // new (n0,n1) after bit y
 public:
+  U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
   int next(int state, int y) {  // next state for bit y
     assert(state>=0 && state<256);
     assert(y>=0 && y<4);
@@ -225,26 +231,32 @@ public:
 class Predictor {
 public:
   Predictor(ZPAQL&);
+  ~Predictor();
   void init();          // build model
   int predict();        // probability that next bit is a 1 (0..4095)
   void update(int y);   // train on bit y (0..1)
   int stat(int);        // Defined externally
+  friend int assemble_p(Predictor&);  // put JIT code in pcode
 private:
 
   // Predictor state
   int c8;               // last 0...7 bits.
   int hmap4;            // c8 split into nibbles
   int p[256];           // predictions
+  U32 h[256];           // unrolled copy of z.h
   ZPAQL& z;             // VM to compute context hashes, includes H, n
   Component comp[256];  // the model, includes P
 
   // Modeling support functions
   int predict0();       // default
   void update0(int y);  // default
+  int dt2k[256];        // division table for match: dt2k[i] = 2^12/i
   int dt[1024];         // division table for cm: dt[i] = 2^16/(i+1.5)
   U16 squasht[4096];    // squash() lookup table
   short stretcht[32768];// stretch() lookup table
   StateTable st;        // next, cminit functions
+  U8* pcode;            // JIT code for predict() and update()
+  int pcode_size;       // length of pcode
 
   // reduce prediction error in cr.cm
   void train(Component& cr, int y) {
@@ -283,6 +295,9 @@ private:
 
   // Get cxt in ht, creating a new row if needed
   size_t find(Array<U8>& ht, int sizebits, U32 cxt);
+
+  // Put JIT code in pcode
+  int assemble_p();
 };
 
 ////////////////////////////// Decoder ////////////////////////////
@@ -315,7 +330,7 @@ public:
   void init(int h, int m);  // ph, pm sizes of H and M
   int write(int c);  // Input a byte, return state
   int getState() const {return state;}
-  int getModel() const {return z.select;}
+  int getModel() const {return 0;}
   void setOutput(Writer* out) {z.output=out;}
   void setSHA1(SHA1* sha1ptr) {z.sha1=sha1ptr;}
 };
@@ -334,7 +349,7 @@ public:
 private:
   U32 low, high; // range
   Predictor pr;  // to get p
-  void encode(int y, int p); // encode bit y (0..1) with probability p (0..8191)
+  void encode(int y, int p); // encode bit y (0..1) with prob. p (0..65535)
 };
 
 //////////////////////// Compressor /////////////////////////
@@ -352,7 +367,7 @@ public:
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
   void endBlock();
-  int getModel() const {return z.select;}
+  int getModel() const {return 0;}
   int stat(int x) {return enc.stat(x);}
 private:
   ZPAQL z;
@@ -366,7 +381,7 @@ private:
 // For decompression and listing archive contents
 class Decompresser {
 public:
-  Decompresser(): z(), dec(z), pp(), state(INIT) {}
+  Decompresser(): z(), dec(z), pp(), state(BLOCK), decode_state(FIRSTSEG) {}
   void setInput(Reader* in) {dec.in=in;}
   bool findBlock(double* memptr = 0);
   void hcomp(Writer* out2) {z.write(out2);}
@@ -377,14 +392,15 @@ public:
   bool decompress(int n = -1);  // n bytes, -1=all, return true until done
   bool pcomp(Writer* out2) {return pp.z.write(out2);}
   void readSegmentEnd(char* sha1string = 0);
-  int getModel() const {return z.select;}
+  int getModel() const {return 0;}
   int getPostModel() const {return pp.getModel();}
   int stat(int x) {return dec.stat(x);}
 private:
   ZPAQL z;
   Decoder dec;
   PostProcessor pp;
-  enum {INIT, BLOCK, SEG1, SEG2, SEGEND, BLOCKSKIP, SEG1SKIP, SEG2SKIP} state;
+  enum {BLOCK, FILENAME, COMMENT, DATA, SEGEND} state;  // expected next
+  enum {FIRSTSEG, SEG, SKIP} decode_state;  // which segment in block?
 };
 
 /////////////////////////// compress() ///////////////////////
