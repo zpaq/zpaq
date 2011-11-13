@@ -44,10 +44,9 @@ zpaq - Archiver and compression algorithm development tool
 
 =head1 SYNOPSIS
 
-  To compress:     zpaq [-bfhijmnpqstv] {a|c} <archive> <files>...
-  To extract:      zpaq [-fijnpstv] {e|x} <archive> [<files>...]
+  To compress:     zpaq [-bfhimnpqstv] {a|c} <archive> <files>...
+  To extract:      zpaq [-finpstv] x <archive> [<files>...]
   To list:         zpaq [-v] l <archive>
-  To copy blocks:  zpaq [-v] b archive output [N[-N]]
   To run config:   zpaq [-hjv] r [input [output]]
   To trace config: zpaq [-hv] t [N...]
   For quick help:  zpaq
@@ -100,23 +99,6 @@ at a time can be used on each block. I<zpaq> includes commands
 for listing archives and extracting blocks in arbitrary
 order to construct new archives without decompressing.
 
-I<zpaq> contains speed optimizations for decompressing archives
-compressed with the 4 built-in levels. The decompression algorithm
-is described by a sandboxed, assembler-like, virtual machine
-language called ZPAQL, which is normally interpreted. If an external
-C++ compiler is installed, then I<zpaq> can improve decompression speed
-of non built-in compression modes
-by translating the ZPAQL to C++ and then compiling, running, and
-deleting a temporary, optimized version of itself. This is
-called just-in-time (JIT) optimization. It also performs JIT
-optimization when compressing from a configuration file.
-If this optimization fails (e.g. there is no external C++
-compiler), then I<zpaq> falls back to interpreting
-the ZPAQL, so its behavior is still correct. There are options
-to skip this optimization or to save the temporary source or
-executable, which may be useful for building new,
-customized ZPAQ-compatible compressors.
-
 A decompression algorithm has two parts: a context-mixing model
 and an optional postprocessor. The model is the the same for
 compression and decompression. It describes how to compute
@@ -135,8 +117,7 @@ preprocessors (without postprocessor testing).
 
 For debugging configuration files, I<zpaq> can run or trace
 the execution of context modeling or postprocessing code.
-The code is run JIT-optimized by default. Tracing displays
-instructions and virtual registers during execution and
+Tracing displays instructions and virtual registers during execution and
 memory contents when done.
 
 =head1 COMMANDS
@@ -150,40 +131,11 @@ If I<archive> does not have a C<.zpaq> extension, then one is
 added. File names are saved in the archive exactly as specified in
 the command.
 
-=item B<b I<archive> I<output> [N[-N]]...>
-
-Append the listed blocks of I<archive>C<.zpaq> to
-I<output>C<.zpaq>. The C<.zpaq> extension is added to
-both file names if not present. The block list is a list
-of positive integers or inclusive ranges of integers, where
-1 is the first block. For example, C<zpaq in out 1 3-5>
-appends the first, third, fourth, and fifth block of F<in.zpaq>
-to F<out.zpaq>.
-
-The listed blocks do not have to be in ascending
-order and may be repeated. The effect of reordering blocks
-is to reorder the data they represent after decompression.
-If a block begins with unnamed file segments, then that data
-is appended to the last named file upon decompression.
-
 =item B<c I<archive> I<file>...>
 
 Compress the listed files and create a new I<archive>C<.zpaq>.
 The command is like B<a> except that if I<archive>C<.zpaq>
 exists then it is overwritten rather than appended.
-
-=item B<e I<archive> [I<files>...]>
-
-Extract files from I<archive>C<.zpaq> in the order they were added,
-creating or overwriting one file for each file listed in I<files>,
-up to the number of files in the archive. The C<.zpaq> extension
-is added to I<archive> if not present. If no I<files> are listed,
-then the entire archive is extracted to the current directory
-using the saved file names (ignoring any saved path). In this case,
-output files that already exist will not be clobbered. If the
-archive does not begin with a named file, then all data up to
-the first named segment is assumed to have the name I<archive>
-without the C<.zpaq> extension.
 
 =item B<l I<archive>>
 
@@ -222,12 +174,20 @@ The command is useful for debugging configuration files.
 
 =item B<x I<archive> [I<files>...]>
 
-Extract from I<archive>C<.zpaq> like B<e>, except that the
-stored path (not just the file name) is used if I<files>
-are omitted. Directories are created
+Extract files from I<archive>C<.zpaq> in the order they were added,
+creating or overwriting one file for each file listed in I<files>,
+up to the number of files in the archive. The C<.zpaq> extension
+is added to I<archive> if not present. If no I<files> are listed,
+then the entire archive is extracted. In this case,
+output files that already exist will not be clobbered. If the
+archive does not begin with a named file, then all data up to
+the first named segment is assumed to have the name I<archive>
+without the C<.zpaq> extension.
+
+Directories are created
 as needed. A saved path may use either forward slashes (/)
 or backslashes (\) as directory separators. During extraction,
-"/" is converted to "\" in Windows, and "\" to "/" in Linux.
+"/" is converted to "\" in Windows, or "\" to "/" in Linux.
 
 =back
 
@@ -251,7 +211,7 @@ B<-m4>, and configuration files, the default is B<-b0>.
 
 =item B<-f>
 
-Force overwrite of output files when extracting with B<e> or B<x>.
+Force overwrite of output files when extracting with B<x>.
 
 =item B<-h>
 
@@ -271,22 +231,6 @@ During compression, do not save comments. Normally, I<zpaq>
 saves file segment sizes as decimal strings which are displayed
 when the archive is listed. This option saves a few bytes
 but has no other effect.
-
-=item B<-j{0|1|2|3}>
-
-Control JIT (just in time) optimization. B<-j0> says that
-when a non built-in compression level is detected, either
-when compressing with or running a configuration file or when
-decompressing, then interpret the ZPAQL code. The default
-behavior, selected by B<-j1>, is to translate the ZPAQL code
-to C++, attempt to compile it with an external compiler
-(called by the script F<zpaqopt>), and run the resulting
-program with the same arguments. This will usually run faster
-than interpreting the ZPAQL code. If compilation fails
-(because there is no C++ compiler or F<zpaqopt> script),
-then the code is interpreted as with B<-j0>.  B<-j2> says
-not to delete the temporary source code when the program is
-finished. B<-j3> says not to delete the temporary executable either.
 
 =item B<-m{1|2|3|4|I<config>[,N]...}>
 
@@ -320,7 +264,7 @@ the archive.
 
 Do not save paths with filenames during compression, or ignore
 them during extraction. The result in either case is that files
-will be extracted to the current directory like B<e>.
+will be extracted to the current directory.
 
 =item B<-q>
 
@@ -396,12 +340,6 @@ To extract to directory F<calgary>, overwriting existing files
 if any, or creating the directory if needed:
 
     zpaq -f x calgary
-
-To extract just F<BOOK1> to F<book.out>, create a temporary
-archive containing only block 2:
-
-    zpaq b calgary tmp 2
-    zpaq x tmp book.out
 
 =head1 CONFIGURATION FILES
 
@@ -684,6 +622,7 @@ contains a prediction p(1) and a count in the range 0..I<limit>*4 (max
 and inversely proportional to the count. A large limit (max 255) is
 best for stationary sources. A smaller value makes the model more
 adaptive to changing statistics. Memory usage is 2^(s+2) bytes.
+s must not exceed 26 (4 GiB memory).
 
 =item I<i> ICM I<s> (indirect context model)
 
@@ -695,7 +634,7 @@ fixed rate) and updating the bit history. The hash table is indexed by
 the low s+10 bits of H[i] and the previous bits of the current byte,
 with highest 8 bits (s+9..s+2) used to detect hash collisions. An ICM
 works best on nonstationary sources or where memory efficiency is
-important. It uses 2^(s+6) bytes.
+important. It uses 2^(s+6) bytes. s must not exceed 26 (4 GiB memory).
 
 =item I<i> MATCH I<s> I<b>
 
@@ -708,7 +647,8 @@ the current context. A MATCH is useful for any data that has repeat
 occurrences of strings longer than about 6-8 bytes within a window of
 size 2^b. Generally, larger b (up to the file size) gives better
 compression, and s = b-2 gives adequate indexing. The context should
-be a high order hash. Memory usage is 4*2^s + 2^b bytes.
+be a high order hash. Memory usage is 4*2^s + 2^b bytes. s and b must
+not exceed 32 each (20 GiB memory).
 
 =item I<i> AVG I<j> I<k> I<wt> (fixed weight 2 input mixer)
 
@@ -730,7 +670,7 @@ are rarely useful). The adaptation I<rate> is selectable. Typical
 values are around 8 to 32. Lower values are best for stationary
 sources. Higher rates are more adaptive. A MIX2 generally gives better
 compression than AVG but at a cost in speed and memory. Uses 2^(s+1)
-bytes of memory.
+bytes of memory. s must not exceed 32 (8 GiB memory).
 
 =item I<i> MIX I<s> I<j> I<m> I<rate> I<mask> (m-input mixer)
 
@@ -739,8 +679,8 @@ j..j+m-1, all of which must precede i. A typical use is as the final
 component, taking all other components as input with a low order
 context. A MIX with 2 inputs is different than a MIX2 in that the
 weights are not constrained to add to 1. This sometimes gives better
-compression, sometimes worse. Memory usage is m*2^(s+2) bytes.
-Execution time is proportional to m.
+compression, sometimes worse. Memory usage is m*2^(s+2) bytes and
+must not exceed 16 GiB. Execution time is proportional to m.
 
 =item I<i> ISSE s j (indirect secondary symbol estimator)
 
@@ -753,7 +693,8 @@ a pair of weights for a 2 input MIX (not a MIX2) with component j
 to adjust the previous prediction using a (typically longer) context.
 A typical use is a chain of ISSE after a low order CM or ICM working
 up to higher order contexts as in mid.cfg. (This architecture is also
-used in the PAQ9A compressor). Uses 2^(s+6) bytes.
+used in the PAQ9A compressor). Uses 2^(s+6) bytes. s must not exceed
+26 (4 GiB memory).
 
 =item I<i> SSE I<s> I<j> I<start> I<limit> (secondary symbol estimator)
 
@@ -779,7 +720,7 @@ of a MIX. It is sometimes followed by an AVG to average its input and
 output, typically weighted 75% to 90% in favor of the output.
 Sometimes more than one SSE or SSE-AVG pair is used in series with
 progressively higher order contexts, or may be used in parallel and
-mixed. An SSE uses 2^(s+8) bytes.
+mixed. An SSE uses 2^(s+8) bytes. s must not exceed 26 (16 GiB memory).
 
 =back
 
@@ -791,20 +732,20 @@ case, the low 9 bits of a CM or low 8 bits of the other components
 should be cleared to leave space to combine with the bits of the
 current byte. This is summarized:
 
-    Component              Context size    Memory
-    -------------------    ------------    ------
+    Component              Context size    Memory          Limit
+    -------------------    ------------    ------          ------
     CONST c                0               0
-    CM s limit             s               2^(s+2)
-    ICM s                  s+10            2^(s+6)
-    MATCH s b              s               2^(s+2) + 2^b
+    CM s limit             s               2^(s+2)         16 GiB
+    ICM s                  s+10            2^(s+6)         4  GiB
+    MATCH s b              s               2^(s+2) + 2^b   20 GiB
     AVG j k wt             0               0
-    MIX2 s j k rate mask   s               2^(s+1)
-    MIX s j m rate mask    s               m*2^(s+2)
-    ISSE s j               s+10            2^(s+6)
-    SSE s j start limit    s               2^(s+8)
+    MIX2 s j k rate mask   s               2^(s+1)         8  GiB
+    MIX s j m rate mask    s               m*2^(s+2)       16 GiB
+    ISSE s j               s+10            2^(s+6)         4  GiB
+    SSE s j start limit    s               2^(s+8)         16 GiB
 
-Although the ZPAQ standard does not specify a maximum for s, this
-program will not create arrays 2GB (2^31) or larger when compiled
+In addition to the specified limits per component, this
+program will not create arrays 2 GiB (2^31) or larger when compiled
 for 32 bit operating systems.
 
 =head2 ZPAQL
@@ -1407,52 +1348,6 @@ NUMBER_OF_PROCESSORS. In Linux, the number of lines of the
 form "Processor : 0", "Processor : 1",... in F</cpu/procinfo>
 is used instead.
 
-=head1 FILES
-
-The script or program F<zpaqopt> (F<zpaqopt.bat>
-in Windows) is required for JIT optimization and should be
-somewhere in the current PATH. It should
-compile C<$1.cpp> to C<$1.exe> where I<$1> is passed as
-an argument. It needs to include F<libzpaq.h> and be linked to
-the files F<zpaq.o> and F<libzpaq.o> which are prepared from
-the source distribution as follows:
-
-    g++ -O3 -DNDEBUG -DOPT -c zpaq.cpp libzpaq.cpp
-
-These files may be placed anywhere, as long as F<zpaqopt> knows
-where to find them. A possible installation for Windows,
-assuming that %PATH% contains F<c:\bin> and that MinGW g++
-is installed is:
-
-    c:\bin\zpaq.exe
-    c:\bin\zpaqopt.bat
-    c:\zpaq\zpaq.o
-    c:\zpaq\libzpaq.o
-    c:\zpaq\libzpaq.h
-
-F<zpaqopt.bat> would contain:
-
-    g++ -O3 -DNDEBUG %1.cpp c:\zpaq\zpaq.o c:\zpaq\libzpaq.o -Ic:\zpaq -o %1.exe
-
-A possible Linux installation might be
-
-    /usr/bin/zpaq
-    /usr/bin/libzpaq
-    /usr/lib/zpaq/zpaq.o
-    /usr/lib/zpaq/libzpaq.o
-    /usr/include/libzpaq.h
-
-zpaqopt would be a script:
-
-    g++ -O3 -DNDEBUG %1.cpp -lpthread $1.cpp /usr/lib/zpaq/zpaq.o \
-    /usr/lib/zpaq/libzpaq.o -o $1.exe
-
-The script can be configured to use other optimization options
-(like C<-s -march=native>), other compilers, or other installation directories as appropriate.
--DNDEBUG turns off run time checks. -DOPT prepares a different
-version of I<zpaq> than this program, removing built-in optimizations
-and other unneeded code.
-
 =head1 STANDARDS
 
 See the ZPAQ level 1 specification in section AVAILABILITY . It is
@@ -1462,7 +1357,7 @@ programs.
 
 =head1 AVAILABILITY
 
-http://mattmahoney.net/dc/zpaq.html
+http://mattmahoney.net/zpaq/
 
 =head1 BUGS
 
@@ -1504,15 +1399,15 @@ C<libzpaq(3)>
 
 =head1 AUTHORS
 
-I<zpaq> uses code from I<libzpaq> v3.00 and I<libdivsufsort-lite> v2.01.
+I<zpaq> uses code from I<libzpaq> v4.00 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v3.01 is copyright (C) 2011, Dell Inc. It is written by Matt
+I<zpaq> v4.00 is copyright (C) 2011, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
 Program was written by Matt Mahoney <matmahoney@yahoo.com>.
 
-I<libzpaq> v3.00 is copyright (C) 2011, Dell Inc. It is written
+I<libzpaq> v4.00 is copyright (C) 2011, Dell Inc. It is written
 by Matt Mahoney. It is licensed
 under a modified MIT license allowing unrestricted use. See
 the source code for license text.
