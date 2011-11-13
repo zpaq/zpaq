@@ -1,45 +1,62 @@
-README for libzpaq v3.00 - July 28, 2011.
-Matt Mahoney, matmahoney@yahoo.com
+README for zpaq v4.01 compressing archiver - Nov. 25, 2011.
 
-This package contains the libzpaq API for developing applications that read
-or write in the ZPAQ level 1 standard format for compressed data.
-All versions of this software and supporting code and documents
-can be found at http://mattmahoney.net/dc/zpaq.html
-A copy of this software is included in the zpaq v3.01 source distribution.
+To compile, you need additional files from http://mattmahoney.net/zpaq/
 
-Contents:
+  libzpaq400.zip    -> libzpaq.cpp, libzpaq.h
+  divsufsort200.zip -> divsufsort.c, divsufsort.h
 
-  libzpaq.h        API header file to include in your C++ application.
-  libzpaq.cpp      Source code to link to your application.
-  libzpaqo.cpp     Default models fast, mid, max, to link.
-  libzpaq.3.pod    pod2html, pod2man source for documentation.
-  readme.txt       This file.
+divsufsort.* is also available from libdivsufsort-lite v2.00 from
+http://code.google.com/p/libdivsufsort/
+(C) 2008, Yuta Mori (MIT license).
 
-libzpaq is needed to compile most ZPAQ compatible applications such
-as zpaq, zpipe, and zpaqsfx. It is not needed to compile the reference
-decoder, unzpaq.
+zpaq.exe was compiled with MinGW g++ 4.6.1 for 32 bit Windows like this:
 
-libzpaq is an API that allows you to develop applications that compress
-or decompress byte streams such as files, arrays, or strings. It will
-decompress any stream that conforms to the ZPAQ level 1 standard.
-It will compress in the fast, mid, and max formats as described in the
-configuration files at the above website, and has speed optimizations
-to decompress these same configurations when they are recognized in
-the input. If you want to compress and/or optimize in other formats, then
-create an archive using zpaq config files for each format you want to
-support, extract it with zpaq -j2, and find the source code replacing
-libzpaqo.cpp in the temporary directory, either %TEMP%, $TMPDIR, or /tmp.
+  g++ -O3 -msse2 -s -static -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq
+  upx zpaq.exe
 
-LICENSE
+The option -static is only necessary if you distribute the executable.
+-DNDEBUG turns off run time checks in divsufsort.c. It is off by default
+in the other files. Use -DDEBUG to turn it on.
+-O3 -msse2 -s are optimization options. Feel free to adjust.
 
-  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
+upx is an optional executable compressor from http://upx.sourceforge.net/
 
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so without restriction.
-  This Software is provided "as is" without warranty.
+To compile for Linux, add the option -fopenmp
 
+To compile for Windows with VC++, open Visual Studio and select
+Tools/Command Window, and enter the command:
+
+  cl /O2 /EHsc zpaq.cpp libzpaq.cpp divsufsort.c
+
+This package contains:
+
+  zpaq.cpp - source code.
+  zpaq.1.pod - source for document zpaq.1.html created with pod2html.
+
+You can use pod2man to create a Linux man page.
+
+zpaq v4.01 adds incremental update. Before updating the archive,
+it compares the files and skips if identical. Extraction also
+compares and shows the results (as = or #) if the files exist,
+but does not overwrite. You will have to delete them to extract.
+
+zpaq v4.00 and libzpaq v4.00 replace version 3.01 of both. The main
+difference is that source level just-in-time (JIT) optimization is
+replaced with internal x86-32 and x86-64, so you no longer need
+an external C++ compiler to get the best performance. However,
+JIT will not work on non-x86 processors, or older processors that
+don't support the SSE2 instruction set. To disable JIT for these
+processors, compile with -DNOJIT and also drop the -msse2 option.
+The program will run about twice as slow.
+
+You can compile with -DDEBUG to turn on assertion checks to assist
+in debugging. It will run slower if you do. Note that in earlier
+versions, assertion checking was on by default in both zpaq and libzpaq
+unless turned off with -DNDEBUG. Now both are off by default.
+
+I have only tested the JIT code in 32 bit Windows and 64 bit Linux
+(Ubuntu). There is code to support 64 bit Windows and 32 bit Linux
+but it is not tested.
+
+-- Matt Mahoney
 
