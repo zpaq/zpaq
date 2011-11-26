@@ -44,110 +44,112 @@ zpaq - Archiver and compression algorithm development tool
 
 =head1 SYNOPSIS
 
-  To compress:     zpaq [-bfhimnpqstv] {a|c} <archive> <files>...
-  To extract:      zpaq [-finpstv] x <archive> [<files>...]
-  To list:         zpaq [-v] l <archive>
-  To run config:   zpaq [-hjv] r [input [output]]
-  To trace config: zpaq [-hv] t [N...]
-  For quick help:  zpaq
+    zpaq [-I<options>] I<commmand> I<archive>[C<.zpaq>] [I<files>...]
+    zpaq [-I<options>] r [I<input> [I<output>]]
+    zpaq [-I<options>] t [I<arg>...]
 
 =head1 DESCRIPTION
 
-I<zpaq> is a program to create, extract, and list compressed archives
-in ZPAQ level 1 format
+I<zpaq> is a program to create, update, extract, and list
+archives compressed in ZPAQ level 1 format,
 and a tool for developing new compression algorithms.
-The ZPAQ standard defines a flexible, self-describing,
-streaming (one pass) format for storing compressed data. The compressed
-format is based on the PAQ series of context-mixing and bitwise prediction
-algorithms, which are top ranked by compression ratio on many benchmarks.
+ZPAQ is based on the PAQ context-mixing compression algorithm, which
+is top ranked by compression ratio on many benchmarks. Unlike PAQ,
+which has over 160 incompatible versions, ZPAQ archives include a
+description of the decompression algorithm to maintain compatibility
+with older decompressers when better algorithms are developed.
+The ZPAQ format is open, requires no license, and is supported
+by a specification and reference decoder (see I<availability>).
 
-PAQ was developed as a series of over 160 incremental improvements
-between 2000 and 2010, each of which broke compatibility with
-archives compressed by other versions. ZPAQ solves this problem
-by including a description of the decompression algorithm in the
-archive. The ZPAQ format is described by a specification, an open
-source reference decoder, and an open source C++ library API,
-libzpaq(3), providing scanning, compression, and decompression services.
-(See I<availability>).
+I<zpaq> supports incremental update and restore. Before
+compressing or extracting a file, it computes
+the SHA-1 checksum of the external
+file and compares it with the stored checksum. If the files match,
+then the operation is skipped. To support huge archives,
+internal files are deleted in place.
 
 I<zpaq> has 4 built in compression levels to let you
 select between better speed or better compression ratio. It also
 accepts custom compression algorithms described by configuration
-files and optional external preprocessing programs. I<zpaq> and other
-ZPAQ conforming programs such as zpipe(1) and the reference
-decoder (I<unzpaq>) do not need these extra files to read the
-resulting archive.
+files and optional external preprocessing programs. The extra
+files are not needed to decompress. Compression algorithms
+are described in a language called ZPAQL. I<zpaq> includes
+devlopment tools to run, trace, and debug ZPAQL code, print
+model compression statistics, and write byte code. In addition,
+there are advanced options to skip saving error recovery tags,
+filenames, checksums, and file sizes to squeeze
+out the last bit of compression. Such archives cannot be updated
+incrementally.
 
-A ZPAQ stream consists of a sequence of independent blocks
-with a header describing the decompression algorithm. Each
-block contains segments with an optional filename, an optional
-comment (showing original size), compressed data, and an optional
-SHA-1 checksum.
-All are stored by default, but there are options to omit them.
-A segment without a filename represents data concatenated to
-the previous segment.
+I<zpaq> supports block level parallel compression using all
+available processors. A block can be a file, part of a file,
+or multiple files (solid archive). Generally, larger blocks
+compress better. Solid archives cannot be updated incrementally.
 
-Blocks can be split apart and reordered, which has the effect of
-reordering the data they represent. If more than one processor
-is available, then I<zpaq> will compress or decompress blocks
-in parallel in separate threads. By default,
-I<zpaq> splits large files into 16 MB blocks for parallel
-compression. There are options to change the block size or
-to compress whole files or the whole archive in a single block
-to improve compression at a cost in speed because only one processor
-at a time can be used on each block. I<zpaq> includes commands
-for listing archives and extracting blocks in arbitrary
-order to construct new archives without decompressing.
-
-A decompression algorithm has two parts: a context-mixing model
-and an optional postprocessor. The model is the the same for
-compression and decompression. It describes how to compute
-the probability of data bits so that they can be arithmetic
-coded or decoded. The postprocessor is optional. In general it is
-different from the preprocessor. Only the postprocessor is stored
-in the archive header. It is up to the user to supply an external
-preprocessor program, which should perform the inverse operation on
-the input data during compression. I<zpaq> normally tests the
-postprocessor by verifying that it restores the original data
-after preprocessing, and will refuse to compress if there is a
-mismatch. There is an option to skip this test to save time
-if you are sure that it works.
-The first two (faster) built-in compression levels use built-in
-preprocessors (without postprocessor testing).
-
-For debugging configuration files, I<zpaq> can run or trace
-the execution of context modeling or postprocessing code.
-Tracing displays instructions and virtual registers during execution and
-memory contents when done.
+I<zpaq> internally translates ZPAQL bytecode into equivalent x86-32
+or x86-64 code, making it about twice as fast as the reference
+decoder, even on a single thread.
 
 =head1 COMMANDS
 
+For all commands operating on archives (B<a>, B<d>, B<l>,
+B<u>, B<x>), the archive is assumed
+to have a C<.zpaq> extension if not specified.
+
 =over 4
 
-=item B<a I<archive> I<file>...>
+=item B<a>
 
-Compress the listed files and append them to I<archive>C<.zpaq>.
-If I<archive> does not have a C<.zpaq> extension, then one is
-added. File names are saved in the archive exactly as specified in
-the command.
+Add files. For each I<file>, if the internal and external files
+both exist and are different, then the internal file is deleted
+(maintaining the order of the other internal files) and a compressed
+copy of the external file is appended to the end of the archive.
+If the files are identical, then no action is taken.
+If the internal file does not exist, then the external file
+is appended. If the external file does not exist, then the internal
+file is deleted. If neither file exists, then no action is taken.
 
-=item B<c I<archive> I<file>...>
+Files are saved with a filename as specified on the command
+line, a comment as a decimal string, and a SHA-1 checksum. If a file
+is split into multiple blocks, then each block has its own
+size and checksum, and subsequent filenames are empty. Each
+block includes a 13 byte header locator tag for error recovery and
+a description of the decompression algorithm.
 
-Compress the listed files and create a new I<archive>C<.zpaq>.
-The command is like B<a> except that if I<archive>C<.zpaq>
-exists then it is overwritten rather than appended.
+Update fails for solid archives (created with B<-bs>)
+if any internal file to be replaced is followed in the same block
+by a file not to be replaced. In this case, the archive remains
+unchanged.
 
-=item B<l I<archive>>
+Files are compared by computing SHA-1 checksums of the external
+file and comparing with the stored checksums of the corresponding
+segments of the internal file. If this information is missing,
+then the files are assumed to be different.
 
-List I<archive>C<.zpaq> contents. There is one line per segment.
-Each line shows the block number, first 8 hexadecimal digits of
-the 40 digit SHA-1 checksum if present,
-filename if present, comment (original size) if present, and
-compressed size. If there is no filename then the segment is
-a continuation of the previous file.
-A summary shows the total original and compressed
-sizes of the archive and the maximum memory required by any
-block (for one thread) to decompress.
+=item B<d>
+
+Delete internal files that match I<names> exactly.
+The command fails for solid archives (created with B<-bs>) if any files
+to be deleted are followed by other files in the same block
+that are not to be deleted. If an archive contains more than
+one file with a matching name then all are deleted.
+
+=item B<l>
+
+List archive content. There are no I<file> arguments.
+A listing shows for each segment, the memory
+needed to decompress in MB (millions of bytes), original and compressed
+sizes in bytes, the first 4 of 20 bytes of the SHA-1 checksum
+in hexadecimal,
+and the filename as saved. If a file is split among multiple
+blocks, then the filename is shown for only the first block. If
+multiple files are packed into a single block (a solid archive),
+then the memory is shown for only the first segment in the block.
+It is not possible to update or delete a file without updating or
+deleting all of the files after it in the same block. Blocks are
+independent from each other and can be compressed or decompressed
+in parallel by separate threads, but segments within blocks must
+be processed sequentially.
 
 =item B<r [I<input> [I<output>]]>
 
@@ -172,22 +174,47 @@ or hexadecimal with a leading "x" (as in C<255> or C<xff>).
 The output is displayed in the same base as the input.
 The command is useful for debugging configuration files.
 
-=item B<x I<archive> [I<files>...]>
+=item B<u>
 
-Extract files from I<archive>C<.zpaq> in the order they were added,
-creating or overwriting one file for each file listed in I<files>,
-up to the number of files in the archive. The C<.zpaq> extension
-is added to I<archive> if not present. If no I<files> are listed,
-then the entire archive is extracted. In this case,
-output files that already exist will not be clobbered. If the
-archive does not begin with a named file, then all data up to
-the first named segment is assumed to have the name I<archive>
-without the C<.zpaq> extension.
+Update the archive to make it consistent with external files,
+and then optionally add files as with B<a>. For each internal
+file, if the external file does not exist or is different,
+then delete the internal file, leaving the order otherwise unchanged.
+If the external file is different, then append a compressed copy
+of it to the end of the archive.
+
+Update fails for solid archives (created with B<-bs>)
+if any internal file to be replaced or deleted is followed in the same block
+by a file not to be replaced or deleted.
+
+=item B<x> I<archive>[C<.zpaq>] [I<output> [I<file>]]
+
+Compare the internal file named I<file> in I<archive>C<.zpaq>
+to the file I<output>. If I<output> does not exist then it is
+created. If it exists and they are different, 
+then I<output> is overwritten. If the archive
+does not contain any file named exactly I<file> then it is
+an error and I<output> is not created or modified.
+Comparison is done as as with B<a>.
+
+If I<file> is omitted, then I<output> will be a concatenation
+of the entire contents of the archive. The operation is skipped
+if the contents of I<output> would not be changed.
+
+If I<output> is also omitted, then each file in the archive
+will be compared with the external file of the same name.
+If the external file does not exist, then it will be created.
+Otherwise the existing file is I<not> modified. Instead
+the results of the comparison is shown. Each output file is
+listed preceded by the character "=" if the file is identical, "#"
+if different, or ">" if the external file is created.
 
 Directories are created
 as needed. A saved path may use either forward slashes (/)
 or backslashes (\) as directory separators. During extraction,
 "/" is converted to "\" in Windows, or "\" to "/" in Linux.
+If the first segment of the archive is not named, then the
+name is taken by dropping C<.zpaq> from the archive name.
 
 =back
 
@@ -209,28 +236,30 @@ is B<-b268.435199>. B<-b0>, B<-bs>, or any larger size will
 automatically select this value. For levels B<-m3>,
 B<-m4>, and configuration files, the default is B<-b0>.
 
-=item B<-f>
+Generally, larger blocks compress better but slower because
+fewer blocks are available to run in parallel on separate processors,
+and (for -m1 and -m2) require more memory to compress and decompress.
+B<-bs> will give the best compression if there is any mutual
+information between files. However, archives created with B<-bs>
+cannot be updated because it is not possible to delete files
+from the beginning or middle of a block without deleting all
+of the files after it. Extraction of single files will be slower
+because it is necessary to decompress and discard the output
+of earlier files in the same block.
 
-Force overwrite of output files when extracting with B<x>.
+Furthermore, B<-bs> does not save original file sizes, checksums,
+or header locator tags, which saves a little extra space.
+That information is only needed for incremental update or
+recovery of subsequent blocks from corrupt archives,
+which would not be possible anyway.
 
 =item B<-h>
 
-During compression (B<a> or B<c>), save a 13 byte header
-locator tag at the start of the archive. The tag is only needed to
-find the archive if it is appended to or embedded in non-ZPAQ data,
-such as a self extracting archive stub.
-
-With B<r> or B<t>, B<-h> means to run or trace the context computation
-ZPAQL code (HCOMP section) of the configuration file specifed by
-B<-m>, rather than the post-processing (PCOMP) code. With B<r>, do
-not run with an extra EOF at the end of input.
-
-=item B<-i>
-
-During compression, do not save comments. Normally, I<zpaq>
-saves file segment sizes as decimal strings which are displayed
-when the archive is listed. This option saves a few bytes
-but has no other effect.
+With B<r> or B<t>, B<-h> means to run or trace the HCOMP section
+of the configuration file specifed by
+B<-m>, rather than the PCOMP section. Also with B<r>, do
+not run with an extra EOF at the end of input. The HCOMP section
+computes model contexts. Configuration files are described below.
 
 =item B<-m{1|2|3|4|I<config>[,N]...}>
 
@@ -252,20 +281,6 @@ in compression levels.
 By default, B<-m1> and B<-m2> use 80 MB memory per thread because the
 default block size is 16 MB.
 
-=item B<-n>
-
-Do not save file names during compression, or ignore
-them during extraction. The result in either case is that all
-of the compressed data is concatenated to a single file which
-is named by default by dropping the C<.zpaq> extension from
-the archive.
-
-=item B<-p>
-
-Do not save paths with filenames during compression, or ignore
-them during extraction. The result in either case is that files
-will be extracted to the current directory.
-
 =item B<-q>
 
 Do not test the post-processor when compressing with a
@@ -275,71 +290,22 @@ through the post-processor specified in the configuration file
 and compare the SHA-1 checksum of the output with the original
 input and refuse to compress if they do not match.
 
-=item B<-s>
-
-Do not save SHA-1 checksums during compression, or report but
-do not exit with an error if a checksum mismatch is detected
-during extraction. This saves 20 bytes per file or block.
-
 =item B<-tN>
 
 Use N threads during compression or decompression. The default
 is the number of processors detected.
 Using fewer threads can reduce memory usage but run slower.
-Using more threads than processors does not run any faster.
+Using more threads than processors or blocks does not run any faster.
 
 =item B<-v>
 
-Run verbosely. Show all steps, such as the creation, appending,
-and deletion of temporary files when compressing or extracting
-files split into blocks, when preprocessing with a configuration
-file, or when using JIT optimization. During compression with
-configuration files, memory usage per component is shown, which
-is helpful when adjusting component sizes. Also, the configuation
-file contents is displayed, which makes it easier to find syntax
-errors. With B<l>, the saved configuration is displayed in
-a format suitable for insertion into a configuration file.
+Verbose mode. This is only useful for debugging the source code.
 
 =back
 
 =head1 EXIT STATUS
 
 Returns 0 if successful or 1 in case of an error.
-
-=head1 EXAMPLES
-
-Compress all of the files in directory F<calgary> to
-archive F<calgary.zpaq> with maximum compression.
-
-    zpaq -m4 c calgary calgary/*
-
-List contents:
-
-    zpaq l calgary
-
-The contents are displayed with each file in a separate block:
-
-    Block Checksum File Comment -> Compressed size for calgary.zpaq
-    [  1] 3f86203a calgary/BIB 111261 -> 23006
-    [  2] 673c583d calgary/BOOK1 768771 -> 199473
-    [  3] b855cfaf calgary/BOOK2 610856 -> 128365
-    [  4] 5cf652cf calgary/GEO 102400 -> 46593
-    [  5] afd9f190 calgary/NEWS 377109 -> 96360
-    [  6] d155a7f8 calgary/OBJ1 21504 -> 8933
-    [  7] e02c588e calgary/OBJ2 246814 -> 56177
-    [  8] aef6dac8 calgary/PAPER1 53161 -> 13939
-    [  9] 93d9bf0d calgary/PAPER2 82199 -> 21357
-    [ 10] 96f7ab3d calgary/PIC 513216 -> 28240
-    [ 11] 66fa53f7 calgary/PROGC 39611 -> 10410
-    [ 12] 7f972316 calgary/PROGL 71646 -> 12078
-    [ 13] 22c59a40 calgary/PROGP 49379 -> 8408
-    [ 14] 34322336 calgary/TRANS 93695 -> 13285
-    Total 3141622 -> 666624. 246.227 MB memory per thread needed.
-
-To extract to directory F<calgary>, overwriting existing files
-if any, or creating the directory if needed:
-
-    zpaq -f x calgary
 
 =head1 CONFIGURATION FILES
 
@@ -1363,20 +1329,28 @@ http://mattmahoney.net/zpaq/
 
 There is no GUI.
 
+ZPAQL is not very user friendly as a language because it is designed
+for high speed and compactness.
+
+It is possible to add the same file with different names, such
+as F<file.txt>, F<FILE.TXT>, F<dir/../file.txt> and so on.
+This can cause collisions during extraction with unpredictable results.
+
+There are no commands to extract part of an archive bigger than
+one file and smaller than all of it.
+
+Extraction might overwrite a file that has write permission but
+not read permission.
+
 Recursive directory compression is not supported.
 
 Timestamps and other file attributes are not preserved. If you need this,
 make a B<.tar.zpaq> file.
 
-A file may be appended to an archive more than once.
-Extraction of subsequent
-copies will fail without renaming on the command line.
-
 Temporary files might not be deleted if the program is interrupted
 or if an error occurs.
-Temporary files have the form F<zpaqtmp*> in the temporary directory.
-
-ZPAQL is not very user friendly as a language.
+Temporary files have the form F<zpaqtmpI<pid>*>
+in the temporary directory, where I<pid> is the process ID.
 
 =head1 SEE ALSO
 
@@ -1401,7 +1375,7 @@ C<libzpaq(3)>
 
 I<zpaq> uses code from I<libzpaq> v4.00 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v4.00 is copyright (C) 2011, Dell Inc. It is written by Matt
+I<zpaq> v4.01 is copyright (C) 2011, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
