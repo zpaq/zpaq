@@ -1,4 +1,4 @@
-README for zpaq v4.01 compressing archiver - Nov. 25, 2011.
+README for zpaq v4.02 compressing archiver - Nov. 28, 2011.
 
 To compile, you need additional files from http://mattmahoney.net/zpaq/
 
@@ -26,7 +26,7 @@ To compile for Linux, add the option -fopenmp
 To compile for Windows with VC++, open Visual Studio and select
 Tools/Command Window, and enter the command:
 
-  cl /O2 /EHsc zpaq.cpp libzpaq.cpp divsufsort.c
+  cl /O2 /EHsc /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c
 
 This package contains:
 
@@ -34,6 +34,9 @@ This package contains:
   zpaq.1.pod - source for document zpaq.1.html created with pod2html.
 
 You can use pod2man to create a Linux man page.
+
+zpaq 4.02 adds commands c (create archive), x out/ (extract to
+directory), and l with no archive (show hcomp, pcomp strings).
 
 zpaq v4.01 adds incremental update. Before updating the archive,
 it compares the files and skips if identical. Extraction also

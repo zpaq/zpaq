@@ -92,7 +92,7 @@ decoder, even on a single thread.
 
 =head1 COMMANDS
 
-For all commands operating on archives (B<a>, B<d>, B<l>,
+For all commands operating on archives (B<a>, B<c>, B<d>, B<l>,
 B<u>, B<x>), the archive is assumed
 to have a C<.zpaq> extension if not specified.
 
@@ -126,6 +126,15 @@ file and comparing with the stored checksums of the corresponding
 segments of the internal file. If this information is missing,
 then the files are assumed to be different.
 
+=item B<c>
+
+Create archive and compress. With one exception, B<c> is equivalent
+to deleting the archive and adding files with B<a>. The exception
+is that if no files are given as arguments, then I<archive>
+is compressed to I<archive>C<.zpaq> and the filename is not saved
+in the archive. When extracted with B<x>, these files would
+be decompressed by dropping the C<.zpaq> extension.
+
 =item B<d>
 
 Delete internal files that match I<names> exactly.
@@ -150,6 +159,10 @@ deleting all of the files after it in the same block. Blocks are
 independent from each other and can be compressed or decompressed
 in parallel by separate threads, but segments within blocks must
 be processed sequentially.
+
+B<l> with no archive argument lists the HCOMP and PCOMP strings
+for the model selected by B<-m> in a format suitable for pasting
+into a C++ program.
 
 =item B<r [I<input> [I<output>]]>
 
@@ -187,34 +200,41 @@ Update fails for solid archives (created with B<-bs>)
 if any internal file to be replaced or deleted is followed in the same block
 by a file not to be replaced or deleted.
 
-=item B<x> I<archive>[C<.zpaq>] [I<output> [I<file>]]
+=item B<x> I<archive>[C<.zpaq>]
 
-Compare the internal file named I<file> in I<archive>C<.zpaq>
-to the file I<output>. If I<output> does not exist then it is
-created. If it exists and they are different, 
-then I<output> is overwritten. If the archive
-does not contain any file named exactly I<file> then it is
-an error and I<output> is not created or modified.
-Comparison is done as as with B<a>.
+=item B<x> I<archive>[C<.zpaq>] I<output>/
 
-If I<file> is omitted, then I<output> will be a concatenation
-of the entire contents of the archive. The operation is skipped
-if the contents of I<output> would not be changed.
+=item B<x> I<archive>[C<.zpaq>] I<output>
 
-If I<output> is also omitted, then each file in the archive
-will be compared with the external file of the same name.
-If the external file does not exist, then it will be created.
-Otherwise the existing file is I<not> modified. Instead
-the results of the comparison is shown. Each output file is
-listed preceded by the character "=" if the file is identical, "#"
-if different, or ">" if the external file is created.
+=item B<x> I<archive>[C<.zpaq>] I<output> I<file>
 
-Directories are created
-as needed. A saved path may use either forward slashes (/)
-or backslashes (\) as directory separators. During extraction,
-"/" is converted to "\" in Windows, or "\" to "/" in Linux.
-If the first segment of the archive is not named, then the
-name is taken by dropping C<.zpaq> from the archive name.
+Extract. The command has several forms. In the first form,
+the contents of the archive are compared with the external
+files of the same name. If the external file exists, then
+it is compared and listed as either identical or different.
+In either case, the external file is not modified. If the
+external file does not exist, then it is created. If the first
+segment of the archive is not named (as created with B<c>),
+then the external file name is taken to be I<archive> (without
+the C<.zpaq> extension). Directories are created as needed.
+Backslash (\) characters in filenames are converted to forward
+slashes (/) in Linux, and vice versa in Windows.
+
+If I<output>/ is specified with a trailing slash or backslash,
+then internal files are first renamed by removing
+any path (up to and including the last slash in the
+file name) and replacing it with I<output>/. The effect is
+to compare or extract all of the files to the contents
+of the directory I<output>.
+
+If I<output> does not have a trailing slash, then the entire
+contents of the archive are decompressed, concatenated, and
+written to the file I<output>. I<output> is overwritten if
+it exists unless the file is identical.
+
+If I<file> is specified, then only I<file> is extracted
+to I<output>, rather than the entire archive. If the archive
+does not contain a matching I<file>, then I<output> is not changed.
 
 =back
 
@@ -1375,7 +1395,7 @@ C<libzpaq(3)>
 
 I<zpaq> uses code from I<libzpaq> v4.00 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v4.01 is copyright (C) 2011, Dell Inc. It is written by Matt
+I<zpaq> v4.02 is copyright (C) 2011, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
