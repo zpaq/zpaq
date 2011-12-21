@@ -1,8 +1,8 @@
-README for zpaq v4.02 compressing archiver - Nov. 28, 2011.
+README for zpaq v4.03 compressing archiver - Dec. 21, 2011.
 
 To compile, you need additional files from http://mattmahoney.net/zpaq/
 
-  libzpaq400.zip    -> libzpaq.cpp, libzpaq.h
+  libzpaq401.zip    -> libzpaq.cpp, libzpaq.h
   divsufsort200.zip -> divsufsort.c, divsufsort.h
 
 divsufsort.* is also available from libdivsufsort-lite v2.00 from
@@ -34,6 +34,11 @@ This package contains:
   zpaq.1.pod - source for document zpaq.1.html created with pod2html.
 
 You can use pod2man to create a Linux man page.
+
+zpaq 4.03 fixes a bug in u (did not save filenames without args).
+It adds -f (x force overwrite), -r (recurse directories) and -n
+(don't save comments, checksums, or locator tags). -bs now saves
+these by default.
 
 zpaq 4.02 adds commands c (create archive), x out/ (extract to
 directory), and l with no archive (show hcomp, pcomp strings).
