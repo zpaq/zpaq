@@ -1,4 +1,4 @@
-/* zpaq.cpp v4.02 - Archiver and compression development tool.
+/* zpaq.cpp v4.03 - Archiver and compression development tool.
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -37,18 +37,21 @@ With Visual C++ (wildcard expansion won't work):
 
   cl /O2 /EHsc /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c
 
-In Linux, also use option -fopenmp
-In Windows you can use this too if you have pthreadGC2.dll in your PATH.
+In Linux, also use options -fopenmp -Dunix
+In Windows you can use -fopenmp if you have pthreadGC2.dll in your PATH.
 Other optimization options may be appropriate.
 
 -DNDEBUG turns off run time checks in divsufsort.c. They are off
 by default in zpaq.cpp and libzpaq.cpp. To turn them on use -DDEBUG.
 
-To turn off JIT for non x86-32/64 machines, compile libzpaq with -DNOJIT
+To turn off JIT for non x86-32/64 machines or old processors without
+SSE2 instructions, compile libzpaq with -DNOJIT
 
 */
 
-#define _FILE_OFFSET_BITS 64  // make sizeof(off_t) == 8
+#define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
+#include "divsufsort.h"
+#include "libzpaq.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,8 +61,6 @@ To turn off JIT for non x86-32/64 machines, compile libzpaq with -DNOJIT
 #include <vector>
 #include <map>
 #include <fcntl.h>
-#include "libzpaq.h"
-#include "divsufsort.h"
 
 #ifndef DEBUG
 #define NDEBUG 1
@@ -71,6 +72,7 @@ To turn off JIT for non x86-32/64 machines, compile libzpaq with -DNOJIT
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
 #else
 #include <windows.h>
 #include <io.h>
@@ -95,28 +97,30 @@ void run();  // do r and t commands
 
 void usage() {
   fprintf(stderr, 
-  "zpaq v4.02 - ZPAQ archiver and compression algorithm development tool.\n"
+  "zpaq v4.03 - ZPAQ archiver and compression algorithm development tool.\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney. Compiled " __DATE__ ".\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
-  "Usage: zpaq [-options] command                                 Commands:\n"
-  "  l arc          List archive arc.zpaq contents\n"
-  "  c arc          Compress arc to arc.zpaq without saving file name\n"
-  "  c arc files... Create arc.zpaq containing files (and save names)\n"
-  "  u arc          Update (or delete from) arc.zpaq to match external files\n"
-  "  u arc files... Update arc.zpaq and add more files\n"
-  "  a arc files... Update/add only the specified files\n"
-  "  d arc files... Delete from arc.zpaq\n"
-  "  x arc          Compare arc.zpaq to external files, or extract them\n"
-  "  x arc out%c     Compare or extract to directory out\n"
-  "  x arc out      Decompress concatenated contents of arc.zpaq to file out\n"
-  "  x arc out file Decompress one file in arc.zpaq to out\n"
+  "Usage: zpaq [-options] command     Commands [optional arguments...]\n"
+  "  l arc                            List archive arc.zpaq contents\n"
+  "  c arc [files...]                 Compress files or arc to new arc.zpaq\n"
+  "  a arc  files...                  Add files\n"
+  "  u arc [files...]                 Update and add files\n"
+  "  d arc  files...                  Delete from archive\n"
+  "  x arc [dir%c | output [file]]     Extract\n"
+  "Notes: a and u are incremental. Archive is updated only if files are new\n"
+  "or changed. u also updates or deletes internal files to match external\n"
+  "files. x (extract) to dir or to saved paths compares without clobbering.\n"
+  "Extracting file or concatenated contents to output overwrites if different.\n"
   "Options:\n"
+  "  -f             Force extract to overwrite existing files that differ\n"
+  "  -r             Recursively compress subdirectories\n"
   "  -m1...-m4      Compress faster...smaller (default -m1)\n"
   "  -mF[,N...]     Compress using F.cfg with optional numeric arguments\n"
   "  -bN            Compress in N MB blocks (default -b16 for -m1,-m2)\n"
   "  -b0            Compress 1 block per file (default for -m3,-m4,-mF)\n"
   "  -bs            Compress all files to 1 solid block (cannot be updated)\n"
+  "  -n             Don't save tags, comments, or checksums (cannot update)\n"
   "  -tN            Work on N blocks at once (default -t%d cores detected)\n"
   "  -q             Don't test F.cfg postprocessor during compression\n"
   "Configuration file debugging (requires -mF):\n"
@@ -152,7 +156,10 @@ char** cmd=0;          // command, archive, files...
 int ncmd=0;            // length of cmd
 int topt=1;            // -t number of threads
 bool verbose=false;    // -v verbose option
+bool fopt=false;       // -f force overwrite with x
+bool ropt=false;       // -r recurse subdirectories option
 int mopt=1;            // -m compression method 1..4, 0 = config file
+bool nopt=false;       // -n don't save tags, comments, checksums
 bool hopt=false;       // -h run HCOMP
 const char* config=0;  // config file name from -m
 int args[9]={0};       // config file arguments
@@ -336,37 +343,55 @@ void delete_file(const char* filename) {
   }
 }
 
+// For appending files
+class Appender {
+  FILE* out;
+  std::string outname;
+  libzpaq::Array<unsigned char> buf;
+public:
+  Appender(): out(stdout) {buf.resize(1<<16);}
+  ~Appender() {buf.resize(0); if (out && out!=stdout) fclose(out);}
+  int64_t append(const std::string& file1, const std::string& file2);
+};
+
 // Append file2 to file1 and delete file2. Return number of bytes appended.
-// "" means stdout, stdin.
-int64_t append(const char* file1, const char* file2) {
+// "" means stdout, stdin. If file1 is different than previous call
+// then close and reopen out, otherwise leave open.
+int64_t Appender::append(const std::string& file1, const std::string& file2) {
   if (verbose)
-    fprintf(stderr, "Appending to %s from %s\n", file1, file2);
+    fprintf(stderr, "Appending to %s from %s", file1.c_str(), file2.c_str());
   FILE* in=stdin;
-  if (file2 && *file2) in=fopen(file2, "rb");
+  if (file2!="") in=fopen(file2.c_str(), "rb");
   if (!in) {
-    perror(file2);
+    perror(file2.c_str());
     return 0;
   }
-  FILE* out=stdout;
-  if (file1 && *file1) out=fopen(file1, "ab");
-  if (!out) {
-    perror(file1);
-    if (in!=stdin) fclose(in);
-    return 0;
+  if (outname!=file1) {
+    outname=file1;
+    if (out && out!=stdout) fclose(out);
+    out=stdout;
+    if (file1!="") out=fopen(file1.c_str(), "ab");
+    if (!out) {
+      perror(file1.c_str());
+      if (in!=stdin) fclose(in);
+      return 0;
+    }
   }
-  const int BUFSIZE=4096;
-  char buf[BUFSIZE];
+  assert(in);
+  assert(out);
+  const int BUFSIZE=size(buf);
   int n;
   int64_t sum=0;
-  while ((n=fread(buf, 1, BUFSIZE, in))>0) {
-    fwrite(buf, 1, n, out);
+  while ((n=fread(&buf[0], 1, BUFSIZE, in))>0) {
+    fwrite(&buf[0], 1, n, out);
     sum+=n;
+    if (verbose) fprintf(stderr, ".");
   }
-  if (out!=stdout) fclose(out);
   if (in!=stdin) {
     fclose(in);
-    remove(file2);
+    remove(file2.c_str());
   }
+  if (verbose) fprintf(stderr, "\n");
   return sum;
 }
 
@@ -625,7 +650,7 @@ FileToCompress::~FileToCompress() {
 // Archive map: offset=compressed size, size=comment or -1,
 // memory=MB or 0 if not first seg in block, filename as read,
 // sha1result[0]=1 if present else 0. cmp: =equal, #different, >not found,
-// or (space) not tested.
+// ?might differ, or (space) not tested.
 
 struct Segment {
   int64_t csize;        // compressed size
@@ -698,15 +723,16 @@ void Job::print(FILE* f) {
 }
 
 // segment update indicator?
-bool isdel(char c) {return c=='#' || c=='>';}
+bool isdel(char c) {return c=='#' || c=='>' || c=='?';}
 
 // Return true if cmp is a type to be extracted, either > (does not exist)
-// or # (different and overwrite is allowed).
+// or # or ? (different and overwrite is allowed).
 bool isextract(char cmp) {
   assert(**cmd=='x');
   if (cmp=='>') return true;
+  if (fopt && isdel(cmp)) return true;
   int len;
-  return (cmp=='#' && ncmd>2 
+  return ((cmp=='#' || cmp=='?') && ncmd>2 
       && (len=strlen(cmd[2]))>0 && strchr("/\\", cmd[2][len-1])==0);
 }
 
@@ -735,7 +761,7 @@ void compress(Job& job) {
     // Write block header
     if (p->memory>=0) {
       if (p!=job.begin) c.endBlock();  // end previous block
-      if (bopt>=0) c.writeTag();
+      if (!nopt) c.writeTag();
 
       // Adjust postprocessor block size for bwt modes
       if (mopt==1 || mopt==2) {
@@ -756,15 +782,16 @@ void compress(Job& job) {
     FileToCompress in(p->filename.s.c_str(), p->csize, p->size, job.id);
     int64_t insize=in.filesize();
     c.setInput(&in);
-    c.startSegment(p->csize>0 || ncmd==2 ? 0 : p->filename.s.c_str(), // name
-                   bopt<0 ? 0 : itos(p->size).c_str());     // comment (size)
+    const bool isname=p->csize==0 && (ncmd>2 || **cmd!='c');
+    c.startSegment(isname ? p->filename.s.c_str() : 0, // name
+                   nopt ? 0 : itos(p->size).c_str());  // comment (size)
     if (first) {
       if (pcomp) c.postProcess(pcomp+8, get2(pcomp)-6);
       else c.postProcess(0);
       first=false;
     }
     c.compress();
-    c.endSegment(bopt<0 ? 0 : in.sha1());
+    c.endSegment(nopt ? 0 : in.sha1());
     fprintf(stderr, "Compressed: %s", p->filename.s.c_str());
     if (job.start>0) fprintf(stderr, "+%1.0f", double(job.start));
     fprintf(stderr, " %1.0f -> %1.0f (%1.4f bpc)\n",
@@ -966,7 +993,8 @@ int getmodel(int n, const char* &p) {
 
 // Compare file begin->filename.s with the range of segments in [begin,end)
 // representing that file. Set all of the file's segments to
-// '=' if equal, '#' if different, or '>' if not found, ' ' if filename is ".".
+// '=' if equal, '#' if different, '?' if exists but can't be compared,
+// '>' if not found, or ' ' if filename is "." and should be ignored.
 // If result is not 0 then don't read files and just set result.
 
 void compare(std::vector<Segment>::iterator begin,
@@ -993,11 +1021,11 @@ void compare(std::vector<Segment>::iterator begin,
     return;
   }
 
-  // If any missing checksums or prior sizes then assume different
-  bool diff=false;
+  // If any missing checksums or prior sizes then assume possibly different
+  int diff=0;  // 0,1,2 -> =,?,#
   for (p=begin; p!=end && !diff && (p==begin || p->filename.s==""); ++p) {
-    if (p>begin && p[-1].size<0) diff=true;
-    if (p->sha1result[0]!=1) diff=true;
+    if (p>begin && p[-1].size<0) diff=1;
+    if (p->sha1result[0]!=1) diff=1;
   }
 
   // Find first mismatched segment
@@ -1007,16 +1035,16 @@ void compare(std::vector<Segment>::iterator begin,
     for (int64_t l=0; l!=p->size && (c=getc(f))!=EOF; ++l)
       sha1.put(c);
     if (memcmp(sha1.result(), p->sha1result+1, 20))
-      diff=true;
+      diff=2;
   }
 
   // Check that files are the same size
-  if (!diff && getc(f)!=EOF) diff=true;
+  if (!diff && getc(f)!=EOF) diff=2;
   fclose(f);
 
   // Set all segments of the file to the same result
   for (p=begin; p!=end && (p==begin || p->filename.s==""); ++p)
-    p->cmp=diff?'#':'=';
+    p->cmp="=?#"[diff];
 }
 
 // A set of strings. You can add, remove, test membership, or iterate
@@ -1045,6 +1073,70 @@ private:
   std::map<std::string, bool>::iterator p, cur;
 };
 
+// Return the path of filename fn minus the bare name after the last slash
+std::string path(std::string fn) {
+  for (int i=size(fn)-1; i>=0; --i)
+    if (fn[i]=='\\' || fn[i]=='/' || (i==1 && fn[i]==':'))
+      return fn.substr(0, i+1);
+  return "";
+}
+
+// Insert filename into ss. In Windows, expand wildcards. If -r then
+// recursively insert directory contents. Return number of insertions.
+int insert(const std::string& filename, StringSet& ss) {
+  int result=0;
+#ifdef unix
+
+  // File or directory?
+  struct stat sb;
+  if (lstat(filename.c_str(), &sb)) {
+    perror(filename.c_str());
+    return 0;
+  }
+  if (!ropt || S_ISREG(sb.st_mode)) { // add regular file
+    if (verbose) fprintf(stderr, "%s\n", filename.c_str());
+    ss.add(filename);
+    return 1;
+  }
+
+  // Scan directory and add contents except . and ..
+  if (ropt && S_ISDIR(sb.st_mode)) {
+    DIR* dirp=opendir(filename.c_str());
+    if (!dirp) {
+      perror(filename.c_str());
+      return 0;
+    }
+    for (dirent* dp=readdir(dirp); dp; dp=readdir(dirp)) {
+      if (strcmp(".", dp->d_name) && strcmp("..", dp->d_name)) {
+        std::string s=filename;
+        if (s=="" || s[size(s)-1]!='/') s+="/";
+        s+=dp->d_name;
+        result+=insert(s, ss);
+      }
+    }
+    closedir(dirp);
+  }
+
+#else  // Windows
+
+  WIN32_FIND_DATA ffd;
+  HANDLE h=FindFirstFile(filename.c_str(), &ffd);
+  while (h!=INVALID_HANDLE_VALUE) {
+    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (ropt && strcmp(".", ffd.cFileName) && strcmp("..", ffd.cFileName))
+        result+=insert(path(filename)+ffd.cFileName+"\\*", ss);
+    }
+    else {
+      std::string s=path(filename)+ffd.cFileName;
+      if (verbose) fprintf(stderr, "%s\n", s.c_str());
+      ss.add(s);
+      ++result;
+    }
+    if (!FindNextFile(h, &ffd)) break;
+  }
+#endif
+  return result;
+}
 
 int main(int argc, char** argv) {
 
@@ -1053,15 +1145,15 @@ int main(int argc, char** argv) {
   // r,t: Run or trace config file and stop.
   // l,a,u,x,d: Build segment map arc[]. If listing, then list and stop.
   // x: Rename files in arc[] for extraction.
-  // a,u,d: Collect argument list.
+  // c,a,u,d: Collect argument list.
   // a,u,d: Test whether files can be deleted from solid archive.
-  // a,u,x: Compare internal and external files.
-  // a,u,x: Construct list of compression/decompression jobs, 1 per block.
-  // a,u,x: Run jobs in parallel to temporary output.
-  // a,u: If any errors, then don't update archive (skip next 2 steps).
-  // a,u,d: Delete old files from archive in place.
-  // a,u,x: Concatenate temporary files to output files.
-  // a,u,x: Delete any leftover temporary files.
+  // c,a,u,x: Compare internal and external files.
+  // c,a,u,x: Construct list of compression/decompression jobs, 1 per block.
+  // c,a,u,x: Run jobs in parallel to temporary output.
+  // c,a,u: If any errors, then don't update archive (skip next 2 steps).
+  // c,a,u,d: Delete old files (c=all) from archive in place.
+  // c,a,u,x: Concatenate temporary files to output files.
+  // c,a,u,x: Delete any leftover temporary files.
 
   // Start timer
   time_t start_time=time(0);
@@ -1082,6 +1174,9 @@ int main(int argc, char** argv) {
         else usage();
         break;
       case 't': topt=atoi(cmd[0]+2); break;
+      case 'f': fopt=true; break;
+      case 'r': ropt=true; break;
+      case 'n': nopt=true; break;
       case 'h': hopt=true; break;
       case 'q': qopt=true; break;
       case 'v': verbose=true; break;  // undocumented
@@ -1250,7 +1345,7 @@ int main(int argc, char** argv) {
         }
       }
     }
-    else if (strchr("xeodl", **cmd)) {  // not found (a,u: OK)
+    else if (strchr("xdl", **cmd)) {  // not found (a,u: OK)
       perror(archive.c_str());
       return 1;
     }
@@ -1259,9 +1354,13 @@ int main(int argc, char** argv) {
 
   // c,a,u,d: Collect set of filename arguments in args
   StringSet args;
-  if (strchr("caud", **cmd))
-    for (int i=2-(ncmd==2 && **cmd=='c'); i<ncmd; ++i)
-      args.add(cmd[i]);
+  if (strchr("caud", **cmd)) {
+    int filecount=0;
+    for (int i=2-(ncmd==2 && **cmd=='c'); i<ncmd; ++i) {
+      filecount+=insert(cmd[i], args);
+    }
+    fprintf(stderr, "%d files\n", filecount);
+  }
 
   // x: Fix filenames in arc[] to the names used for extraction
   for (int i=0; i<size(arc); ++i) {
@@ -1284,8 +1383,8 @@ int main(int argc, char** argv) {
   }
 
   // Compare internal and external files.
-  // x,u: compare, mark as =,#,>
-  // c,a: if in args then compare, mark =,#,>.
+  // x,u: compare, mark as =,?,#,>
+  // c,a: if in args then compare, mark =,?,#,>.
   // d: if in args then mark >.
 
   for (int i=0; i<size(arc); ++i) {
@@ -1302,7 +1401,9 @@ int main(int argc, char** argv) {
         if (!isextract(arc[i].cmp)) {
           if (arc[i].cmp=='=')
             fprintf(stderr, "Identical: %s\n", fn);
-          else if (arc[i].cmp=='#')
+          else if (!fopt && arc[i].cmp=='?')
+            fprintf(stderr, "Cannot compare, NOT extracted: %s\n", fn);
+          else if (!fopt && arc[i].cmp=='#')
             fprintf(stderr, "Differs, NOT extracted: %s\n", fn);
         }
       }
@@ -1315,8 +1416,8 @@ int main(int argc, char** argv) {
 
   if (verbose) for (int i=0; i<size(arc); ++i) arc[i].print(stderr);
         
-  // a,u,d: fail in case of partial block deletion, i.e. # or > followed
-  // by not # or > in the same block.
+  // a,u,d: fail in case of partial block deletion, i.e. #, ? or > followed
+  // by not #, ?, or > in the same block.
   if (strchr("aud", **cmd)) {
     int del=-1;  // index of last deleted file in block or -1
     for (int i=0; i<size(arc); ++i) {
@@ -1340,7 +1441,7 @@ int main(int argc, char** argv) {
   // u: for each arg with no matching seg, append block < per -b
   // c,a: for each arg, if no seg is = then append block marked < per -b
   // x: Schedule each block up to the last seg marked >
-  // x out: Schedule up to last seg marked > or #
+  // x out, x -f: Schedule up to last seg marked >, #, ?
 
   // c,u,a: update args to a list of files to be added
   std::vector<Job> jobs;
@@ -1349,7 +1450,7 @@ int main(int argc, char** argv) {
     for (int i=0; i<arcsize; ++i) {
       if (arc[i].filename.s!="") {
         if (arc[i].cmp=='=') args.remove(arc[i].filename.s);
-        if (arc[i].cmp=='#') args.add(arc[i].filename.s);
+        if (arc[i].cmp=='#' || arc[i].cmp=='?') args.add(arc[i].filename.s);
       }
     }
 
@@ -1394,7 +1495,7 @@ int main(int argc, char** argv) {
   }
 
   // x: schedule extraction jobs marked > from the start of block
-  // x out: schedule up to last > or # in block
+  // x out, x -f: schedule up to last > or # or ? in block
   if (**cmd=='x') {
     int64_t start=0;  // start of segment
     for (int i=0; i<size(arc); ++i) {
@@ -1518,7 +1619,7 @@ int main(int argc, char** argv) {
   if (!iserror && **cmd=='c')
     delete_file(archive.c_str());
 
-  // a,u,d: delete segs in place in archive marked with > or #.
+  // a,u,d: delete segs in place in archive marked with > or # or ?.
   // In case of error, do not modify archive
   if (!iserror && strchr("aud", **cmd)) {
     FILE* f=fopen(archive.c_str(), "rb+");
@@ -1593,12 +1694,14 @@ int main(int argc, char** argv) {
   // x: append to last named file in a job marked >
 
   if (!iserror && strchr("cau", **cmd)) {
+    Appender a;
     int64_t sum=0;
     for (int i=0; i<size(jobs); ++i)
-      sum+=append(archive.c_str(), tempname(i).c_str());
+      sum+=a.append(archive, tempname(i));
     fprintf(stderr, "-> %1.0f, ", double(sum));
   }
   else if (**cmd=='x') {
+    Appender a;
     std::vector<Segment>::iterator p;
     std::string lastfile="";
     for (int i=0; i<size(jobs); ++i) {
@@ -1609,7 +1712,7 @@ int main(int argc, char** argv) {
           if (p->filename.s=="") {
             assert(i>0);
             assert(lastfile!="");
-            append(lastfile.c_str(), tempname(i).c_str());
+            a.append(lastfile, tempname(i));
             break;
           }
           else
