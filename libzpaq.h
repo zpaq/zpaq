@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 4.00.
+/* libzpaq.h - LIBZPAQ Version 5.00.
 
   Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
@@ -11,12 +11,15 @@
   This Software is provided "as is" without warranty.
 
 LIBZPAQ is a C++ library for compression and decompression of data
-conforming to the ZPAQ level 1 standard. See http://mattmahoney.net/zpaq/
+conforming to the ZPAQ level 2 standard. See http://mattmahoney.net/zpaq/
 
 By default, LIBZPAQ uses JIT (just in time) acceleration. This only
 works on x86-32 and x86-64 processors that support the SSE2 instruction
 set. To disable JIT, compile with -DNOJIT. To enable run time checks,
 compile with -DDEBUG. Both options will decrease speed.
+
+The decompression code, when compiled with -DDEBUG and -DNOJIT,
+comprises the reference decoder for the ZPAQ level 2 standard.
 */
 
 #ifndef LIBZPAQ_H
@@ -45,15 +48,20 @@ void free(void*);
 extern void error(const char* msg);
 
 // Virtual base classes for input and output
+// get() and put() must be overridden to read or write 1 byte.
+// read() and write() may be overridden to read or write n bytes more
+// efficiently than calling get() or put() n times.
 class Reader {
 public:
   virtual int get() = 0;  // should return 0..255, or -1 at EOF
+  virtual int read(char* buf, int n); // read to buf[n], return no. read
   virtual ~Reader() {}
 };
 
 class Writer {
 public:
   virtual void put(int c) = 0;  // should output low 8 bits of c
+  virtual void write(const char* buf, int n);  // write buf[n]
   virtual ~Writer() {}
 };
 
@@ -109,7 +117,7 @@ void Array<T>::resize(size_t sz, int ex) {
   data=(T*)((char*)data+offset);
 }
 
-////////////////////// SHA1 ////////////////////
+//////////////////////////// SHA1 ////////////////////////////
 
 // For computing SHA-1 checksums
 class SHA1 {
@@ -121,7 +129,7 @@ public:
     if ((len0&511)==0) process();
   }
   double size() const {return len0/8+len1*536870912.0;} // size in bytes
-  U64 usize() const {return len0/8+(U64(len1)<<29);} // size in bytes
+  uint64_t usize() const {return len0/8+(U64(len1)<<29);} // size in bytes
   const char* result();  // get hash and reset
   SHA1() {init();}
 private:
@@ -133,7 +141,7 @@ private:
   void process();   // hash 1 block
 };
 
-//////////////////////////// ZPAQL //////////////////////////////
+//////////////////////////// ZPAQL ///////////////////////////
 
 // Symbolic constants, instruction size, and names
 typedef enum {NONE,CONS,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE} CompType;
@@ -150,12 +158,17 @@ public:
   double memory();        // Return memory requirement in bytes
   void run(U32 input);    // Execute with input
   int read(Reader* in2);  // Read header
-  bool write(Writer* out2);  // Write header, true unless empty PCOMP
+  bool write(Writer* out2, bool pp); // If pp write PCOMP else HCOMP header
   int step(U32 input, int mode);  // Trace execution (defined externally)
 
   Writer* output;         // Destination for OUT instruction, or 0 to suppress
   SHA1* sha1;             // Points to checksum computer
   U32 H(int i) {return h(i);}  // get element of h
+
+  void flush();           // write outbuf[0..bufptr-1] to output and sha1
+  void outc(int c) {      // output byte c (0..255) or -1 at EOS
+    if (c<0 || (outbuf[bufptr]=c, ++bufptr==outbuf.isize())) flush();
+  }
 
   // ZPAQ1 block header
   Array<U8> header;   // hsize[2] hh hm ph pm n COMP (guard) HCOMP (guard)
@@ -167,11 +180,13 @@ private:
   Array<U8> m;        // memory array M for HCOMP
   Array<U32> h;       // hash array H for HCOMP
   Array<U32> r;       // 256 element register array
+  Array<char> outbuf; // output buffer
+  int bufptr;         // number of bytes in outbuf
   U32 a, b, c, d;     // machine registers
   int f;              // condition flag
   int pc;             // program counter
-  U8* rcode;          // JIT code for run()
   int rcode_size;     // length of rcode
+  U8* rcode;          // JIT code for run()
 
   // Support code
   int assemble();  // put JIT code in rcode
@@ -185,7 +200,7 @@ private:
   void err();  // exit with run time error
 };
 
-//////////////////////////// Component ////////////////////////////
+///////////////////////// Component //////////////////////////
 
 // A Component is a context model, indirect context model, match model,
 // fixed weight mixer, adaptive 2 input mixer without or with current
@@ -203,7 +218,7 @@ struct Component {
   Component() {init();}
 };
 
-////////////////////////// StateTable //////////////////////////
+////////////////////////// StateTable ////////////////////////
 
 // Next state table generator
 class StateTable {
@@ -225,7 +240,7 @@ public:
   StateTable();
 };
 
-//////////////////////////// Predictor ////////////////////////////
+///////////////////////// Predictor //////////////////////////
 
 // A predictor guesses the next bit
 class Predictor {
@@ -236,7 +251,10 @@ public:
   int predict();        // probability that next bit is a 1 (0..4095)
   void update(int y);   // train on bit y (0..1)
   int stat(int);        // Defined externally
-  friend int assemble_p(Predictor&);  // put JIT code in pcode
+  bool isModeled() {    // n>0 components?
+    assert(z.header.isize()>6);
+    return z.header[6]!=0;
+  }
 private:
 
   // Predictor state
@@ -300,22 +318,27 @@ private:
   int assemble_p();
 };
 
-////////////////////////////// Decoder ////////////////////////////
+//////////////////////////// Decoder /////////////////////////
 
 // Decoder decompresses using an arithmetic code
 class Decoder {
 public:
-  Reader* in;  // destination
+  Reader* in;        // destination
   Decoder(ZPAQL& z);
   int decompress();  // return a byte or EOF
-  int skip();  // skip to the end of the segment, return next byte
-  void init() {pr.init(); low=1; high=0xFFFFFFFF; curr=0;}
+  int skip();        // skip to the end of the segment, return next byte
+  void init();       // initialize at start of block
   int stat(int x) {return pr.stat(x);}
 private:
-  U32 low, high; // range
-  U32 curr;  // last 4 bytes of archive
-  Predictor pr;  // to get p
+  U32 low, high;     // range
+  U32 curr;          // last 4 bytes of archive
+  Predictor pr;      // to get p
+  enum {BUFSIZE=1<<16};
+  Array<char> buf;   // input buffer of size BUFSIZE bytes
+    // of unmodeled data. buf[low..high-1] is input with curr
+    // remaining in sub-block.
   int decode(int p); // return decoded bit (0..1) with prob. p (0..65535)
+  void loadbuf();    // read unmodeled data into buf to EOS
 };
 
 /////////////////////////// PostProcessor ////////////////////
@@ -330,17 +353,50 @@ public:
   void init(int h, int m);  // ph, pm sizes of H and M
   int write(int c);  // Input a byte, return state
   int getState() const {return state;}
-  int getModel() const {return 0;}
   void setOutput(Writer* out) {z.output=out;}
   void setSHA1(SHA1* sha1ptr) {z.sha1=sha1ptr;}
 };
 
-//////////////////////////// Encoder ///////////////////////////////
+//////////////////////// Decompresser ////////////////////////
+
+// For decompression and listing archive contents
+class Decompresser {
+public:
+  Decompresser(): z(), dec(z), pp(), state(BLOCK), decode_state(FIRSTSEG) {}
+  void setInput(Reader* in) {dec.in=in;}
+  bool findBlock(double* memptr = 0);
+  void hcomp(Writer* out2) {z.write(out2, false);}
+  bool findFilename(Writer* = 0);
+  void readComment(Writer* = 0);
+  void setOutput(Writer* out) {pp.setOutput(out);}
+  void setSHA1(SHA1* sha1ptr) {pp.setSHA1(sha1ptr);}
+  bool decompress(int n = -1);  // n bytes, -1=all, return true until done
+  bool pcomp(Writer* out2) {return pp.z.write(out2, true);}
+  void readSegmentEnd(char* sha1string = 0);
+  int stat(int x) {return dec.stat(x);}
+private:
+  ZPAQL z;
+  Decoder dec;
+  PostProcessor pp;
+  enum {BLOCK, FILENAME, COMMENT, DATA, SEGEND} state;  // expected next
+  enum {FIRSTSEG, SEG, SKIP} decode_state;  // which segment in block?
+};
+
+/////////////////////////// decompress() /////////////////////
+
+void decompress(Reader* in, Writer* out);
+
+//////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////
+
+// Code following this point is not a part of the ZPAQ level 2 standard.
+
+//////////////////////////// Encoder /////////////////////////
 
 // Encoder compresses using an arithmetic code
 class Encoder {
 public:
-  Encoder(ZPAQL& z):
+  Encoder(ZPAQL& z, int size=0):
     out(0), low(1), high(0xFFFFFFFF), pr(z) {}
   void init();
   void compress(int c);  // c is 0..255 or EOF
@@ -349,10 +405,11 @@ public:
 private:
   U32 low, high; // range
   Predictor pr;  // to get p
+  Array<char> buf; // unmodeled input
   void encode(int y, int p); // encode bit y (0..1) with prob. p (0..65535)
 };
 
-//////////////////////// Compressor /////////////////////////
+//////////////////////// Compressor //////////////////////////
 
 class Compressor {
 public:
@@ -367,7 +424,6 @@ public:
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
   void endBlock();
-  int getModel() const {return 0;}
   int stat(int x) {return enc.stat(x);}
 private:
   ZPAQL z;
@@ -376,40 +432,9 @@ private:
   enum {INIT, BLOCK1, SEG1, BLOCK2, SEG2} state;
 };
 
-/////////////////////////// Decompresser //////////////////////////
-
-// For decompression and listing archive contents
-class Decompresser {
-public:
-  Decompresser(): z(), dec(z), pp(), state(BLOCK), decode_state(FIRSTSEG) {}
-  void setInput(Reader* in) {dec.in=in;}
-  bool findBlock(double* memptr = 0);
-  void hcomp(Writer* out2) {z.write(out2);}
-  bool findFilename(Writer* = 0);
-  void readComment(Writer* = 0);
-  void setOutput(Writer* out) {pp.setOutput(out);}
-  void setSHA1(SHA1* sha1ptr) {pp.setSHA1(sha1ptr);}
-  bool decompress(int n = -1);  // n bytes, -1=all, return true until done
-  bool pcomp(Writer* out2) {return pp.z.write(out2);}
-  void readSegmentEnd(char* sha1string = 0);
-  int getModel() const {return 0;}
-  int getPostModel() const {return pp.getModel();}
-  int stat(int x) {return dec.stat(x);}
-private:
-  ZPAQL z;
-  Decoder dec;
-  PostProcessor pp;
-  enum {BLOCK, FILENAME, COMMENT, DATA, SEGEND} state;  // expected next
-  enum {FIRSTSEG, SEG, SKIP} decode_state;  // which segment in block?
-};
-
 /////////////////////////// compress() ///////////////////////
 
 void compress(Reader* in, Writer* out, int level);
-
-/////////////////////////// decompress() /////////////////////
-
-void decompress(Reader* in, Writer* out);
 
 }  // namespace libzpaq
 
