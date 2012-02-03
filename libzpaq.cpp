@@ -1,4 +1,4 @@
-/* libzpaq.cpp - Part of LIBZPAQ Version 5.00
+/* libzpaq.cpp - Part of LIBZPAQ Version 5.01
 
   Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
@@ -13,8 +13,6 @@
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 2 standard. See http://mattmahoney.net/zpaq/
 */
-
-#include <stdio.h>  // debug
 
 #include "libzpaq.h"
 #include <stdlib.h>
@@ -2343,13 +2341,6 @@ int ZPAQL::assemble() {
   // Jump to start
   o=0;
   put1a(0xe9, start-5);  // jmp near start
-
-  // debug
-  FILE* obj=fopen("obj", "wb");
-  for (int i=0; i<rsize && i<rcode_size; ++i)
-    putc(rcode[i], obj);
-  fclose(obj);
-
   return rsize;
 }
 
