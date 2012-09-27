@@ -1,73 +1,88 @@
-README for zpaq v4.04 compressing archiver - Mar 26, 2012.
+zpaq v6.00 readme. Sept. 26, 2012.
 
-To compile, you need additional files from http://mattmahoney.net/zpaq/
+zpaq v6.00 is a journaling incremental deduplicating archiving compressor.
+All zpaq versions can be found at see http://mattmahoney.net/zpaq
 
-  libzpaq501.zip    -> libzpaq.cpp, libzpaq.h
-  divsufsort200.zip -> divsufsort.c, divsufsort.h
+Journaling means that the archive is append-only. When you update it,
+the old versions of files are kept and you can recover them by specifying
+the version of the archive you want to extract from.
 
-divsufsort.* is also available from libdivsufsort-lite v2.00 from
-http://code.google.com/p/libdivsufsort/
-(C) 2008, Yuta Mori (MIT license).
+Incremental means that when you tell it to add files, it compares the
+date with the stored date and only adds the files that have changed.
+You can override this.
 
-zpaq.exe was compiled with MinGW g++ 4.6.1 for 32 bit Windows like this:
+Deduplicating means that identical files and file fragments are stored
+only once. Files are fragmented along content-dependent boundaries
+(average size 64K) and the SHA-1 hashes of the fragments are computed
+and compared with the hashes stored in the archive. If there is a match,
+then only a pointer is saved.
 
-  g++ -O3 -msse2 -s -static -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq
+Files and directory trees are compressed in ZPAQ format, which is
+open source, precisely specified, and requires no license to use. The
+specification is supported by a public domain reference decoder
+and a public domain library API providing streaming compression and
+decompression services to or from files and/or memory. The format
+is self-describing, which means that when new compression algorithms
+are developed, old decompressers will still be able to read their output.
+ZPAQ is based on the PAQ context-mixing algorithm, which achieves good
+compression ratios, but also supports fast algorithms like LZ77 and BWT.
+
+The zpaq archiver has 4 built-in compression levels and also accepts
+custom compression algorithms described by configuration files written
+in the ZPAQL language and by external preprocessors (which are only needed
+to compress and not to extract). zpaq has tools for developers
+to test and debug configuration files. Examples can be found at the
+above website.
+
+zpaq is licensed under GPL v3 from Dell Inc. It uses libzpaq (public
+domain) and libdivsufsort-lite (MIT license by Yuta Mori). zpaq and libzpaq
+are written by Matt Mahoney. Contents:
+
+zpaq.exe      32 bit Windows executable, run from a command window.
+zpaq.cpp      zpaq command line documentation and source code.
+libzpaq.h     libzpaq API documentation (including ZPAQL) and header.
+libzpaq.cpp   libzpaq API source code.
+divsufsort.h  libdivsufsoft-lite header.
+divsofsort.c  libdivsufsort-lite source code.
+
+The Windows executable was compiled with MinGW g++ 4.6.1
+and compressed with upx 3.06w as follows:
+
+  g++ -O3 -msse2 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
   upx zpaq.exe
 
-The option -static is only necessary if you distribute the executable.
--DNDEBUG turns off run time checks in divsufsort.c. It is off by default
-in the other files. Use -DDEBUG to turn it on.
--O3 -msse2 -s are optimization options. Feel free to adjust.
+To back up your hard drive to archive e:backup.zpaq on an external drive:
 
-upx is an optional executable compressor from http://upx.sourceforge.net/
+  zpaq -add e:backup c:\
 
-To compile for Linux, add the option -fopenmp
+The first backup may take a few hours per 100 GB. Subsequent backups will
+take only a few minutes to compare dates and add any changes. To list
+contents:
 
-To compile for Windows with VC++, open Visual Studio and select
-Tools/Command Window, and enter the command:
+  zpaq -list e:backup
 
-  cl /O2 /EHsc /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c
+To list just a directory tree and compare:
 
-This package contains:
+  zpaq -list e:backup c:\Users\Joe
 
-  zpaq.cpp - source code.
-  zpaq.1.pod - source for document zpaq.1.html created with pod2html.
+Each internal file is marked with a character to indicate whether the
+corresponding external file has the same or different date or does not exist.
+Files might be listed multiple times with different versions if they were
+changed and added more than once. The version number is incremented by
+each -add. -list also shows the dates corresponding to each version number.
+To extract a directory from the archive as it existed after the 10'th -add
+and put it in a temporary directory:
 
-You can use pod2man to create a Linux man page.
+  zpaq -extract e:backup c:\Users\Joe -to tmp -version 10
 
-zpaq 4.04 fixed a bug in the r command that truncated the output
-file.
+will extract e.g. c:\Users\Joe\Desktop\letter.doc to tmp\Desktop\letter.doc
+and so on. The default is to restore all files to their original locations
+but not overwrite any files unless you specify -force.
 
-zpaq 4.03 fixes a bug in u (did not save filenames without args).
-It adds -f (x force overwrite), -r (recurse directories) and -n
-(don't save comments, checksums, or locator tags). -bs now saves
-these by default.
+Older versions of zpaq (before v6.00) and some other archives like PeaZip
+do not support journaling, incremental update, or deduplication. To
+create archives without these features that they can read, use the
+-streaming option.
 
-zpaq 4.02 adds commands c (create archive), x out/ (extract to
-directory), and l with no archive (show hcomp, pcomp strings).
-
-zpaq v4.01 adds incremental update. Before updating the archive,
-it compares the files and skips if identical. Extraction also
-compares and shows the results (as = or #) if the files exist,
-but does not overwrite. You will have to delete them to extract.
-
-zpaq v4.00 and libzpaq v4.00 replace version 3.01 of both. The main
-difference is that source level just-in-time (JIT) optimization is
-replaced with internal x86-32 and x86-64, so you no longer need
-an external C++ compiler to get the best performance. However,
-JIT will not work on non-x86 processors, or older processors that
-don't support the SSE2 instruction set. To disable JIT for these
-processors, compile with -DNOJIT and also drop the -msse2 option.
-The program will run about twice as slow.
-
-You can compile with -DDEBUG to turn on assertion checks to assist
-in debugging. It will run slower if you do. Note that in earlier
-versions, assertion checking was on by default in both zpaq and libzpaq
-unless turned off with -DNDEBUG. Now both are off by default.
-
-I have only tested the JIT code in 32 bit Windows and 64 bit Linux
-(Ubuntu). There is code to support 64 bit Windows and 32 bit Linux
-but it is not tested.
-
--- Matt Mahoney
-
+Complete command line documentation can be found in zpaq.cpp. Configuration
+file syntax, if you are so inclined, is found in libzpaq.h.
