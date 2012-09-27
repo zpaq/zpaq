@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.00a header - Aug 10, 2012.
+/* libzpaq.h - LIBZPAQ Version 6.00a header - July 27, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -590,7 +590,6 @@ public:
   ZPAQL();
   ~ZPAQL();
   void clear();           // Free memory, erase program, reset machine state
-  void init(int hbits, int mbits);  // initialize H and M sizes
   void inith();           // Initialize as HCOMP to run
   void initp();           // Initialize as PCOMP to run
   double memory();        // Return memory requirement in bytes
@@ -628,6 +627,7 @@ private:
 
   // Support code
   int assemble();  // put JIT code in rcode
+  void init(int hbits, int mbits);  // initialize H and M sizes
   int execute();  // interpret 1 instruction, return 0 after HALT, else 1
   void run0(U32 input);  // default run() if not JIT
   void div(U32 x) {if (x) a/=x; else a=0;}
