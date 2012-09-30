@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.01 - Journaling incremental deduplicating archiving compressor
+/* zpaq.cpp v6.02 - Journaling incremental deduplicating archiving compressor
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -285,6 +285,10 @@ the end, once per argument.
 With -list, give a techinal listing that includes the decompiled
 ZPAQL block headers, segment header contents, and JIDAC fragment
 tables and indexes. With -add and -extract, show detailed steps.
+
+  -quiet
+
+With -add and -extract, display only errors and warnings.
 
 
 TO COMPILE:
@@ -828,8 +832,10 @@ public:
     assert(isopen());
     flush();
     DWORD n=0;
-    LONG offhigh=offset>>32;
-    SetFilePointer(out, offset, &offhigh, FILE_BEGIN);
+    if (offset!=tell()) {
+      LONG offhigh=offset>>32;
+      SetFilePointer(out, offset, &offhigh, FILE_BEGIN);
+    }
     WriteFile(out, bufp, size, &n, NULL);
     if (size!=int(n))
       fprintf(stderr, "write failed: wrote %d of %d bytes\n", int(n), size);
@@ -1055,7 +1061,8 @@ string itos(int64_t x, int n=1) {
   return r;
 }
 
-bool detailed=false;  // global: set by -detailed option
+bool detailed=false;  // global: set by -detailed, -quiet
+bool quiet=false;
 
 /////////////////////////////// Jidac /////////////////////////////////
 
@@ -1143,7 +1150,7 @@ private:
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.01 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.02 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ...\n"
@@ -1154,6 +1161,7 @@ void Jidac::usage() {
   "  -method config arg1 ... arg9  or use ZPAQL program config.cfg\n"
   "  -streaming -solid -tiny       Append unconditionally in old formats\n"
   "-extract archive files ...      Decompress >new files and directories\n"
+  "-quiet                          Display only errors and warnings\n"
   "-force                          Overwrite even if identical\n"
   "-to files ...                   Rename external files and directories\n"
   "-not files ...                  Exclude\n"
@@ -1191,7 +1199,7 @@ string Jidac::unrename(const string& name) {
 string expandOption(const char* opt) {
   const char* opts[]={"-list","-detailed",
     "-add","-method","-streaming","-solid","-tiny",
-    "-extract","-force",
+    "-extract","-force","-quiet",
     "-to","-not","-version","-threads","-run","-trace",
     "hcomp","pcomp",0};
   const int n=strlen(opt);
@@ -1233,6 +1241,7 @@ void Jidac::doCommand(int argc, char** argv) {
       --i;
     }
     else if (opt=="-detailed") detailed=true;
+    else if (opt=="-quiet") quiet=true;
     else if (opt=="-force") force=true;
     else if (opt=="-threads" && i<argc-1) {
       threads=atoi(argv[++i]);
@@ -1321,11 +1330,11 @@ int64_t Jidac::read_archive() {
   // Open archive or archive.zpaq
   InputFile in;
   if (!in.open(archive.c_str())) {
-    if (command=="-add")
+    if (command=="-add" && !quiet)
       printf("Creating new archive %s\n", archive.c_str());
     return 0;
   }
-  printf("Reading archive %s\n", archive.c_str());
+  if (!quiet) printf("Reading archive %s\n", archive.c_str());
 
   // Scan archive contents
   libzpaq::Decompresser d;
@@ -1409,10 +1418,6 @@ int64_t Jidac::read_archive() {
             else if (os.size()==8) {  // jump
               const char* s=os.c_str();
               int64_t jmp=btol(s);
-              if (detailed && command=="-list")
-                printf("Version %d Jump from %1.0f to %1.0f by %1.0f\n",
-                       fversion, double(in.tell()),
-                       double(in.tell()+jmp), double(jmp));
               if (jmp<0) {
                 fprintf(stderr, "Incomplete transaction ignored\n");
                 isbreak=true;
@@ -1425,12 +1430,13 @@ int64_t Jidac::read_archive() {
               isbreak=true;
             }
             if (isbreak) {
-              fprintf(stderr, "Archive truncated to %1.0f\n",
-                      double(block_offset));
+              if (!quiet)
+                printf("Archive truncated to %1.0f\n", double(block_offset));
               in.close();
               return block_offset;
             }
-            printf("%4d %s\n", fversion, datetostring(fdate).c_str());
+            if (!quiet)
+              printf("%4d %s\n", fversion, datetostring(fdate).c_str());
           }
 
           // Fragment table. Filename is jDCYYYYMMDDHHMMSSdNNNNNNNNNN
@@ -1442,9 +1448,6 @@ int64_t Jidac::read_archive() {
             const char* s=os.c_str();
             const unsigned bsize=btoi(s);
             const unsigned n=(os.size()-4)/24;
-            if (detailed && command=="-list")
-              printf("Fragments %1.0f-%1.0f compressed to %d\n",
-                     double(num), double(num+n-1), bsize);
             if (ht.size()!=num)
               fprintf(stderr,
                 "Unordered fragment tables: expected %d found %1.0f\n",
@@ -1456,13 +1459,6 @@ int64_t Jidac::read_archive() {
               ht[num+i].usize=btoi(s);
               if (ht[num+i].csize==0)
                 ht[num+i].csize=i?-int(i):data_offset;
-              if (detailed && command=="-list") {
-                printf("%10.0f ", double(num+i));
-                for (int j=0; j<20; ++j)
-                  printf("%02x", ht[num+i].sha1[j]&255);
-                printf(" %10d %14.0f\n", ht[num+i].usize,
-                       double(ht[num+i].csize));
-              }
             }
             data_offset+=bsize;
           }
@@ -1484,7 +1480,6 @@ int64_t Jidac::read_archive() {
               s+=strlen(fp)+1;  // skip filename
               if (dtv.date && s<=end-8) {
                 const unsigned na=btoi(s);
-                if (detailed && command=="-list" && na) printf("na=%d ", na);
                 s+=na;  // skip attr
                 if (s<=end-4) {
                   const unsigned ni=btoi(s);
@@ -1497,11 +1492,6 @@ int64_t Jidac::read_archive() {
                       dtv.size=-1;
                   }
                 }
-              }
-              if (detailed && command=="-list") {
-                printf("%4d %s %s :", dtv.version,
-                       datetostring(dtv.date).c_str(), fp);
-                printList(dtv.ptr);
               }
             }
           }
@@ -1523,8 +1513,8 @@ int64_t Jidac::read_archive() {
             if (size(dtr.dtv)>0 && dtr.dtv.back().version>=fversion) {
               fversion=dtr.dtv.back().version+1;
               if (fversion>version) {
-                fprintf(stderr, "Archive truncated to %1.0f\n",
-                        double(block_offset));
+                if (!quiet)
+                  printf("Archive truncated to %1.0f\n",double(block_offset));
                 in.close();
                 return block_offset;
               }
@@ -1538,13 +1528,6 @@ int64_t Jidac::read_archive() {
           dtr.dtv.back().streaming|=usize<0 || usize>blocksize;
           if (usize>=0 && dtr.dtv.back().size>=0) dtr.dtv.back().size+=usize;
           else dtr.dtv.back().size=-1;
-          if (detailed && command=="-list") {
-            printf("%10d ", size(ht));
-            for (int j=0; j<20; ++j)
-              printf("%02x", sha1result[j+1]&255);
-            printf(" %10.0f %14.0f\n", double(usize),
-                   segs ? double(-segs) : double(block_offset));
-          }
           ht.push_back(HT(sha1result+1, usize, segs ? -segs : block_offset));
         }
         ++segs;
@@ -1554,7 +1537,7 @@ int64_t Jidac::read_archive() {
       isbad=false;
     }
     catch (std::exception& e) {
-      printf("Skipping block: %s\n", e.what());
+      fprintf(stderr, "Skipping block: %s\n", e.what());
     }
   }
   in.close();
@@ -1592,7 +1575,7 @@ void Jidac::read_args(bool force) {
   if (!force)
     for (int i=0; i<size(files); ++i)
       scandir(rename(files[i]).c_str());
-  printf("\n");
+  if (!quiet) printf("\n");
 }
 
 // Insert filename into dt unless in notfiles. recurse=insert subdirectories.
@@ -2161,7 +2144,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     // Run the external preprocessor passing tmp_in, tmp_out as arguments
     string cmd=pcomp_cmd.c_str();
     cmd+=" "+tmp_in+" "+tmp_out;
-    printf("%s\n", cmd.c_str());
+    if (!quiet) printf("%s\n", cmd.c_str());
     (void)system(cmd.c_str());
     remove(tmp_in.c_str());
 
@@ -2386,7 +2369,9 @@ void Jidac::add() {
     date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
         +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
 #endif
-    printf("Adding transaction dated %s (UT)\n", datetostring(date).c_str());
+    if (!quiet)
+      printf("Adding transaction dated %s (UT)\n",
+             datetostring(date).c_str());
     if (now==-1 || date<20120000000000LL || date>30000000000000LL)
       error("date is incorrect");
   }
@@ -2457,7 +2442,7 @@ void Jidac::add() {
         in.close();
         pre=tempname(0);
         string pcmd=pcomp_cmd.s+" "+p->first+" "+pre;
-        printf("%s\n", pcmd.c_str());
+        if (!quiet) printf("%s\n", pcmd.c_str());
         (void)system(pcmd.c_str());
         if (!in.open(pre.c_str())) continue;
       }
@@ -2467,12 +2452,14 @@ void Jidac::add() {
         (itos(sz)+" "+datetostring(p->second.edate)).c_str() : 0);
       co.setInput(&in);
       while (co.compress(100000)) {
-        printf("%s %1.0f -> %1.0f\r", p->first.c_str(), double(in.tell()),
+        if (!quiet)
+          printf("%s %1.0f -> %1.0f\r", p->first.c_str(), double(in.tell()),
                double(out.tell()-offset));
         fflush(stdout);
       }
       co.endSegment(mode==SOLID ? sha1result : 0);
-      printf("%s %1.0f -> %1.0f -> %1.0f  \n", p->first.c_str(), double(sz),
+      if (!quiet)
+        printf("%s %1.0f -> %1.0f -> %1.0f  \n", p->first.c_str(), double(sz),
              double(in.tell()), double(out.tell()-offset));
       in.close();
       offset=out.tell();
@@ -2482,8 +2469,9 @@ void Jidac::add() {
         if (mode==SOLID) {
           int64_t postsz=co.getSize();
           if (memcmp(sha1result, co.getChecksum(), 20)) {
-            printf("WARNING: pre/post test failed: restored size = %1.0f\n",
-                   double(postsz));
+            fprintf(stderr,
+                    "WARNING: pre/post test failed: restored size = %1.0f\n",
+                    double(postsz));
           }
         }
         remove(pre.c_str());
@@ -2508,14 +2496,15 @@ void Jidac::add() {
     htinv[string(ht[i].sha1, ht[i].sha1+20)]=i;
 
   // Open archive to append
-  printf("Appending to archive %s\n", archive.c_str());
+  if (!quiet) printf("Appending to archive %s\n", archive.c_str());
   OutputFile out;
   if (!out.open(archive.c_str())) exit(1);
   int64_t archive_size=out.tell();
   if (mode!=JIDAC) header_pos=archive_size;
   if (archive_size!=header_pos) {
-    printf("Archive truncated from %1.0f to %1.0f bytes\n",
-           double(archive_size), double(header_pos));
+    if (!quiet)
+      printf("Archive truncated from %1.0f to %1.0f bytes\n",
+             double(archive_size), double(header_pos));
     out.truncate(header_pos);
   }
 
@@ -2546,13 +2535,15 @@ void Jidac::add() {
         p->second.edate=0;
         continue;
       }
-      else if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
-        printf("Adding %s", p->first.c_str());
-      else
-        printf("Updating %s", p->first.c_str());
-      if (p->first!=filename)
-        printf(" from %s", filename.c_str());
-      printf("\n");
+      else if (!quiet) {
+        if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
+          printf("Adding %s", p->first.c_str());
+        else
+          printf("Updating %s", p->first.c_str());
+        if (p->first!=filename)
+          printf(" from %s", filename.c_str());
+        printf("\n");
+      }
 
       // In STREAMING mode, split large files into 16 MB fragments. Store
       // each in a separate block. ht and dt are not used.
@@ -2596,7 +2587,10 @@ void Jidac::add() {
             o1[c1]=c;
             c1=c;
           }
-          if (c==EOF || (h<65536 && fragment>=4096) || fragment>=520192) {
+          const int MIN_FRAGMENT=4096;
+          const int MAX_FRAGMENT=520192;
+          if (c==EOF || (h<65536 && fragment>=MIN_FRAGMENT)
+             || fragment>=MAX_FRAGMENT) {
             ++totalFragments;
             const char* shp=sha1.result();  // resets
             string sh(shp, shp+20);
@@ -2610,15 +2604,18 @@ void Jidac::add() {
               b.resize(b.size()-fragment);
             p->second.dtv.back().ptr.push_back(j);
             fragment=0;
-            if (size(b)>15500000) write_fragments(job, b, block_start);
+            if (size(b)>=blocksize-257-MAX_FRAGMENT
+                || (c==EOF && size(b)>blocksize*7/8))
+              write_fragments(job, b, block_start);
           }
         } while (c!=EOF);
       }
       in.close();
     }
   }
-  printf("Matched %d of %d fragments\n",
-         totalFragments-unmatchedFragments, totalFragments);
+  if (!quiet)
+    printf("Matched %d of %d fragments\n",
+           totalFragments-unmatchedFragments, totalFragments);
 
   // compress last partial block
   write_fragments(job, b, block_start);
@@ -2641,7 +2638,7 @@ void Jidac::add() {
   assert(j==job.csize.size());
 
   // Append compressed fragment tables to archive
-  printf("Updating index\n");
+  if (!quiet) printf("Updating index\n");
   int64_t cdatasize=out.tell()-header_end;  // compressed size for header
   StringBuffer is;
   block_start=0;
@@ -2670,7 +2667,7 @@ void Jidac::add() {
     if (p->second.written>=0 && p->second.dtv.back().date
         && !p->second.edate) {
       is+=ltob(0)+p->first+'\0';
-      printf("Removing %s\n", p->first.c_str());
+      if (!quiet) printf("Removing %s\n", p->first.c_str());
     }
     else if (p->second.edate
              && (force || p->second.edate!=p->second.dtv.back().date)) {
@@ -2680,7 +2677,7 @@ void Jidac::add() {
         is+=itob(p->second.dtv.back().ptr[i]);
     }
     ++p;
-    if (is.size()>1000 || (is.size()>0 && p==dt.end())) {
+    if (is.size()>8000 || (is.size()>0 && p==dt.end())) {
       compressBlock(&is, &out, 
         // 2-D indirect context model with 4 columns
         "comp 0 2 0 0 1 "
@@ -2700,11 +2697,12 @@ void Jidac::add() {
   const int64_t archive_end=out.tell();
   out.seek(header_pos, SEEK_SET);
   writeJidacHeader(&out, date, cdatasize, htsize);
-  printf("%1.0f + %1.0f + %1.0f -> %1.0f\n",
-         double(header_pos),
-         double(header_end-header_pos),
-         double(archive_end-header_end),
-         double(archive_end));
+  if (!quiet)
+    printf("%1.0f + %1.0f + %1.0f -> %1.0f\n",
+           double(header_pos),
+           double(header_end-header_pos),
+           double(archive_end-header_end),
+           double(archive_end));
   assert(header_end==out.tell());
   out.close();
 }
@@ -2722,7 +2720,7 @@ void makepath(string& path) {
 #else
       int ok=CreateDirectory(utow(path.c_str()).c_str(), 0);
 #endif
-      if (ok) printf("Created directory %s\n", path.c_str());
+      if (ok && !quiet) printf("Created directory %s\n", path.c_str());
       path[i]='/';
     }
   }
@@ -2831,7 +2829,8 @@ ThreadReturn decompressThread(void* arg) {
         if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
           for (int k=0; k<20; ++k) {
             if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
-              printf("Job %d: fragment %d size %d checksum failed\n",
+              fprintf(stderr, 
+                     "Job %d: fragment %d size %d checksum failed\n",
                      jobNumber, j, job.jd.ht[j].usize);
               error("bad checksum");
             }
@@ -2840,7 +2839,7 @@ ThreadReturn decompressThread(void* arg) {
       }
     }
     catch (std::exception& e) {
-      printf("Job %d: skipping block: %s\n", jobNumber, e.what());
+      fprintf(stderr, "Job %d: skipping block: %s\n", jobNumber, e.what());
       continue;
     }
 
@@ -2856,9 +2855,11 @@ ThreadReturn decompressThread(void* arg) {
       vector<unsigned>& ptr=dtr.dtv.back().ptr;
       string filename="";
       int64_t offset=0;  // write offset
-      for (unsigned j=0; j<ptr.size(); offset+=job.jd.ht[ptr[j++]].usize) {
-        if (ptr[j]<b.start || ptr[j]>=b.start+b.size)
+      for (unsigned j=0; j<ptr.size(); ++j) {
+        if (ptr[j]<b.start || ptr[j]>=b.start+b.size) {
+          offset+=job.jd.ht[ptr[j]].usize;
           continue;
+        }
 
         // Close last opened file if different
         if (p!=job.lastdt) {
@@ -2876,8 +2877,8 @@ ThreadReturn decompressThread(void* arg) {
           filename=job.jd.rename(p->first);
           if (dtr.written==0) {
             makepath(filename);
-            printf("Job %d: extracting %s to %s\n", jobNumber, 
-                   p->first.c_str(), filename.c_str());
+            if (!quiet)
+              printf("Job %d: extracting %s\n", jobNumber, filename.c_str());
             if (job.outf.open(filename.c_str()))  // create new file
               job.outf.truncate();
           }
@@ -2896,10 +2897,20 @@ ThreadReturn decompressThread(void* arg) {
         assert(q>=out.c_str());
         assert(q<=out.c_str()+out.size()-job.jd.ht[ptr[j]].usize);
 
-        // Write the fragment
+        // Write the fragment and any consecutive fragments that follow
         assert(offset>=0);
-        job.outf.write(q, offset, job.jd.ht[ptr[j]].usize);
-        if (++dtr.written==size(ptr)) {  // close file
+        ++dtr.written;
+        int usize=job.jd.ht[ptr[j]].usize;
+        while (j+1<ptr.size() && ptr[j+1]==ptr[j]+1
+               && ptr[j+1]<b.start+b.size) {
+          ++dtr.written;
+          assert(dtr.written<=size(ptr));
+          usize+=job.jd.ht[ptr[++j]].usize;
+        }
+        assert(q+usize<=out.c_str()+out.size());
+        job.outf.write(q, offset, usize);
+        offset+=usize;
+        if (dtr.written==size(ptr)) {  // close file
           assert(dtr.dtv.size()>0);
           assert(dtr.dtv.back().date);
           assert(job.outf.isopen());
@@ -2960,7 +2971,7 @@ void Jidac::extract() {
   }
 
   // Decompress archive in parallel
-  printf("Starting %d decompression jobs\n", threads);
+  if (!quiet) printf("Starting %d decompression jobs\n", threads);
   vector<ThreadID> tid(threads);
   for (int i=0; i<size(tid); ++i) run(tid[i], decompressThread, &job);
 
@@ -3000,7 +3011,7 @@ void Jidac::extract() {
           newfile=rename(lastfile);
           makepath(newfile);
           if (out.open(newfile.c_str())) {
-            printf("main: extracting %s\n", newfile.c_str());
+            if (!quiet) printf("main: extracting %s\n", newfile.c_str());
             out.truncate(0);
           }
         }
@@ -3015,7 +3026,7 @@ void Jidac::extract() {
         char sha1out[21];
         d.readSegmentEnd(sha1out);
         if (sha1out[0] && memcmp(sha1out+1, sha1.result(), 20))
-          printf("WARNING: %s checksum error\n", lastfile.c_str());
+          fprintf(stderr, "WARNING: %s checksum error\n", lastfile.c_str());
       }
       else
         d.readSegmentEnd();  // skip unused trailing segments
@@ -3465,7 +3476,8 @@ int main(int argc, char** argv) {
   catch (std::exception& e) {
     printf("Error: %s\n", e.what());
   }
-  fprintf(stderr, "%1.2f seconds\n", double(clock()-start)/CLOCKS_PER_SEC);
+  if (!quiet)
+    printf("%1.2f seconds\n", double(clock()-start)/CLOCKS_PER_SEC);
   return 0;
 }
 
