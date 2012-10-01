@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.03 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.04 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -109,7 +109,8 @@ not any faster.
   -quiet
 
 With -add and -extract, don't display any output except for errors
-and warnings.
+and warnings. With -list, show just the largest 99 files and directories,
+shared fragments, and other statistics.
 
   -detailed
 
@@ -235,6 +236,7 @@ Possible options:
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
 #include <stdexcept>
 
 #ifndef DEBUG
@@ -1000,11 +1002,30 @@ struct DTV {
 // filename entry
 struct DT {
   int64_t edate;         // date of external file, 0=not found
+  int64_t esize;         // size of external file
   int64_t eattr;         // external file attributes ('u' or 'w' in low byte)
   vector<DTV> dtv;       // list of versions
   int written;           // 0..ptr.size() = fragments output. -1=ignore
-  DT(): edate(0), written(-1) {}
+  DT(): edate(0), esize(0), eattr(0), written(-1) {}
 };
+
+// Compare by filename extension
+struct Compare {
+  bool operator()(const string& a, const string& b) {
+    const char* as=a.c_str();
+    const char* bs=b.c_str();
+    const char* ap=strrchr(as, '.');
+    const char* bp=strrchr(bs, '.');
+    if (!ap && !bp) return strcmp(as, bs)<0;
+    if (!ap) return false;
+    if (!bp) return true;
+    const int cmp=strcmp(ap, bp);
+    if (cmp) return cmp<0;
+    return strcmp(as, bs)<0;
+  }
+};
+
+typedef map<string, DT, Compare> DTMap;
 
 class CompressJob;
 
@@ -1019,7 +1040,7 @@ private:
 
   // Command line arguments
   string command;           // "-add", "-extract", "-list"
-  enum {blocksize=1<<24};   // maximum block size
+  enum {blocksize=(1<<24)-257};   // maximum block size
   string archive;           // archive name
   vector<string> files;     // list of files and directories to add
   vector<string> notfiles;  // list of prefixes to exclude
@@ -1028,12 +1049,12 @@ private:
   bool force;               // true if -force selected
   int version;              // Set by -ersion
   int threads;              // default is number of cores + 1
-  string method;            // "1".."4" or ZPAQL source code
+  string method;            // "0".."4" or ZPAQL source code
   int args[9];              // arguments to method
 
   // Archive state
   vector<HT> ht;            // list of fragments
-  map<string, DT> dt;       // set of files
+  DTMap dt;                 // set of files
 
   // Commands
   void add();
@@ -1048,14 +1069,16 @@ private:
   int64_t read_archive();  // read index block chain into ht, dt
   void read_args(bool force);  // read command line args, scan directories
   void scandir(const char* filename);   // scan dirs and add args to dt
-  void addfile(const char* filename, int64_t date, int64_t attr);
+  void addfile(const char* filename, int64_t edate, int64_t esize,
+               int64_t eattr);
   void write_fragments(CompressJob& job, StringBuffer& b,
-                       unsigned& block_start);  // compress fragments in b
+                       const char* method, const int* args,
+                       unsigned& block_start, int& misses);
 };
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.03 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.04 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ...\n"
@@ -1235,9 +1258,12 @@ int64_t Jidac::read_archive() {
   // Open archive or archive.zpaq
   InputFile in;
   if (!in.open(archive.c_str())) {
-    if (command=="-add" && !quiet)
-      printf("Creating new archive %s\n", archive.c_str());
-    return 0;
+    if (command=="-add") {
+      if (!quiet) printf("Creating new archive %s\n", archive.c_str());
+      return 0;
+    }
+    else
+      exit(1);
   }
   if (!quiet) printf("Reading archive %s\n", archive.c_str());
   if (command=="-list") {
@@ -1460,7 +1486,7 @@ int64_t Jidac::read_archive() {
 void Jidac::read_args(bool force) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
-  for (map<string, DT>::iterator p=dt.begin(); p!=dt.end(); ++p) {
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (size(files)==0) {
       if (p->second.dtv.size() && p->second.dtv.back().date) {
         if (force) p->second.written=0;
@@ -1500,7 +1526,8 @@ void Jidac::scandir(const char* filename) {
   struct stat sb;
   if (!lstat(filename, &sb)) {
     if (S_ISREG(sb.st_mode))
-      addfile(filename, decimal_time(sb.st_mtime), 'u'+(sb.st_mode<<8));
+      addfile(filename, decimal_time(sb.st_mtime), sb.st_size,
+              'u'+(sb.st_mode<<8));
 
     // Traverse directory
     else if (S_ISDIR(sb.st_mode)) {
@@ -1520,7 +1547,7 @@ void Jidac::scandir(const char* filename) {
     }
   }
   else
-    addfile(filename, 0, 0);
+    addfile(filename, 0, 0, 0);
 
 #else  // Windows
 
@@ -1535,6 +1562,7 @@ void Jidac::scandir(const char* filename) {
         addfile(filename,
                 st.wYear*10000000000LL+st.wMonth*100000000LL+st.wDay*1000000
                 +st.wHour*10000+st.wMinute*100+st.wSecond,
+                sb.nFileSizeLow+(int64_t(sb.nFileSizeHigh)<<32),
                 'w'+(int64_t(sb.dwFileAttributes)<<8));
       }
     }
@@ -1557,15 +1585,17 @@ void Jidac::scandir(const char* filename) {
     }
   }
   else
-    addfile(filename, 0, 0);
+    addfile(filename, 0, 0, 0);
 #endif
 }
 
-// Add external file and its date to dt
-void Jidac::addfile(const char* filename, int64_t edate, int64_t attr) {
+// Add external file and its date, size, and attributes to dt
+void Jidac::addfile(const char* filename, int64_t edate,
+                    int64_t esize, int64_t eattr) {
   DT& d=dt[unrename(filename)];
   d.edate=edate;
-  d.eattr=attr;
+  d.esize=esize;
+  d.eattr=eattr;
   d.written=0;
 }
 
@@ -1994,7 +2024,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  b-- d++ hash *d=a "
     "  b-- d++ hash *d=a "
     "  b-- d++ hash b-- hash *d=a (order 7 for match) "
-    "  d++ a=*c a<<= 8 *d=a       (order 1 for mix) "
+    "  d++ a=*c a<<= 8 *d=a (order 1 for mix) "
     "  halt "
     "post "
     "  0 "
@@ -2004,6 +2034,9 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   if (*method>='0' && *method<='4' && method[1]==0) {
     level=*method-'0';
     method=cfg[level];
+    assert(level!=1 || size(*in)<(1<<24));
+    assert(level!=2 || size(*in)<(1<<24));
+    assert(level!=3 || size(*in)<=(1<<24)-257);
   }
 
   // Get hash of input
@@ -2093,10 +2126,14 @@ struct CJ {
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
   string comment;        // to append to size in comment field
+  string method;         // compression algorithm
+  int args[9];           // arguments to method
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
   bool end;              // mark end of data
-  CJ(): state(EMPTY), in(1<<24), out(1<<24), end(false) {}
+  CJ(): state(EMPTY), in(1<<24), out(1<<24), end(false) {
+    memset(args, 0, sizeof(args));
+  }
 };
 
 // Instructions to a compression job
@@ -2106,14 +2143,12 @@ class CompressJob {
   vector<CJ> q;          // buffer queue
   int front;             // next to remove from queue
   libzpaq::Writer* out;  // archive
-  const char* method;    // custom compression in ZPAQL
-  int* args;             // arguments to method
   Semaphore empty;       // number of empty buffers ready to fill
 public:
   friend ThreadReturn compressThread(void* arg);
   friend ThreadReturn writeThread(void* arg);
-  CompressJob(int t, libzpaq::Writer* f, const char* m, int* a):
-      job(0), q(t), front(0), out(f), method(m), args(a) {
+  CompressJob(int t, libzpaq::Writer* f):
+      job(0), q(t), front(0), out(f) {
     init_mutex(mutex);
     empty.init(t);
     for (int i=0; i<t; ++i) {
@@ -2129,23 +2164,25 @@ public:
     destroy_mutex(mutex);
   }      
   void write(const StringBuffer& s, const char* filename,
-             const char* comment=0, bool end=false);
+             const char* comment, const char* method, const int* args);
   vector<int> csize;  // compressed block sizes
 };
 
-// Write s at the back of the queue. Signal end of input with end=true
+// Write s at the back of the queue. Signal end of input with method=0
 void CompressJob::write(const StringBuffer& s, const char* fn,
-                        const char* cm, bool end) {
-  for (unsigned k=end?q.size():1; k>0; --k) {
+                        const char* cm, const char* method, const int* args) {
+  for (unsigned k=(method==0)?q.size():1; k>0; --k) {
     empty.wait();
     lock(mutex);
     unsigned i, j;
     for (i=0; i<q.size(); ++i) {
       if (q[j=(i+front)%q.size()].state==CJ::EMPTY) {
         q[j].state=CJ::FILLING;
-        q[j].end=end;
+        q[j].end=method==0;
         q[j].filename=fn?fn:"";
         q[j].comment=cm?cm:"";
+        q[j].method=method?method:"";
+        for (int k=0; k<9; ++k) q[j].args[k]=args?args[k]:0;
         release(mutex);
         q[j].in=s;
         lock(mutex);
@@ -2188,8 +2225,8 @@ ThreadReturn compressThread(void* arg) {
       assert(cj.state==CJ::FULL);
       cj.state=CJ::COMPRESSING;
       release(job.mutex);
-      compressBlock(&cj.in, &cj.out, job.method, job.args, jobNumber+1,
-                    cj.filename.c_str(), cj.comment.c_str());
+      compressBlock(&cj.in, &cj.out, cj.method.c_str(), cj.args,
+                    jobNumber+1, cj.filename.c_str(), cj.comment.c_str());
       lock(job.mutex);
       cj.in.reset();
       cj.state=CJ::COMPRESSED;
@@ -2253,18 +2290,38 @@ void writeJidacHeader(libzpaq::Writer *out, int64_t date,
 }
 
 // Compress fragments in b indexed by ht[block_start...] to job
+// using method and args with list of fragment sizes appended.
+// Select method "0" if misses is near b.size() and reset misses=0.
 void Jidac::write_fragments(CompressJob& job, StringBuffer& b,
-                            unsigned& block_start) {
+                            const char* method, const int* args,
+                            unsigned& block_start, int& misses) {
+  bool iscompressed=true;
+  if (strlen(method)==1) {
+    switch(method[0]-'0') {
+      case 1: iscompressed=b.size()-misses>b.size()/16; break;
+      case 2: iscompressed=b.size()-misses>b.size()/32; break;
+      case 3: iscompressed=b.size()-misses>b.size()/64; break;
+      case 4: iscompressed=b.size()-misses>b.size()/128; break;
+    }
+  }
+  if (detailed) {
+    printf("Fragments %d-%d misses=%d/%d %1.2f%% (%s)\n",
+           block_start, ht.size(), misses, b.size(), misses*100.0/b.size(),
+           iscompressed ? "compressed" : "stored");
+  }
+  if (!iscompressed) method="0", args=0;
   if (block_start>=ht.size()) return;
   for (unsigned i=block_start; i<ht.size(); ++i)
     b+=itob(ht[i].usize);
   b+=itob(block_start);
   b+=itob(ht.size()-block_start);
-  job.write(b,
-    ("jDC"+itos(date, 14)+"d"+itos(block_start,10)).c_str(), " jDC\x01");
+  job.write(b, 
+    ("jDC"+itos(date, 14)+"d"+itos(block_start,10)).c_str(), " jDC\x01",
+     method, args);
   b.reset();
   ht[block_start].csize=-1;  // to fill in later
   block_start=ht.size();
+  misses=0;
 }
 
 // Add files to archive
@@ -2332,7 +2389,7 @@ void Jidac::add() {
     int64_t offset=out.tell();
 
     // Compress files
-    for (map<string, DT>::iterator p=dt.begin(); p!=dt.end(); ++p) {
+    for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
       InputFile in;
       if (!in.open(rename(p->first.c_str()).c_str())) continue;
 
@@ -2427,7 +2484,7 @@ void Jidac::add() {
   // Start compress and write jobs
   vector<ThreadID> tid(threads);
   ThreadID wid;
-  CompressJob job(threads, &out, method.c_str(), args);
+  CompressJob job(threads, &out);
   for (int i=0; i<threads; ++i) run(tid[i], compressThread, &job);
   run(wid, writeThread, &job);
 
@@ -2435,7 +2492,8 @@ void Jidac::add() {
   unsigned block_start=ht.size();
   StringBuffer b(1<<24);  // current block
   int unmatchedFragments=0, totalFragments=0;  // counts
-  for (map<string, DT>::iterator p=dt.begin(); p!=dt.end(); ++p) {
+  int misses=0, fmisses=0;  // mispredictions in block and fragment
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.edate && (force || p->second.dtv.size()==0
        || p->second.edate!=p->second.dtv.back().date)) {
 
@@ -2467,7 +2525,7 @@ void Jidac::add() {
           if (c==EOF || b.size()==16000000) {
             ++totalFragments;
             ++unmatchedFragments;
-            job.write(b, name, name?comment.c_str():0);
+            job.write(b, name, name?comment.c_str():0, method.c_str(), args);
             b.reset();
             name=0;
           }
@@ -2488,13 +2546,16 @@ void Jidac::add() {
         unsigned char o1[256]={0};  // order-1 prediction
         int fragment=0;  // size
         p->second.dtv.push_back(DTV());
+        if (size(b)>blocksize*3/4 && size(b)+p->second.esize>blocksize)
+          write_fragments(job, b, method.c_str(), args, block_start, misses);
         do {
           c=in.get();
           if (c!=EOF) {
             sha1.put(c);
             b.put(c);
             ++fragment;
-            h=(h+c+1)*HM[c==o1[c1]];  // depends on last 32 mispredicted bytes
+            if (c!=o1[c1]) ++fmisses, h=(h+c+1)*HM[1];
+            else h=(h+c+1)*HM[0];
             o1[c1]=c;
             c1=c;
           }
@@ -2510,14 +2571,15 @@ void Jidac::add() {
               j=ht.size();
               ht.push_back(HT(shp, fragment, 0));
               ++unmatchedFragments;
+              misses+=fmisses;
             }
             else
               b.resize(b.size()-fragment);
             p->second.dtv.back().ptr.push_back(j);
-            fragment=0;
-            if (size(b)>=blocksize-257-MAX_FRAGMENT
-                || (c==EOF && size(b)>blocksize*7/8))
-              write_fragments(job, b, block_start);
+            fragment=fmisses=0;
+            if (b.size()>=blocksize-MAX_FRAGMENT-8-(ht.size()-block_start)*4)
+              write_fragments(job, b, method.c_str(), args,
+                              block_start, misses);
           }
         } while (c!=EOF);
       }
@@ -2529,10 +2591,10 @@ void Jidac::add() {
            totalFragments-unmatchedFragments, totalFragments);
 
   // compress last partial block
-  write_fragments(job, b, block_start);
+  write_fragments(job, b, method.c_str(), args, block_start, misses);
 
   // Wait for jobs to finish
-  job.write(b, 0, 0, true);  // signal end of input
+  job.write(b, 0, 0, 0, 0);  // signal end of input
   for (int i=0; i<threads; ++i)
     join(tid[i]);
   join(wid);
@@ -2570,7 +2632,7 @@ void Jidac::add() {
 
   // Append compressed index to archive
   int dtcount=0;
-  for (map<string, DT>::iterator p=dt.begin(); p!=dt.end();) {
+  for (DTMap::iterator p=dt.begin(); p!=dt.end();) {
     if (p->second.dtv.size()==0) {
       ++p;
       continue;
@@ -2673,7 +2735,7 @@ struct ExtractJob {         // list of jobs
   vector<Block> block;      // list of blocks to extract
   Jidac& jd;                // what to extract
   OutputFile outf;          // currently open output file
-  map<string, DT>::iterator lastdt;  // currently open output file
+  DTMap::iterator lastdt;  // currently open output file
   ExtractJob(Jidac& j): job(0), jd(j), lastdt(j.dt.end()) {
     init_mutex(mutex);
     init_mutex(write_mutex);
@@ -2869,7 +2931,7 @@ void Jidac::extract() {
   }
 
   // Don't clobber
-  for (map<string, DT>::iterator p=dt.begin(); p!=dt.end(); ++p) {
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.dtv.size() && p->second.dtv.back().date
         && p->second.written==0) {
       if (p->second.edate) {
@@ -3028,6 +3090,14 @@ void decompile(const string& hcomp, const string& pcomp) {
     printf("post 0 end\n");
 }
 
+// For counting files and sizes by -list -quiet
+struct TOP {
+  int64_t size;
+  int count;
+  TOP(): size(0), count(0) {}
+  void inc(int64_t n) {size+=n; ++count;}
+};
+
 // List contents
 void Jidac::list() {
 
@@ -3138,12 +3208,94 @@ void Jidac::list() {
     return;
   }
 
+  // Quick list. Show only the largest files and directories, sorted by size,
+  // and block and fragment usage statistics.
+  if (quiet) {
+    const int64_t csize=read_archive();
+    read_args(true);
+
+    // Report 100 biggest files and directores
+    printf("\nRank         Size     Files File or Directory\n"
+             "-- -------------- --------- -----------------\n");
+    map<string, TOP> top;  // filename or dir -> total size and count
+    vector<int> frag(ht.size());  // frag ID -> reference count
+    int unknown_ref=0;  // count fragments and references with unknown size
+    int unknown_size=0;
+    for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
+      if (p->second.dtv.size() && p->second.dtv.back().date
+          && p->second.written==0) {
+        top[""].inc(p->second.dtv.back().size);
+        top[p->first].inc(p->second.dtv.back().size);
+        for (unsigned i=0; i<p->first.size(); ++i) {
+          if (p->first[i]=='/')
+            top[p->first.substr(0, i+1)].inc(p->second.dtv.back().size);
+        }
+        for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
+          const unsigned j=p->second.dtv.back().ptr[i];
+          if (j<frag.size()) {
+            ++frag[j];
+            if (ht[j].usize<0) ++unknown_ref;
+          }
+        }
+      }
+    }
+    map<int64_t, vector<string> > st;
+    for (map<string, TOP>::const_iterator p=top.begin();
+         p!=top.end(); ++p)
+      st[-p->second.size].push_back(p->first);
+    int i=1;
+    for (map<int64_t, vector<string> >::const_iterator p=st.begin();
+         p!=st.end() && i<100; ++p) {
+      for (unsigned j=0; i<100 && j<p->second.size(); ++i, ++j)
+        printf("%2d %14.0f %9d %s\n", i, double(-p->first),
+               top[p->second[j].c_str()].count, p->second[j].c_str());
+    }
+
+    // Report block and fragment usage statistics
+    printf("\nShares Fragments          Bytes\n"
+             "------ --------- --------------\n");
+    map<unsigned, TOP> fr;
+    for (unsigned i=1; i<frag.size(); ++i) {
+      assert(i<ht.size());
+      fr[frag[i]].inc(ht[i].usize);
+      fr[-1].inc(ht[i].usize);
+      if (ht[i].usize<0) ++unknown_size;
+    }
+    for (map<unsigned, TOP>::const_iterator p=fr.begin(); p!=fr.end(); ++p) {
+      if (int(p->first)==-1) printf(" Total ");
+      else printf("%6u ", p->first);
+      printf("%9d %14.0f\n", p->second.count, double(p->second.size));
+    }
+
+    // Report fragments with unknown size
+    printf("\n%d references to %d of %d fragments have unknown size.\n",
+           unknown_ref, unknown_size, ht.size()-1);
+
+    // Count blocks and used blocks
+    int blocks=0, used=0, isused=0;
+    for (unsigned i=1; i<ht.size(); ++i) {
+      if (ht[i].csize>=0) {
+        ++blocks;
+        used+=isused;
+        isused=0;
+      }
+      isused|=frag[i]>0;
+    }
+    used+=isused;
+    const double usize=top[""].size;
+    printf("%d of %d blocks used.\nCompression %1.0f -> %1.0f",
+           used, blocks, usize, double(csize));
+    if (usize>0) printf(" (ratio %1.3f%%)", csize*100.0/usize);
+    printf("\n");
+    return;
+  }
+
   // Non-detailed list
   int64_t csize=read_archive();  // read into ht, dt
   int64_t usize=0;
   int nfiles=0, versions=0, deletions=0;
   read_args(force);
-  for (map<string, DT>::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
+  for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (!p->second.dtv.size()) continue;
     if (p->second.dtv.back().date) ++nfiles;
     if (p->second.dtv.back().size>=0) usize+=p->second.dtv.back().size;
