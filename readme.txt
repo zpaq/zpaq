@@ -1,6 +1,6 @@
-zpaq v6.02 readme. Sept. 29, 2012.
+zpaq v6.03 readme. Sept. 30, 2012.
 
-zpaq v6.02 is a journaling incremental deduplicating archiving compressor.
+zpaq v6.03 is a journaling incremental deduplicating archiving compressor.
 All zpaq versions can be found at see http://mattmahoney.net/zpaq
 
 Journaling means that the archive is append-only. When you update it,
