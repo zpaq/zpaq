@@ -1,14 +1,47 @@
-bmp_j4 ZPAQ model for compressing .bmp files.
-Written by Jan Ondrus in 2009. Updated Oct. 1, 2012 by Matt Mahoney
-to work with zpaq v6.xx.
+zpaq v6.05 archiver, Oct. 2, 2012. Contents:
 
-To compress:   zpaq -add rafale.zpaq rafale.bmp -method bmp_j4 -tiny
-To decompress: zpaq -extract rafale rafale.bmp -to output.bmp
+zpaq.exe      32 bit Windows executable, run from a command window.
+zpaq.cpp      User's guide and source code.
+libzpaq.h     libzpaq API documentation and header.
+libzpaq.cpp   libzpaq API source code.
+divsufsort.h  libdivsufsoft-lite header.
+divsofsort.c  libdivsufsort-lite source code.
 
-See zpaq.cpp for complete command syntax.
-Use -solid, or -tiny modes and only compress one .bmp
-file at a time. -streaming mode should work with multiple files
-if none are larger than 16 MB.
-Pre/post processing will fail on non .bmp files.
-Both bmp_j4.cfg and colorpre.cfg must be in the current directory
-to compress. They are not needed to extract.
+zpaq is (C) 2012, Dell Inc., written by Matt Mahoney.
+Licensed under GPL v3. http://www.gnu.org/copyleft/gpl.html
+
+libzpaq is an API providing compression and decompression services
+for developers. See libzpaq.h for documentation. It is public domain.
+
+libdivsufsort-lite v2.00 is (C) 2003-2008, Yuta Mori under the MIT open
+source license (see source code). It is mirrored from 
+http://code.google.com/p/libdivsufsort/ for your convenience.
+It and libzpaq are needed to compile zpaq.
+
+zpaq is journaling: when you add files and directories, it keeps both
+the old and new versions. You can roll it back to an earlier version.
+It is incremental: only files whose dates have changed are added. It is
+deduplicating: identical files and fragments are saved only once.
+Speed is similar to zip but with better compression. For example, a disk
+backup:
+
+  zpaq -add e:backup.zpaq c:\ -not c:\windows
+
+will take a couple hours to compress 100 GB the first time, then a couple
+minutes for subsequent backups each night. To list version dates:
+
+  zpaq -list e:backup.zpaq -summary
+
+To recover a copy of an old version of a directory:
+
+  zpaq -extract e:backup.zpaq c:\users\bob -to tmp\bob -version 5
+
+Command line documentation is in zpaq.cpp.
+If you find a bug, please let me know at mattmahoneyfl@gmail.com.
+All zpaq versions can be found at http://mattmahoney.net/zpaq
+
+zpaq.exe was compiled with MinGW g++ 4.6.1 and compressed with
+upx 3.06w as follows:
+
+  g++ -O3 -msse2 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
+  upx zpaq.exe
