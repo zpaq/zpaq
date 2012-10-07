@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.06 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.07 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -602,15 +602,17 @@ private:
 
 #endif
 
-#ifdef _MSC_VER
-#define fseeko64(a,b,c) _fseeki64(a,b,c)
-#define ftello64(a) _ftelli64(a)
+#ifdef _MSC_VER  // Microsoft C++
+#define fseeko(a,b,c) _fseeki64(a,b,c)
+#define ftello(a) _ftelli64(a)
 #endif
 
 // For testing -Dunix in Windows
 #ifdef unixtest
 #define lstat(a,b) stat(a,b)
 #define mkdir(a,b) mkdir(a)
+#define fseeko(a,b,c) fseeko64(a,b,c)
+#define ftello(a) ftello64(a)
 #endif
 
 // signed size of a string or vector
@@ -772,11 +774,11 @@ public:
   int get() {assert(in); return getc(in);}
 
   // Return file position
-  int64_t tell() {return ftello64(in);}
+  int64_t tell() {return ftello(in);}
 
   // Set file position
   void seek(int64_t pos, int whence) {
-    fseeko64(in, pos, whence);
+    fseeko(in, pos, whence);
   }
 
   // Close file if open
@@ -884,7 +886,7 @@ public:
   bool open(const char* filename) {
     this->filename=filename;
     out=fopen(filename, "rb+");
-    if (out) fseeko64(out, 0, SEEK_END);
+    if (out) fseeko(out, 0, SEEK_END);
     else out=fopen(filename, "wb+");
     if (!out) perror(filename);
     return isopen();
@@ -895,7 +897,7 @@ public:
 
   // Write size bytes at offset
   void write(const char* buf, int64_t offset, int size) {
-    fseeko64(out, offset, SEEK_SET);
+    fseeko(out, offset, SEEK_SET);
     int n=fwrite(buf, 1, size, out);
     if (n!=size) perror("fwrite");
   }
@@ -903,12 +905,12 @@ public:
   // Seek to pos. whence is SEEK_SET, SEEK_CUR, or SEEK_END
   void seek(int64_t pos, int whence) {
     fflush(out);
-    fseeko64(out, pos, whence);
+    fseeko(out, pos, whence);
   }
 
   // return position
   int64_t tell() {
-    return ftello64(out);
+    return ftello(out);
   }
 
   // Truncate file and move file pointer to end
@@ -1380,7 +1382,7 @@ private:
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.06 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.07 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ... (may be abbreviated)\n"
@@ -3146,7 +3148,7 @@ ThreadReturn decompressThread(void* arg) {
 
     // Write the files in dt that point to this block
     lock(job.write_mutex);
-    for (map<string,DT>::iterator p=job.jd.dt.begin();p!=job.jd.dt.end();++p){
+    for (DTMap::iterator p=job.jd.dt.begin();p!=job.jd.dt.end();++p){
       DT& dtr=p->second;
       if (dtr.written<0 || size(dtr.dtv)==0 
           || dtr.written>=size(dtr.dtv.back().ptr))
@@ -3307,7 +3309,7 @@ void Jidac::extract() {
         if (out.isopen()) out.close();
         first=false;
         string newfile;
-        map<string,DT>::iterator p=dt.find(lastfile);
+        DTMap::iterator p=dt.find(lastfile);
         if (p!=dt.end() && p->second.written==0) {  // todo
           newfile=rename(lastfile);
           makepath(newfile);
