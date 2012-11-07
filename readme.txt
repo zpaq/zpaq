@@ -1,9 +1,10 @@
-zpaq v6.07 archiver, Oct. 7, 2012. Contents:
+zpaq v6.16 archiver, Nov. 5, 2012. Contents:
 
 zpaq.exe      32 bit Windows executable, run from a command window.
+zpaq64.exe    64 bit Windows executable (added Nov. 6, 2012).
 zpaq.cpp      User's guide and source code.
-libzpaq.h     libzpaq API documentation and header.
-libzpaq.cpp   libzpaq API source code.
+libzpaq.h     libzpaq API documentation and header v6.00a.
+libzpaq.cpp   libzpaq API source code v6.01.
 divsufsort.h  libdivsufsoft-lite header.
 divsofsort.c  libdivsufsort-lite source code.
 
@@ -25,7 +26,7 @@ deduplicating: identical files and fragments are saved only once.
 Speed is similar to zip but with better compression. For example, a disk
 backup:
 
-  zpaq -add e:backup.zpaq c:\ -not c:\windows
+  zpaq -add e:backup.zpaq c:\* -not c:\windows
 
 will take a couple hours to compress 100 GB the first time, then a couple
 minutes for subsequent backups each night. To list version dates:
@@ -40,8 +41,10 @@ Command line documentation is in zpaq.cpp.
 If you find a bug, please let me know at mattmahoneyfl@gmail.com.
 All zpaq versions can be found at http://mattmahoney.net/zpaq
 
-zpaq.exe was compiled with MinGW g++ 4.6.1 and compressed with
+zpaq.exe was compiled with MinGW g++ 4.7.0 and compressed with
 upx 3.06w as follows:
 
-  g++ -O3 -msse2 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
+  g++ -O3 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
   upx zpaq.exe
+
+To compile for Linux, include the options: -Dunix -fopenmp
