@@ -1,43 +1,50 @@
-lazy2 v1.0 (C) 2012, Dell Inc. Licensed under GPL v3.
-Written by Matt Mahoney, Oct. 31, 2012.
+zpaq v6.16 archiver, Nov. 5, 2012. Contents:
 
-Contents:
+zpaq.exe      32 bit Windows executable, run from a command window.
+zpaq64.exe    64 bit Windows executable (added Nov. 6, 2012).
+zpaq.cpp      User's guide and source code.
+libzpaq.h     libzpaq API documentation and header v6.00a.
+libzpaq.cpp   libzpaq API source code v6.01.
+divsufsort.h  libdivsufsoft-lite header.
+divsofsort.c  libdivsufsort-lite source code.
 
-  lazy2.exe - 32 bit Windows file compressor.
-  lazy2.cpp - Source code.
-  lazy2.cfg - Equivalent config file for ZPAQ.
+zpaq is (C) 2012, Dell Inc., written by Matt Mahoney.
+Licensed under GPL v3. http://www.gnu.org/copyleft/gpl.html
 
-To compress:   lazy2 3 input output
-To decompress: lazy2 d input output
+libzpaq is an API providing compression and decompression services
+for developers. See libzpaq.h for documentation. It is public domain.
 
-lazy2 compressed like lazy, except it has an E8E9 filter to improve
-compression of .exe and .dll files. Also, unlike lazy,
-uncompressed files cannot be larger than 1 GiB (2^30 bytes).
-Memory usage is a little over 1 GB. The first argument may range
-from 1 (fastest) to 5 (best). Decompression is faster than compression
-and doesn't depend on compression level.
+libdivsufsort-lite v2.00 is (C) 2003-2008, Yuta Mori under the MIT open
+source license (see source code). It is mirrored from 
+http://code.google.com/p/libdivsufsort/ for your convenience.
+It and libzpaq are needed to compile zpaq.
 
-lazy2.cfg can be used to create ZPAQ archives using the same
-compression algorithm. It contains ZPAQL code to decompress,
-equivalent to "lazy d". To create an archive:
+zpaq is journaling: when you add files and directories, it keeps both
+the old and new versions. You can roll it back to an earlier version.
+It is incremental: only files whose dates have changed are added. It is
+deduplicating: identical files and fragments are saved only once.
+Speed is similar to zip but with better compression. For example, a disk
+backup:
 
-  zpaq -method lazy -add archive files...
+  zpaq -add e:backup.zpaq c:\* -not c:\windows
 
-To decompress, you don't need any of these file because the decompression
-code from lazy.cfg is embedded in the archive and zpaq will just
-run it:
+will take a couple hours to compress 100 GB the first time, then a couple
+minutes for subsequent backups each night. To list version dates:
 
-  zpaq -extract archive
+  zpaq -list e:backup.zpaq -summary
 
-You could, if you want, use zpaq to decompress a file compressed
-with lazy using lazy.cfg. The following are equivalent:
+To recover a copy of an old version of a directory:
 
-  lazy d input output
-  zpaq -method lazy -run pcomp input output
+  zpaq -extract e:backup.zpaq c:\users\bob -to tmp\bob -version 5
 
-except that lazy.cfg is limited to 16 MB files. To increase this to 1 GB,
-change the "24" in the line "comp 0 0 0 24 0" to 30. Memory usage will
-increase accordingly. 24 is sufficient for zpaq because data is compressed
-in 16 MB blocks in normal and -streaming mode. If you use -solid or
--tiny compression on large files, you will need to increase this value.
+Command line documentation is in zpaq.cpp.
+If you find a bug, please let me know at mattmahoneyfl@gmail.com.
+All zpaq versions can be found at http://mattmahoney.net/zpaq
 
+zpaq.exe was compiled with MinGW g++ 4.7.0 and compressed with
+upx 3.06w as follows:
+
+  g++ -O3 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
+  upx zpaq.exe
+
+To compile for Linux, include the options: -Dunix -fopenmp

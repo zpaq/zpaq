@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.00a implementation - July 27, 2012.
+/* libzpaq.cpp - LIBZPAQ Version 6.01 implementation - Oct. 17, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -1398,7 +1398,7 @@ void Encoder::compress(int c) {
     }
   }
   else {
-    if (c<0 || low==buf.size()) {
+    if (low && (c<0 || low==buf.size())) {
       out->put((low>>24)&255);
       out->put((low>>16)&255);
       out->put((low>>8)&255);
