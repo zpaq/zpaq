@@ -1,7 +1,7 @@
-/*  zpaq v1.08 archiver and file compressor.
+/*  zpaq v1.09 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 14, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 21, 2009.
 
     LICENSE
 
@@ -29,53 +29,89 @@ need to be somewhere in your PATH or in the current directory when run:
 
   zpaq.exe     - this program.
   zpaqmake.bat - script used for optimization.
+  lzppre.exe   - preprocessor for fast compression (min.cfg)
 
 In addition you will need a C++ compiler and zpaq.cpp and zpaq.h
-to use the optimization feature. Optimization creates specialized
-compressors and decompressors that are tuned to their input and run
-50-100% faster.
+to use the optimization feature. Optimization speeds up compression
+and decompression typically by 50% to 100% or more. It works by
+generating C++ code for an optimized version of ZPAQ tuned to the
+input, then compiling and running it.
 
-The script zpaqmake.bat should take one argument, which will be a
-C++ program without the .cpp extension. It should look for this file
-in the temporary directory %TEMP%, compile it,
-link to zpaq.o (wherever you put it) and put the result with a .exe
-extension in %TEMP%. The compiler needs to know where zpaq.h and zpaq.o
-can be found. For example, suppose that zpaq.cpp and zpaq.h
-are placed in the directory \zpaq. Then create zpaq.o:
+The script zpaqmake.bat should take one argument %1, which will be a
+C++ program without the .cpp extension. It should compile %1.cpp
+with options -DOPT -DNDEBUG, link to zpaq.cpp (wherever you put it)
+and name the result %1.exe. The compiler needs to know where zpaq.h and
+zpaq.cpp can be found. For example, suppose that zpaq.cpp
+and zpaq.h are placed in the directory C:\zpaq. Then zpaqmake.bat
+would contain at a minimum:
 
-  cd \zpaq
-  g++ -O2 -DNDEBUG -DOPT -c zpaq.cpp
+  g++ -O2 -DOPT -DNDEBUG %1.cpp -IC:\zpaq C:\zpaq\zpaq.cpp -o %1.exe
 
--DOPT removes features not needed for specialized compressors.
--DNDEBUG removes run time checks.
+g++ 4.4.0 is the recommended compiler, but others will work.
 
-The script zpaqmake.bat would be:
+-DOPT is required. It removes features not needed for specialized
+compressors.
 
-  g++ -O2 -I\zpaq %TEMP%\%1.cpp \bin\zpaq.o -o %TEMP%\%1.exe
-  upx -qqq %TEMP%\%1.exe
+-DNDEBUG removes run time checks for better speed.
 
-Additional compiler options should be appropriate for your computer.
-The recommended compiler is g++ 4.4.0 but others will work. The recommended
-options are -O2 -s -fomit-frame-pointer -march=pentiumpro (or higher
-processor).
+%1.cpp is the input file. %1 is passed to the script. It includes
+the full path, normally %TEMP%/filename where filename is "zpaq_"
+followed by 40 hexadecimal digits.
 
-ZPAQ will look for %1.cpp first in TMPDIR if it exists, else in TEMP
-if it exists, else in the current directory. TEMP is normally defined
-in Windows to be a directory for temporary files, and TMPDIR is not set.
+-IC:\zpaq tells g++ to look in C:\zpaq for zpaq.h
 
-If you are installing in Linux then you will need to write an equivalent
-shell script called zpaqmake (no .bat extension). Normally $TMPDIR
-is "/tmp", but you may need to set it.
+C:\zpaq\zpaq.cpp is this file. Alternatively it may be compiled
+in advance with -DOPT -DNDEBUG to zpaq.o and it could be linked.
+
+-o %1.exe names the output file.
+
+-O2 optimizes for speed. It often works better than -O3.
+Other optimizations should be specific
+to the installed computer. Some useful options are:
+
+-s to strip debugging symbols to save space.
+-fomit-frame-pointer improves speed a bit.
+-march=pentiumpro is the oldest target that doesn't hurt speed much.
+
+You can also compile zpaq.cpp to zpaq.o in advance and link to it
+in the script. If you do so, compile zpaq.cpp with -c -DOPT -DNDEBUG
+and other optimizations as appropriate.
+
+The script can also compress the resulting .exe, e.g.
+
+  upx -qqq %1.exe
 
 If you don't use the optimization feature then you don't need a C++
-compiler, source code, or script. You only need zpaq.exe in your PATH.
+compiler, source code, or script. You only need zpaq.exe and lzppre.exe
+in your PATH.
+
+Linux Installation
+------------------
+
+If you are installing in Linux then you will need to write an equivalent
+shell script called zpaqmake (no .bat extension) and make it executable.
+The output should still have a .exe extension. For example, suppose
+that zpaq.cpp and zpaq.h are in /usr/zpaq
+
+  #!/bin/csh
+  g++ -O2 -DOPT -DNDEBUG $1.cpp -I/usr/zpaq /usr/zpaq/zpaq.cpp -o $1.exe
+
+You will also need to compile zpaq.cpp and lzppre.cpp and put the
+executables somewhere in your $PATH. Compile with -DNDEBUG. Don't
+add a .exe extension.
+
+If you want to use /tmp for temporary files, then you need to set
+
+  setenv TEMP /tmp
+
+prior to running zpaq.
 
 
 Command summary
 ---------------
 
-To compress to new archive: zpaq [opnsitv]c[F[,N...]] archive files...
-To append to archive:       zpaq [opnsitv]a[F[,N...]] archive files...
+To compress to new archive: zpaq [opnsitqv]c[F[,N...]] archive files...
+To append to archive:       zpaq [opnsitqv]a[F[,N...]] archive files...
 Optional modifiers:
   o = compress faster (requires C++ compiler)
   p = store filename paths in archive
@@ -83,15 +119,17 @@ Optional modifiers:
   s = don't store SHA1 checksums (saves 20 bytes)
   i = don't store file sizes as comments (saves a few bytes)
   t = append locator tag to non-ZPAQ data
+  q = quiet
   v = verbose (show F as it compiles)
   F = use options in configuration file F (min.cfg, max.cfg)
   ,N = pass numeric arguments to F
 To list contents: zpaq l archive
-To extract: zpaq [opnt]x[N] archive [files...]
+To extract: zpaq [opntq]x[N] archive [files...]
   o = extract faster (requires C++ compiler)
   p = extract to stored paths instead of current directory
   n = decompress all to one file
   t = don't post-process (for debugging)
+  q = quiet
   N = extract only block N (1, 2, 3...)
   files... = rename extracted files (clobbers)
       otherwise use stored names (does not clobber)
@@ -102,7 +140,6 @@ To debug configuration file F: zpaq [pthv]rF[,N...] [args...]
   h = trace display in hexadecimal
   v = verbose compile
   ,N = pass numeric arguments to F
-To make self extracting archive: append to a copy of zpaqsfx.exe
 
 
 Basic commands
@@ -155,9 +192,10 @@ one block with each file in a separate segment. The "l" and "x"
 commands list or extract all of the blocks in the order that they
 were added.
 
-An archive may have other data before the first block, such as a
-stub for a self extracting archive. All ZPAQ commands will work
-with these.
+An archive may be mixed with other data provided that each ZPAQ
+block sequence is preceded by a locator tag (appended with "ta").
+ZPAQ will ignore the other data. One use for this technique
+is to append ZPAQ blocks to a self extracting archive stub.
 
 
 Compression options
@@ -171,6 +209,9 @@ configuration file F. Three files are included:
   min.cfg - for fast but poor compression.
   max.cfg - for slow but good compression.
   mid.cfg - for moderate speed and compression (default).
+
+Other config files are available as add-on options or you can
+write them as explained later.
 
 A numeric argument may be appended to F to increase memory
 usage for better compression. Each increment doubles usage.
@@ -209,7 +250,7 @@ be given during decompression.
   s
 
 Do not store SHA1 checksums. This saves 20 bytes. The decompressor
-will not check the output for errors.
+will not check that the output is identical to the original input.
 
   i
 
@@ -222,6 +263,10 @@ it is displayed by the "l" and "x" commands.
 
 Verbose. Show config file F (if present) as it is compiled.
 This is useful for error checking.
+
+  q
+
+Quiet. Don't display compression progress on the screen.
 
   t
 
@@ -241,11 +286,10 @@ of the block header produced by config file F with arguments N. If the
 program exists, then ZPAQ will call it with the same arguments to
 perform the compression. If it does not exist then ZPAQ will create
 a source code file zpaq_X.cpp in the temporary directory, compile it,
-and link it to zpaq.cpp or zpaq.obj depending on the installation.
+and link it to zpaq.cpp or zpaq.o depending on the installation.
 
 The temporary directory is specified by the environment variable
-TMPDIR if it exists, or else TEMP if it exists, or else the current
-directory.
+TEMP if it exists, or else the current directory.
 
 The program zpaq_X.exe will compress its input in the same format
 as described by F, but faster. If F specifies a preprocessor, then
@@ -256,19 +300,20 @@ blocks in any other configuration.
 zpaq_X.exe will accept the "c", "a" and "x" commands with all of the
 same modifiers, but will ignore the "v" and "o" modifiers and ignore
 any config file F and arguments passed to it. It will not accept the
-"l" or "r" commands. Extraction requires a block number ("x1", "x2", etc).
+"l" or "r" commands. Extraction requires a block number ("x1", "x2",
+etc). A different optimized program is used to extract each block.
 
 ZPAQ will call the external program zpaqmake to compile zpaq_X.cpp,
 passing it zpaq_X as an argument. Normally this will be a script
-that calls a C++ compiler to produce zpaq_X.obj, links to zpaq.obj
-and outputs zpaq_X.exe. The script should also compile zpaq.cpp
-to zpaq.obj if needed.
+that calls a C++ compiler to produce zpaq_X.o, links to zpaq.o
+and outputs zpaq_X.exe. The script could link to zpaq.cpp instead
+of zpaq.o.
 
 
 Extraction options
 ------------------
 
-  zpaq [opnt]x[N] archive [files...]
+  zpaq [opntq]x[N] archive [files...]
 
   p
 
@@ -293,6 +338,10 @@ the first file in [files...].
 
 means extract without postprocessing (for debugging). Expect
 checksum errors.
+
+  q
+
+means quiet. Don't display decompression progress.
 
   N
 
@@ -874,18 +923,18 @@ command must end with a space followed by a semicolon.
 The command may contain spaces or options. The program is expected
 to take as two additional arguments an input file and an output
 file. ZPAQ will call the program by appending the input file and
-a temporary file "archive.$zpaq.pre" formed by appending the
+a temporary file "%TEMP%\archive.zpaq.pre" formed by appending the
 extension to the archive name. If the program needs to save
 any state information then it should do so in a file named
-"archive.$zpaq.tmp" (i.e. replace ".pre" with ".tmp" in the output filename).
-ZPAQ will delete this file before compressing the first file to
+"%TEMP%\archive.zpaq.tmp" (i.e. replace ".pre" with ".tmp" in the output
+filename). ZPAQ will delete this file before compressing the first file to
 initialize the state of the preprocessor, and again after compressing
-the last file to clean up. It will also delete archive.$zpaq.pre
+the last file to clean up. It will also delete archive.zpaq.pre
 before and after compressing each file.
 
 Before each file is compressed, ZPAQ will verify that the transformed
-data in archive.$zpaq.pre will be converted back to the original input file
-by inputting archive.$zpaq.pre to the ZPAQL program in PCOMP and comparing
+data in archive.zpaq.pre will be converted back to the original input file
+by inputting archive.zpaq.pre to the ZPAQL program in PCOMP and comparing
 its output to the original input. If the output is verified then 
 the file is compressed. Otherwise it is skipped. The algorithm is:
 
@@ -894,7 +943,7 @@ the file is compressed. Otherwise it is skipped. The algorithm is:
   if F then compile header Z from F else use default header Z
   If "c" then open archive for write
   If "a" then open archive for append
-  Delete archive.$zpaq.tmp
+  Delete archive.zpaq.tmp
   FIRST = true
   For each inputfile FILENAME loop
     Open FILENAME as IN
@@ -903,11 +952,11 @@ the file is compressed. Otherwise it is skipped. The algorithm is:
     SIZE = |IN|
     if Z.PCOMP then
       Close IN
-      Delete archive.$zpaq.pre
-      Run Z.preprocessor-command FILENAME $zpaq.pre
-      CHECK2 = SHA1(Z.PCOMP(archive.$zpaq.pre, EOS))
+      Delete archive.zpaq.pre
+      Run Z.preprocessor-command FILENAME archive.zpaq.pre
+      CHECK2 = SHA1(Z.PCOMP(archive.zpaq.pre, EOS))
       if CHECK1 != CHECK2 then continue
-      Open archive.$zpaq.pre as IN
+      Open archive.zpaq.pre as IN
     Else if Z.POST then
       Rewind IN
     If FIRST then
@@ -927,11 +976,14 @@ the file is compressed. Otherwise it is skipped. The algorithm is:
     FIRST = false
   Code end of block
   Close archive
-  Delete archive.$zpaq.tmp, archive.$zpaq.pre
+  Delete archive.zpaq.tmp, archive.zpaq.pre
 
-It is not possible to compress a file named archive.$zpaq.pre
-or archive.$zpaq.pre.tmp (depending on the archive name) because 
-these files might be overwritten or deleted.
+Temporary files will be placed in %TEMP% in Windows or $TEMP
+in Linux. Windows normally defines %TEMP% as a directory for
+temporary files. If the environment variable TEMP is not set, then
+temporary files will be placed in the current directory. To
+use /tmp in Linux, use the command "setenv TEMP /tmp" before
+running ZPAQ.
 
 Example: Suppose a preprocessor program, caesar.exe,
 implements a Caesar cipher. It takes a number, input file, and
@@ -1088,8 +1140,8 @@ int SHA1::SHA1Result(U8 Message_Digest[SHA1HashSize])
             /* message may be sensitive, clear it out */
             Message_Block[i] = 0;
         }
-        Length_Low = 0;    /* and clear length */
-        Length_High = 0;
+//        Length_Low = 0;    /* and DON'T clear length */
+//        Length_High = 0;
         Computed = 1;
 
     }
@@ -1359,6 +1411,7 @@ typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE,
   WHILE,UNTIL,FOREVER,IFL,IFNOTL,ELSEL,SEMICOLON} CompType;
 static const int compsize[256]={0,2,3,2,3,4,6,6,3,5};
 bool verbose=false;  // global: display lots of stuff?
+bool quiet=false;    // global: display less stuff?
 static const char* compname[]=
   {"","const","cm","icm","match","avg","mix2","mix","isse","sse",0};
 
@@ -1411,8 +1464,8 @@ ZPAQL::ZPAQL() {
   select=0;
 }
 
-// Read header
-void ZPAQL::read(Reader r) {
+// Read header, return number of bytes read
+int ZPAQL::read(Reader r) {
 
   // Get header size and allocate
   int hsize=r.get();
@@ -1452,10 +1505,11 @@ void ZPAQL::read(Reader r) {
   assert(hend>hbegin && hend<header.size());
   assert(hsize==header[0]+256*header[1]);
   assert(hsize==cend-2+hend-hbegin);
+  return cend+hend-hbegin;
 }
 
-// Write header
-void ZPAQL::write(FILE* out) {
+// Write header. Return number of bytes written.
+int ZPAQL::write(FILE* out) {
   assert(out);
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
@@ -1463,6 +1517,19 @@ void ZPAQL::write(FILE* out) {
   assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   fwrite(&header[0], 1, cend, out);
   fwrite(&header[hbegin], 1, hend-hbegin, out);
+  return cend+hend-hbegin;
+}
+
+// Verify header matches zlist (select==1) or pzlist (select==2)
+void ZPAQL::verify() {
+#ifdef OPT
+  if (select<1 || select>2) return;
+  const U8* list=select==1?zlist:pzlist;
+  int hsize=list[0]+256*list[1];
+  if (hsize!=cend+hend-hbegin-2 || memcmp(&header[0], list, cend)
+      || memcmp(&header[hbegin], list+cend, hend-hbegin))
+    error("block header verify");
+#endif
 }
 
 // Initialize machine state as HCOMP
@@ -1915,7 +1982,7 @@ int args[9]={0};  // global configuration file arguments
 // Read a token and return it, or return 0 at EOF. Skip (comments).
 // Convert to lower case. Tokens are separated by white space.
 // In verbose mode, print the token.
-const char* token(FILE* in) {
+const char* token(FILE* in, bool lowercase=true) {
   static char s[512];  // result
   int len=0;  // length of s
 
@@ -1930,7 +1997,7 @@ const char* token(FILE* in) {
 
   // read token separated by whitespace
   do {
-    if (isupper(c)) c=tolower(c);
+    if (lowercase && isupper(c)) c=tolower(c);
     s[len++]=c;
   }
   while (len<511 && (c=getc(in))!=EOF && c>' ');
@@ -2227,9 +2294,9 @@ void compile(FILE* in, ZPAQL& z, ZPAQL& pz, Array<char>& pcomp_cmd,
     pz.header[5]=z.header[5]; // copy pm
     pz.cend=8;  // empty COMP section
 
-    // get pcomp_cmd ending with ";"
+    // get pcomp_cmd ending with ";" (case sensitive)
     const char *tok;
-    while ((tok=token(in))!=0 && strcmp(tok, ";")) {
+    while ((tok=token(in, false))!=0 && strcmp(tok, ";")) {
       if (pcomp_cmd.size() && pcomp_cmd[0]) append(pcomp_cmd, " ");
       append(pcomp_cmd, tok);
     }
@@ -3432,7 +3499,7 @@ void optimize(ZPAQL& z, ZPAQL& pz, const char* filename, const char* pcomp_cmd) 
 
   // Close file
   fclose(out);
-  printf("Created %s\n", filename);
+  if (!quiet) printf("Created %s\n", filename);
 }
 #endif // not OPT
 
@@ -3575,7 +3642,40 @@ int PostProcessor::write(int c) {
 
 /////////////////////////// rerun ////////////////////////////
 
+// Return "/" in Linux or "\\" in Windows or error if unknown
+const char* slash() {
+
+  // Guess by counting / and \ in PATH (or TEMP) and pick the most common
+  static char result[2]={0};
+  if (!result[0]) {
+    int forward=0;
+    const char *path=getenv("PATH");
+    if (!path) path=getenv("TEMP");
+    if (path) {
+      for (; *path; ++path) {
+        if (*path=='/') ++forward;
+        if (*path=='\\') --forward;
+      }
+    }
+    if (forward>0) result[0]='/';
+    if (forward<0) result[0]='\\';
+  }
+  if (!result[0]) error("unknown operating system");
+  return result;
+}
+
+// Put the name of a temporary directory in filename ending eith \ or /
+void tempdir(Array<char>& filename) {
+  const char *env=getenv("TEMP");
+  if (env) append(filename, env);
+  else append(filename, ".");
+  int len=strlen(&filename[0]);
+  if (len>0 && filename[len-1]!='/' && filename[len-1]!='\\')
+    append(filename, slash());
+}
+
 #ifndef OPT
+
 // Call the optimized ZPAQ with arguments argc, argv. The name of the
 // program is TEMP/zpaq_SHA1(z.header, pz.header, pre_cmd).exe
 // If it doesn't exist then create a .cpp file with the same name
@@ -3586,16 +3686,7 @@ int PostProcessor::write(int c) {
 void rerun(int argc, char** argv, ZPAQL& z, ZPAQL& pz,
            const char* pre_cmd, int block=0, int skipped_files=0) {
 
-  // Get temp directory
-  Array<char> filename;
-  const char *env=getenv("TMPDIR");
-  if (!env) env=getenv("TEMP");
-  if (env) append(filename, env);
-  int len=strlen(&filename[0]);
-  if (len>0 && filename[len-1]!='/' && filename[len-1]!='\\')
-    append(filename, "/");
-
-  // Get name from hash of z, pz, pre_cmd
+  // Get filename from hash of z, pz, pre_cmd
   SHA1 sha1;
   for (int i=0; i<z.cend; ++i)
     sha1.put(z.header[i]);
@@ -3606,6 +3697,8 @@ void rerun(int argc, char** argv, ZPAQL& z, ZPAQL& pz,
   if (pre_cmd)
     for (int i=0; pre_cmd[i]; ++i)
       sha1.put(pre_cmd[i]);
+  Array<char> filename;
+  tempdir(filename);
   append(filename, "zpaq_");
   for (int i=0; i<20; ++i) {
     char s[10];
@@ -3630,7 +3723,7 @@ void rerun(int argc, char** argv, ZPAQL& z, ZPAQL& pz,
     Array<char> cmd;
     append(cmd, "zpaqmake ");
     append(cmd, &filename[0]);
-    printf("%s\n", &cmd[0]);
+    if (!quiet) printf("%s\n", &cmd[0]);
     system(&cmd[0]);
 
     // Test if compile worked
@@ -3654,7 +3747,7 @@ void rerun(int argc, char** argv, ZPAQL& z, ZPAQL& pz,
       append(cmd, s);
     }
   }
-  printf("%s\n", &cmd[0]);
+  if (!quiet) printf("%s\n", &cmd[0]);
   system(&cmd[0]);
 }
 #endif
@@ -3747,7 +3840,7 @@ const char* strip(const char* filename) {
   return result;
 }
 
-// Decompress: [opnt]xN archive [files...]
+// Decompress: [opntq]xN archive [files...]
 // o=optimize, p=paths, n=extract all to one file, t=no postprocessing,
 // N=block to extract (default all), files...=new names.
 void decompress(int argc, char** argv) {
@@ -3763,6 +3856,7 @@ void decompress(int argc, char** argv) {
     else if (*cmd=='p') pcmd=true;
     else if (*cmd=='n') ncmd=true;
     else if (*cmd=='t') tcmd=true;
+    else if (*cmd=='q') quiet=true;
     else if (*cmd=='x') break;
     else usage();
     ++cmd;
@@ -3802,13 +3896,13 @@ void decompress(int argc, char** argv) {
 
 #ifdef OPT
     z.select=1;  // select optimized code
+    z.verify();
     pp.z.select=2;
 #else
-    // clear output file
+    // clear output file for append
     if (ncmd && (block==1 || block==blocknum)) {
       if (argc!=4)
         error("'nx' requires one output filename");
-      printf("Clearing output file %s\n", argv[3]);
       remove(argv[3]);
     }
 #endif
@@ -3823,12 +3917,12 @@ void decompress(int argc, char** argv) {
       for (i=0; (c=getc(in))>0; ++i)
         if (i<511) filename[i]=c;
       if (i>0 && i<512) filename[i]=0;
-      if (!ocmd) printf("%s ", filename);
+      if (!ocmd && !quiet) printf("%s ", filename);
 
 #ifndef OPT
       // If the user named some but not all output files, then skip the rest
       if (!ncmd && argc>3 && filecount+3>=argc) {
-        printf("\nSkipping %s and remaining files\n", filename);
+        if (!quiet) printf("\nSkipping %s and remaining files\n", filename);
         goto end;
       }
 #endif
@@ -3840,31 +3934,31 @@ void decompress(int argc, char** argv) {
         if (i<19) comment[i]=c;
         ++i;
       }
-      if (!ocmd) printf("%s -> ", comment);
+      if (!ocmd && !quiet) printf("%s -> ", comment);
       if (getc(in)) error("reserved");  // reserved 0
 
       // If not 'o', open output file
       FILE *out=0;
       if (!ocmd) {
 
-        // If not 'n', open as argv[3] for append.
+        // If 'n', open as argv[3] for append.
         if (ncmd) {
           if (argc!=4)
             error("'nx' command requires one output filename");
           out=fopen(argv[3], "ab");
           if (!out) perror(argv[3]), exit(1);
-          printf("%s -> ", argv[3]);
+          if (!quiet) printf("%s -> ", argv[3]);
         }
 
         // Else if the user gave an output file starting at argv[3], use it instead.
         else if (argc>3) {
-          assert(filecount+3<argc);
+          if (filecount+3>=argc) goto end;
           out=fopen(argv[filecount+3], "wb");
           if (!out) {
             perror(argv[filecount+3]);
             goto end;
           }
-          else
+          else if (!quiet)
             printf("%s ", argv[filecount+3]);
         }
 
@@ -3897,7 +3991,6 @@ void decompress(int argc, char** argv) {
 
       // Decompress
       SHA1 sha1;
-      int len0=0, len1=0;
       pp.set(out, &sha1);
 #ifndef OPT
       // optimize: Decode PCOMP in first segment and skip the rest of
@@ -3923,17 +4016,24 @@ void decompress(int argc, char** argv) {
 #endif
       // Extract the current segment
       {
+        time_t now=time(0);
+        int len=0;
         while ((c=dec.decompress())!=EOF) {
           if (!ocmd && tcmd) { // don't preprocess
             if (out) putc(c, out);
             sha1.put(c);
           }
-          else
-            pp.write(c);
-          if (!ocmd && ++len0==100000) {
-            ++len1;
-            len0=0;
-            printf("%7d00000\b\b\b\b\b\b\b\b\b\b\b\b", len1);
+          else {
+            if (pp.write(c)==5 && first) {
+              pp.z.verify();
+              first=false;
+            }
+          }
+          if (!ocmd && !quiet && !(len++&0xfff) && time(0)!=now) {
+            for (int i=printf("%1.0f ", sha1.size()); i>0; --i)
+              putchar('\b');
+            fflush(stdout);
+            now=time(0);
           }
         }
         if (!tcmd)
@@ -3955,23 +4055,26 @@ void decompress(int argc, char** argv) {
             match=false;
         }
         if (!ocmd) {
-          if (match)
-            printf("Checksum OK ");
+          if (match) {
+            if (!quiet) printf("Checksum OK      ");
+          }
           else {
-            printf("CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
+            fprintf(stderr, 
+              "CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
             for (int i=0; i<20; ++i)
-              printf("%02x", hash[i]);
-            printf("\n  File SHA1:    ");
+              fprintf(stderr, "%02x", hash[i]);
+            fprintf(stderr, "\n  File SHA1:    ");
             for (int i=0; i<20; ++i)
-              printf("%02x", sha1.result(i));
+              fprintf(stderr, "%02x", sha1.result(i));
+            fprintf(stderr, "\n");
           }
         }
       }
       else if (eos!=254)
         error("missing end of segment marker");
       else
-        printf("OK, no checksum");
-      if (!ocmd) printf("\n");
+        if (!quiet) printf("OK, no checksum ");
+      if (!ocmd && !quiet) printf("\n");
     }
     if (c!=255) error("missing end of block marker");
     if (blocknum) goto end;
@@ -3980,7 +4083,7 @@ void decompress(int argc, char** argv) {
 
   // Close the archive
 end:
-  printf("%d file(s) extracted\n", filecount);
+  if (!quiet) printf("%d file(s) extracted\n", filecount);
   fclose(in);
 }
 
@@ -3994,16 +4097,23 @@ class Encoder {
   U32 low, high; // range
   Predictor pr;  // to get p
   void encode(int y, int p); // encode bit y (0..1) with probability p (0..8191)
+  U32 in_low, in_high; // number of input, output bytes (64 bits)
+  U32 out_low, out_high;
 public:
   Encoder(FILE* f, ZPAQL& z);
   void compress(int c);  // c is 0..255 or EOF
   void stat() {pr.stat();}  // print predictor statistics
   void setOutput(FILE* f) {out=f;}
+  double in_size() const {return in_low+4294967296.0*in_high;}
+  double out_size() const {return out_low+4294967296.0*out_high;}
+  void reset() {in_low=in_high=out_low=out_high=0;} //  clear sizes
 };
 
 // Compress to file f using model z
 Encoder::Encoder(FILE* f, ZPAQL& z): 
-  out(f), low(1), high(0xFFFFFFFF), pr(z) {}
+    out(f), low(1), high(0xFFFFFFFF), pr(z) {
+  reset();
+}
 
 // compress bit y having probability p/64K
 inline void Encoder::encode(int y, int p) {
@@ -4019,6 +4129,7 @@ inline void Encoder::encode(int y, int p) {
     high=high<<8|255;
     low=low<<8;
     low+=(low==0); // so we don't code 4 0 bytes in a row
+    out_high+=(++out_low==0);
   }
 }
 
@@ -4029,6 +4140,7 @@ void Encoder::compress(int c) {
     encode(1, 0);
   else {
     assert(c>=0 && c<=255);
+    in_high+=(++in_low==0);
     encode(0, 0);
     for (int i=7; i>=0; --i) {
       int p=pr.predict()*2+1;
@@ -4058,7 +4170,7 @@ void get_args(char *cmd) {
 }
 #endif
 
-// Compress files: [pnsivo]c|a[F][,N...]] archive files...
+// Compress files: [pnsiqvo]c|a[F][,N...]] archive files...
 void compress(int argc, char** argv) {
   assert(argc>=3);
 
@@ -4071,6 +4183,7 @@ void compress(int argc, char** argv) {
     else if (cmd[0]=='n') ncmd=true, pcmd=false;
     else if (cmd[0]=='s') scmd=true;
     else if (cmd[0]=='i') icmd=true;
+    else if (cmd[0]=='q') quiet=true;
     else if (cmd[0]=='v') verbose=true;
     else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='o') ocmd=true;
@@ -4107,7 +4220,7 @@ void compress(int argc, char** argv) {
     if (!cfg) perror(cmd), exit(1);
     compile(cfg, z, pz, pcomp_cmd, args);
     fclose(cfg);
-    printf("%1.3f MB memory required.\n", z.memory()/1000000);
+    if (!quiet) printf("%1.3f MB memory required.\n", z.memory()/1000000);
   }
   else {
     static U8 header[71]={ // COMP 34 bytes from mid.cfg
@@ -4131,18 +4244,20 @@ void compress(int argc, char** argv) {
 
   // Construct temporary file names from archive name
   Array<char> prefile, tempfile;
+  tempdir(prefile);
+  tempdir(tempfile);
   append(prefile, argv[2]);
-  append(prefile, ".$zpaq.pre");
+  append(prefile, ".zpaq.pre");
   append(tempfile, argv[2]);
-  append(tempfile, ".$zpaq.tmp");
+  append(tempfile, ".zpaq.tmp");
 
   // Initialize preprocessor
   remove(&tempfile[0]);
 
   // Compress files in argv[3...argc-1]
   FILE *out=0;  // archive opened when ready to compress first file
-  long mark=0;  // archive size (for results display)
   Encoder enc(out, z);  // compressor
+  double outsum=0;  // total output size
   for (int i=3; i<argc; ++i) {
 
     // Open input file
@@ -4156,7 +4271,9 @@ void compress(int argc, char** argv) {
     SHA1 check1;
     int c;
     while ((c=getc(in))!=EOF) check1.put(c);
-    long size=ftell(in);
+    double insize=check1.size();  // input size of file
+    double presize=insize;        // preprocessed size
+    double outsize=(outsum==0);   // output size including header, EOB
     rewind(in);
 
     // Verify post(pre(in)) == in
@@ -4171,7 +4288,10 @@ void compress(int argc, char** argv) {
       append(pcomp_cmd, argv[i]);
       append(pcomp_cmd, " ");
       append(pcomp_cmd, &prefile[0]);
-      printf("%s ... ", &pcomp_cmd[0]);
+      if (!quiet) {
+        printf("%s ... ", &pcomp_cmd[0]);
+        fflush(stdout);
+      }
       system(&pcomp_cmd[0]);
       pcomp_cmd[len]=0; // chop last 2 arguments
 
@@ -4185,9 +4305,12 @@ void compress(int argc, char** argv) {
       // Run preprocessed data through postprocessor
       SHA1 check2;
       pz.sha1=&check2;
-      while ((c=getc(in))!=EOF)
+      presize=0;
+      while ((c=getc(in))!=EOF) {
         pz.run(c);
-      pz.run(-1);
+        presize+=1;
+      }
+      pz.run(U32(-1));
 
       // Compare postprocessed output with unpreprocessed input
       bool match=true;
@@ -4195,11 +4318,11 @@ void compress(int argc, char** argv) {
         if (check1.result(j)!=check2.result(j))
           match=false;
       if (!match) {
-        printf("FAILED\n");
+        fprintf(stderr, "FAILED\n");
         fclose(in);
         continue;
       }
-      printf("OK\n");
+      if (!quiet) printf("OK\n");
 
       // If OK then use preprocessed input
       rewind(in);
@@ -4214,26 +4337,27 @@ void compress(int argc, char** argv) {
 
       // append locator tag
       if (tcmd)
-        fprintf(out, "%s", 
+        outsize+=fprintf(out, "%s", 
         "\x37\x6B\x53\x74\xA0\x31\x83\xD3\x8C\xB2\x28\xB0\xD3");
 
       // Write block header
       enc.setOutput(out);
-      fprintf(out, "zPQ%c%c", LEVEL, 1);
-      mark=ftell(out)-6;  // last reported size (adjusted for header/trailer)
-      z.write(out);
+      outsize+=fprintf(out, "zPQ%c%c", LEVEL, 1);
+      outsize+=z.write(out);
       first=true;
     }
 
     // Code segment header
     putc(1, out);  // start of segment
     if (!ncmd)
-      fprintf(out, "%s", pcmd?argv[i]:strip(argv[i]));  // filename
+      outsize+=fprintf(out, "%s", pcmd?argv[i]:strip(argv[i]));  // filename
     putc(0, out);  // filename terminator
     if (!icmd)
-      fprintf(out, "%ld", size);  // size as comment
+      outsize+=fprintf(out, "%1.0f", insize);  // size as comment
     putc(0, out);  // comment terminator
     putc(0, out);  // reserved
+    outsize+=4;
+    enc.reset();   // size=0
 
     // Compress PCOMP or POST 0
     if (first) {
@@ -4252,46 +4376,56 @@ void compress(int argc, char** argv) {
     }
 
     // Compress 
-    printf("%s %ld ", argv[i], size);
-    long j=0;
+    if (!quiet) {
+      printf("%s %1.0f ", argv[i], insize);
+      if (insize!=presize)
+        printf("-> %1.0f ", presize);
+    }
+    int len=0;
+    time_t now=time(0);
     while ((c=getc(in))!=EOF) {
       enc.compress(c);
-      if (!(++j&0x1ffff)) {
-        printf("%12ld -> %-12ld"
-          "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b",
-          j, ftell(out)-mark);
+      if (!quiet && !(len++&0xfff) && now!=time(0)) {
+        for (int j=printf("%1.0f -> %1.0f ", 
+                  enc.in_size(), outsize+enc.out_size()); j>0; --j)
+          putchar('\b');
+        fflush(stdout);
+        now=time(0);
       }
     }
     enc.compress(-1);
 
     // Write segment trailer
     if (scmd)  // no SHA1
-      fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
+      outsize+=fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
     else {
-      fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 253);
+      outsize+=20+fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 253);
       for (int j=0; j<20; ++j)
         putc(check1.result(j), out);
     }
     fclose(in);
     in=0;
     remove(&prefile[0]);
-    printf("-> %ld                        \n", ftell(out)-mark);
-    mark=ftell(out);
+    if (!quiet) 
+      printf("-> %1.0f                        \n", outsize+enc.out_size());
+    outsum+=outsize+enc.out_size();
   }
 
   // Code end of block and close archive
   if (out) {
     putc(255, out);  // block trailer
-    printf("-> %ld\n", ftell(out));
+    if (!quiet) {
+      printf("-> %1.0f\n", outsum);
+      enc.stat();  // print statistics
+    }
     fclose(out);
-    enc.stat();  // print statistics
 
     // If no error then clean up temporary files
     remove(&tempfile[0]);
     remove(&prefile[0]);
   }
   else
-    printf("Archive %s not updated\n", argv[2]);
+    if (!quiet) printf("Archive %s not updated\n", argv[2]);
 }
 
 ////////////////////////// list //////////////////////////
@@ -4305,9 +4439,6 @@ void list(int argc, char** argv) {
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
 
-  // File offsets to get compressed sizes
-  long mark=0;
-
   // Read the file
   int c, blocks=0;
   while (find_start(in)) {
@@ -4316,7 +4447,7 @@ void list(int argc, char** argv) {
     if (getc(in)!=LEVEL || getc(in)!=1)
       error("not ZPAQ");
     ZPAQL z;
-    z.read(in);
+    double size=6+z.read(in);  // compressed size
     printf("Block %d: requires %1.3f MB memory\n",
      ++blocks, z.memory()/1000000);
 
@@ -4325,18 +4456,22 @@ void list(int argc, char** argv) {
 
       // Print filename and comments
       printf("  ");
-      while ((c=getc(in))!=EOF && c) putchar(c);
+      while ((c=getc(in))!=EOF && c) putchar(c), size+=1;
       printf("  ");
-      while ((c=getc(in))!=EOF && c) putchar(c);
+      while ((c=getc(in))!=EOF && c) putchar(c), size+=1;
       if (getc(in)!=0) error("reserved data");
+      size+=6;
 
       // Skip to end of data
       U32 c4=0xFFFFFFFF;  // last 4 bytes will be all 0
-      while ((c=getc(in))!=EOF && (c4=c4<<8|c)!=0) ;
+      while ((c=getc(in))!=EOF && (c4=c4<<8|c)!=0)
+        size+=1;
       if (c==EOF) error("unexpected end of file");
-      while ((c=getc(in))==0) ;
+      while ((c=getc(in))==0)
+        size+=1;
       if (c==253) {  // print SHA1 in verbose mode
         printf(" SHA1=");
+        size+=20;
         for (int i=0; i<20; ++i) {
           int c=getc(in);
           if (i<4) printf("%02x", c);
@@ -4344,8 +4479,8 @@ void list(int argc, char** argv) {
         printf("...");
       }
       else if (c!=254) error("missing end of segment marker");
-      printf(" -> %ld\n", 1+ftell(in)-mark);
-      mark=1+ftell(in);
+      printf(" -> %1.0f\n", size);
+      size=0;
     }
     if (c!=255) error("missing end of block marker");
   }
@@ -4420,12 +4555,12 @@ void run(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.08 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.09 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "To compress to new archive: zpaq [opnsitv]c[F[,N...]] archive files...\n"
-    "To append to archive:       zpaq [opnsitv]a[F[,N...]] archive files...\n"
+    "To compress to new archive: zpaq [opnsitqv]c[F[,N...]] archive files...\n"
+    "To append to archive:       zpaq [opnsitqv]a[F[,N...]] archive files...\n"
     "Optional modifiers:\n"
 #ifndef OPT
     "  o = compress faster (requires C++ compiler)\n"
@@ -4435,19 +4570,21 @@ void usage() {
     "  s = don't store SHA1 checksums (saves 20 bytes)\n"
     "  i = don't store file sizes as comments (saves a few bytes)\n"
     "  t = append locator tag to non-ZPAQ data\n"
+    "  q = quiet\n"
 #ifndef OPT
     "  v = verbose (show F as it compiles)\n"
     "  F = use options in configuration file F (min.cfg, max.cfg)\n"
     "  ,N = pass numeric arguments to F\n"
     "To list contents: zpaq l archive\n"
 #endif
-    "To extract: zpaq [opnt]x[N] archive [files...]\n"
+    "To extract: zpaq [opntq]x[N] archive [files...]\n"
 #ifndef OPT
     "  o = extract faster (requires C++ compiler)\n"
 #endif
     "  p = extract to stored paths instead of current directory\n"
     "  n = decompress all to one file\n"
     "  t = don't post-process (for debugging)\n"
+    "  q = quiet\n"
     "  N = extract only block N (1, 2, 3...)\n"
     "  files... = rename extracted files (clobbers)\n"
     "      otherwise use stored names (does not clobber)\n"
@@ -4466,6 +4603,7 @@ void usage() {
 
 // Command syntax as in usage()
 int main(int argc, char** argv) {
+  time_t start=time(0);
 
   // Check usage
   if (argc<2) 
@@ -4478,14 +4616,10 @@ int main(int argc, char** argv) {
       break;
 
   // Do the command
-  if (argc>=3 && (cmd=='a' || cmd=='c')) {
+  if (argc>=3 && (cmd=='a' || cmd=='c'))
     compress(argc, argv);
-    printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
-  }
-  else if (argc>=3 && cmd=='x') {
+  else if (argc>=3 && cmd=='x')
     decompress(argc, argv);
-    printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
-  }
 #ifndef OPT
   else if (argc>=3 && cmd=='l')
     list(argc, argv);
@@ -4494,5 +4628,11 @@ int main(int argc, char** argv) {
 #endif
   else
     usage();
+
+  // Print time used
+  if (!quiet) {
+    printf("Process time %1.2f sec. Wall time %1.0f sec.\n", 
+      double(clock())/CLOCKS_PER_SEC, difftime(time(0), start));
+  }
   return 0;
 }
