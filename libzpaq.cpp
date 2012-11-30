@@ -1,10 +1,14 @@
-/* libzpaq.cpp
+/* libzpaq.cpp - Part of LIBZPAQ Version 3.00
 
-Part of LIBZPAQ Version 2.00
-Written by Matt Mahoney, Oct. 30, 2010
+  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
-The LIBZPAQ software is placed in the public domain. It may be used
-without restriction. LIBZPAQ is provided "as is" with no warranty.
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so without restriction.
+  This Software is provided "as is" without warranty.
 
 */
 
@@ -16,11 +20,11 @@ without restriction. LIBZPAQ is provided "as is" with no warranty.
 namespace libzpaq {
 
 // Standard library redirections
-void* calloc(int a, int b) {return ::calloc(a, b);}
+void* calloc(size_t a, size_t b) {return ::calloc(a, b);}
 void free(void* p) {::free(p);}
-int memcmp(const void* d, const void* s, int n) {
+int memcmp(const void* d, const void* s, size_t n) {
   return ::memcmp(d, s, n);}
-void* memset(void* d, int c, int n) {return ::memset(d, c, n);}
+void* memset(void* d, int c, size_t n) {return ::memset(d, c, n);}
 double log(double x) {return ::log(x);}
 double exp(double x) {return ::exp(x);}
 double pow(double x, double y) {return ::pow(x, y);}
@@ -276,7 +280,7 @@ int ZPAQL::read(Reader* in2) {
     header[cend++]=type;  // component type
     int size=compsize[type];
     if (size<1) error("Invalid component type");
-    if (cend+size>header.size()-8) error("COMP list too big");
+    if (cend+size>header.isize()-8) error("COMP list too big");
     for (int j=1; j<size; ++j)
       header[cend++]=in2->get();
   }
@@ -285,15 +289,15 @@ int ZPAQL::read(Reader* in2) {
   // Insert a guard gap and read HCOMP
   hbegin=hend=cend+128;
   while (hend<hsize+129) {
-    assert(hend<header.size()-8);
+    assert(hend<header.isize()-8);
     int op=in2->get();
     if (op==-1) error("unexpected end of file");
     header[hend++]=op;
   }
   if ((header[hend++]=in2->get())!=0) error("missing HCOMP END");
-  assert(cend>=7 && cend<header.size());
-  assert(hbegin==cend+128 && hbegin<header.size());
-  assert(hend>hbegin && hend<header.size());
+  assert(cend>=7 && cend<header.isize());
+  assert(hbegin==cend+128 && hbegin<header.isize());
+  assert(hend>hbegin && hend<header.isize());
   assert(hsize==header[0]+256*header[1]);
   assert(hsize==cend-2+hend-hbegin);
   return cend+hend-hbegin;
@@ -319,7 +323,7 @@ ZPAQL::ZPAQL() {
 
 // Initialize machine state as HCOMP
 void ZPAQL::inith() {
-  assert(header.size()>6);
+  assert(header.isize()>6);
   assert(output==0);
   assert(sha1==0);
   init(header[2], header[3]); // hh, hm
@@ -327,7 +331,7 @@ void ZPAQL::inith() {
 
 // Initialize machine state as PCOMP
 void ZPAQL::initp() {
-  assert(header.size()>6);
+  assert(header.isize()>6);
   init(header[4], header[5]); // ph, pm
 }
 
@@ -358,11 +362,11 @@ double ZPAQL::memory() {
 // Set select to nonzero if header matches anything in the cache
 // or else add it.
 void ZPAQL::init(int hbits, int mbits) {
-  assert(header.size()>0);
+  assert(header.isize()>0);
   assert(cend>=7);
   assert(hbegin>=cend+128);
   assert(hend>=hbegin);
-  assert(hend<header.size()-130);
+  assert(hend<header.isize()-130);
   assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   h.resize(1, hbits);
   m.resize(1, mbits);
@@ -376,7 +380,7 @@ void ZPAQL::run0(U32 input) {
   assert(cend>6);
   assert(hbegin>=cend+128);
   assert(hend>=hbegin);
-  assert(hend<header.size()-130);
+  assert(hend<header.isize()-130);
   assert(m.size()>0);
   assert(h.size()>0);
   assert(header[0]+256*header[1]==cend+hend-hbegin-2);
@@ -640,7 +644,6 @@ Predictor::Predictor(ZPAQL& zr):
   assert(sizeof(U32)==4);
   assert(sizeof(short)==2);
   assert(sizeof(int)==4);
-  assert(sizeof(ptrdiff_t)==sizeof(char*));
 
   // Initialize tables
   for (int i=0; i<1024; ++i)
@@ -677,7 +680,7 @@ void Predictor::init() {
   const U8* cp=&z.header[7];  // start of component list
   for (int i=0; i<n; ++i) {
     assert(cp<&z.header[z.cend]);
-    assert(cp>&z.header[0] && cp<&z.header[z.header.size()-8]);
+    assert(cp>&z.header[0] && cp<&z.header[z.header.isize()-8]);
     Component& cr=comp[i];
     switch(cp[0]) {
       case CONS:  // c
@@ -686,14 +689,14 @@ void Predictor::init() {
       case CM: // sizebits limit
         cr.cm.resize(1, cp[1]);  // packed CM (22 bits) + CMCOUNT (10 bits)
         cr.limit=cp[2]*4;
-        for (int j=0; j<cr.cm.size(); ++j)
+        for (size_t j=0; j<cr.cm.size(); ++j)
           cr.cm[j]=0x80000000;
         break;
       case ICM: // sizebits
         cr.limit=1023;
         cr.cm.resize(256);
         cr.ht.resize(64, cp[1]);
-        for (int j=0; j<cr.cm.size(); ++j)
+        for (size_t j=0; j<cr.cm.size(); ++j)
           cr.cm[j]=st.cminit(j);
         break;
       case MATCH:  // sizebits
@@ -706,9 +709,9 @@ void Predictor::init() {
       case MIX2:  // sizebits j k rate mask
         if (cp[3]>=i) error("MIX2 k >= i");
         if (cp[2]>=i) error("MIX2 j >= i");
-        cr.c=(1<<cp[1]); // size (number of contexts)
+        cr.c=(size_t(1)<<cp[1]); // size (number of contexts)
         cr.a16.resize(1, cp[1]);  // wt[size][m]
-        for (int j=0; j<cr.a16.size(); ++j)
+        for (size_t j=0; j<cr.a16.size(); ++j)
           cr.a16[j]=32768;
         break;
       case MIX: {  // sizebits j m rate mask
@@ -717,9 +720,9 @@ void Predictor::init() {
           error("MIX m not in 1..i-j");
         int m=cp[3];  // number of inputs
         assert(m>=1);
-        cr.c=(1<<cp[1]); // size (number of contexts)
+        cr.c=(size_t(1)<<cp[1]); // size (number of contexts)
         cr.cm.resize(m, cp[1]);  // wt[size][m]
-        for (int j=0; j<cr.cm.size(); ++j)
+        for (size_t j=0; j<cr.cm.size(); ++j)
           cr.cm[j]=65536/m;
         break;
       }
@@ -737,7 +740,7 @@ void Predictor::init() {
         if (cp[3]>cp[4]*4) error("SSE start > limit*4");
         cr.cm.resize(32, cp[1]);
         cr.limit=cp[4]*4;
-        for (int j=0; j<cr.cm.size(); ++j)
+        for (size_t j=0; j<cr.cm.size(); ++j)
           cr.cm[j]=squash((j&31)*64-992)<<17|cp[3];
         break;
       default: error("unknown component type");
@@ -758,7 +761,7 @@ int Predictor::predict0() {
   const U8* cp=&z.header[7];
   assert(cp[-1]==n);
   for (int i=0; i<n; ++i) {
-    assert(cp>&z.header[0] && cp<&z.header[z.header.size()-8]);
+    assert(cp>&z.header[0] && cp<&z.header[z.header.isize()-8]);
     Component& cr=comp[i];
     switch(cp[0]) {
       case CONS:  // c
@@ -775,7 +778,7 @@ int Predictor::predict0() {
         break;
       case MATCH: // sizebits bufbits: a=len, b=offset, c=bit, cxt=256/len,
                   //                   ht=buf, limit=8*pos+bp
-        assert(cr.a>=0 && cr.a<=255);
+        assert(cr.a<=255);
         if (cr.a==0) p[i]=0;
         else {
           cr.c=cr.ht((cr.limit>>3)-cr.b)>>(7-(cr.limit&7))&1; // predicted bit
@@ -786,9 +789,9 @@ int Predictor::predict0() {
         p[i]=(p[cp[1]]*cp[3]+p[cp[2]]*(256-cp[3]))>>8;
         break;
       case MIX2: { // sizebits j k rate mask
-                   // c=size cm=wt[size][m] cxt=input
+                   // c=size cm=wt[size] cxt=input
         cr.cxt=((z.H(i)+(c8&cp[5]))&(cr.c-1));
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
+        assert(cr.cxt<cr.a16.size());
         int w=cr.a16[cr.cxt];
         assert(w>=0 && w<65536);
         p[i]=(w*p[cp[2]]+(65536-w)*p[cp[3]])>>16;
@@ -801,7 +804,7 @@ int Predictor::predict0() {
         assert(m>=1 && m<=i);
         cr.cxt=z.H(i)+(c8&cp[5]);
         cr.cxt=(cr.cxt&(cr.c-1))*m; // pointer to row of weights
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-m);
+        assert(cr.cxt<=cr.cm.size()-m);
         int* wt=(int*)&cr.cm[cr.cxt];
         p[i]=0;
         for (int j=0; j<m; ++j)
@@ -871,12 +874,12 @@ void Predictor::update0(int y) {
                   //   a=len, b=offset, c=bit, cm=index, cxt=256/len
                   //   ht=buf, limit=8*pos+bp
       {
-        assert(cr.a>=0 && cr.a<=255);
+        assert(cr.a<=255);
         assert(cr.c==0 || cr.c==1);
-        if (cr.c!=y) cr.a=0;  // mismatch?
+        if (int(cr.c)!=y) cr.a=0;  // mismatch?
         cr.ht(cr.limit>>3)+=cr.ht(cr.limit>>3)+y;
         if ((++cr.limit&7)==0) {
-          int pos=cr.limit>>3;
+          size_t pos=cr.limit>>3;
           if (cr.a==0) {  // look for a match
             cr.b=pos-cr.cm(z.H(i));
             if (cr.b&(cr.ht.size()-1))
@@ -892,9 +895,9 @@ void Predictor::update0(int y) {
       case AVG:  // j k wt
         break;
       case MIX2: { // sizebits j k rate mask
-                   // cm=input[2],wt[size][2], cxt=weight row
+                   // cm=wt[size], cxt=input
         assert(cr.a16.size()==cr.c);
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
+        assert(cr.cxt<cr.a16.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>5;
         int w=cr.a16[cr.cxt];
         w+=(err*(p[cp[2]]-p[cp[3]])+(1<<12))>>13;
@@ -908,7 +911,7 @@ void Predictor::update0(int y) {
         int m=cp[3];
         assert(m>0 && m<=i);
         assert(cr.cm.size()==m*cr.c);
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-m);
+        assert(cr.cxt+m<=cr.cm.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>4;
         int* wt=(int*)&cr.cm[cr.cxt];
         for (int j=0; j<m; ++j)
@@ -916,7 +919,7 @@ void Predictor::update0(int y) {
       }
         break;
       case ISSE: { // sizebits j  -- c=hi, cxt=bh
-        assert(int(cr.cxt)==cr.ht[cr.c+(hmap4&15)]);
+        assert(cr.cxt==cr.ht[cr.c+(hmap4&15)]);
         int err=y*32767-squash(p[i]);
         int *wt=(int*)&cr.cm[cr.cxt*2];
         wt[0]=clamp512k(wt[0]+((err*p[cp[2]]+(1<<12))>>13));
@@ -932,7 +935,7 @@ void Predictor::update0(int y) {
     }
     cp+=compsize[cp[0]];
     assert(cp>=&z.header[7] && cp<&z.header[z.cend] 
-           && cp<&z.header[z.header.size()-8]);
+           && cp<&z.header[z.header.isize()-8]);
   }
   assert(cp[0]==NONE);
 
@@ -953,14 +956,14 @@ void Predictor::update0(int y) {
 // low sizebits of cxt with element 0 having the next higher 8 bits for
 // collision detection. If not found after 3 adjacent tries, replace the
 // row with lowest element 1 as priority. Return index of row.
-int Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
-  assert(ht.size()==16<<sizebits);
+size_t Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
+  assert(ht.size()==size_t(16)<<sizebits);
   int chk=cxt>>sizebits&255;
-  int h0=(cxt*16)&(ht.size()-16);
+  size_t h0=(cxt*16)&(ht.size()-16);
   if (ht[h0]==chk) return h0;
-  int h1=h0^16;
+  size_t h1=h0^16;
   if (ht[h1]==chk) return h1;
-  int h2=h0^32;
+  size_t h2=h0^32;
   if (ht[h2]==chk) return h2;
   if (ht[h0+1]<=ht[h1+1] && ht[h0+1]<=ht[h2+1])
     return memset(&ht[h0], 0, 16), ht[h0]=chk, h0;
@@ -1070,7 +1073,7 @@ int PostProcessor::write(int c) {
       break;
     case 4:  // PROG psize[0..1] pcomp[0...]
       if (c<0) error("Unexpected EOS");
-      assert(z.hend<z.header.size());
+      assert(z.hend<z.header.isize());
       z.header[z.hend++]=c;  // one byte of pcomp
       if (z.hend-z.hbegin==hsize) {  // last byte of pcomp?
         hsize=z.cend-2+z.hend-z.hbegin;
@@ -1203,12 +1206,18 @@ void Compressor::startSegment(const char* filename, const char* comment) {
 }
 
 // Initialize encoding and write pcomp to first segment
-void Compressor::postProcess(const char* pcomp) {
+// If len is 0 then length is encoded in pcomp[0..1]
+void Compressor::postProcess(const char* pcomp, int len) {
   assert(state==SEG1);
   enc.init();
   if (pcomp) {
     enc.compress(1);
-    int len=toU16(pcomp)+2;
+    if (len<=0) {
+      len=toU16(pcomp);
+      pcomp+=2;
+    }
+    enc.compress(len&255);
+    enc.compress((len>>8)&255);
     for (int i=0; i<len; ++i)
       enc.compress(pcomp[i]&255);
   }
@@ -1382,7 +1391,7 @@ void Decompresser::readSegmentEnd(char* sha1string) {
 /////////////////////////// compress() ///////////////////////
 
 void compress(Reader* in, Writer* out, int level) {
-  assert(level>=1 && level<=3);
+  assert(level>=1);
   Compressor c;
   c.setInput(in);
   c.setOutput(out);

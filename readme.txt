@@ -1,214 +1,74 @@
-                       LIBZPAQ Distribution 2.02
-                        Matt Mahoney, Dell Inc.
-                             Nov. 13, 2010
+README for zpaq v3.00 - July 16, 2011.
+Matt Mahoney, matmahoney@yahoo.com
 
-ZPAQ is a proposed standard for highly compressed data. This package
-contains the specification, a library application programming interface
-for reading and writing ZPAQ formatted compressed data, and 2 applications
-that use the library: a file compressor (zpipe), and an archiver (zpaq).
-Contents:
+zpaq is an archiver and a tool for developing new compression algorithms.
+This package contains source code and a 32 bit Windows executable.
+The current version has only been tested in Windows. A Linux
+version is planned. The latest version of this software, documenation,
+and associated configuration files can be found at
+http://mattmahoney.net/dc/zpaq.html
 
-   File         Ver.  Date                Description         License
-------------   -----  -----------  -----------------------  ------------
-readme.txt            Nov 13 2010  This file                Free to copy
-zpaq.pdf       Rev 1  Sep 29 2009  Format specification     Free to copy
-unzpaq.cpp     1.08   Oct 14 2009  Reference decoder        GPL
+zpaq creates, extracts, and lists archives conforming to the ZPAQ
+level 1 standard as described in the document and reference decoder
+from the above website. There are 4 built in compression levels
+(-m1 through -m4) plus the ability to describe your own compression
+algorithms in configuration (.cfg) files. Docmumenation and examples
+are available from the above website. zpaq also includes tools
+for testing and debugging config files.
 
-libzpaq.txt    2.00   Oct 30 2010  API documentation        Public domain
-libzpaq.cpp    2.02   Nov 13 2010  API source code          Public domain
-libzpaqo.cpp   2.02   Nov 13 2010  API source code          Public domain
-libzpaq.h      2.02   Nov 13 2010  API header file          Public domain
+zpaq is designed for high performance. The following shows compressed
+size of the 14 file Calgary corpus and compression and decompression
+times in seconds on a dual core 2.0 GHz T3200 under 32 bit Windows.
+zpaq (and 7zip) use both cores.
 
-zpipe.cpp      2.01   Oct 14 2010  File compressor source   GPL
-zpipe.exe      2.01   Nov 13 2010  Windows executable       GPL
+  Compressor   size      C/D time
+  ---------- ---------  ---------
+  zip        1,028,059   0.4  0.1
+  bzip2        828,347   0.7  0.4
+  7zip         824,296   1.7  0.3
+  zpaq -m1     843,572   0.8  0.8
+  zpaq -m2     784,373   1.2  1.3
+  zpaq -m3     722,197   5.3  5.5
+  zpaq -m4     666,624  14.5 15.0
 
-zpaq.cpp       2.02   Nov 13 2010  Archiver source code     GPL
-zpaq.exe       2.02   Nov 13 2010  Windows executable       GPL
-makezpaq.bat          Nov 05 2010  Script for "zpaq o"      Public domain
-makezpsfx.bat         Nov 05 2010  Script for "zpaq e"      Public domain
+See zpaq.cpp for command line usage documentation and installation.
 
-zpsfx.cpp      1.00   Oct 20 2010  Self extracting stub     Public domain
-zpsfx.exe      1.00   Nov 13 2010  Self extracting stub     Public domain
-zpsfx.tag             Oct 20 2010  Tag for zpsfx            Public domain
+I did not yet include documentation in this package on writing
+config files. That documentation is available at the above website
+(for an earlier version of zpaq, but the format has not changed).
 
-fast.cfg              Apr 26 2010  zpaq source for          GPL
-mid.cfg               Oct 09 2009    compression levels     GPL
-max.cfg               Oct 09 2009    1, 2, and 3            GPL
-min.cfg               Oct 09 2009  fast LZP model           GPL
-lzppre.cpp            Sep 28 2009  preprocessor for min.cfg GPL
-lzppre.exe            Nov 13 2010  Windows executable       GPL
-
-compile.bat           Nov 05 2010  Script to compile all    Public domain
-
-gpl.txt        3      Jun 29 2007  GPL license              Free to copy
-
-All of the files except gpl.txt were written by Matt Mahoney at Dell Inc.
-Files licensed as free to copy may be copied and distributed by anyone,
-but changes are not allowed. Files marked as public domain have no
-restrictions on their use. Files marked GPL are licensed under the GNU
-general public license, which allows copying and changes but requires that
-any redistribution of derived code also be licensed under GPL and include
-source code. See gpl.txt or http://www.gnu.org/copyleft/gpl.html
-
-The latest version of this package can be found at http://mattmahoney.net/dc/
-
-The ZPAQ specification has two parts. zpaq.pdf describes the format.
-The program unzpaq is the reference decoder. unzpaq.cpp does not use the
-library API because it was written earlier in conjunction with the
-document. The specification only defines the decompression procedure.
-The implementation of the compressor is up to the user.
-
-Libzpaq is an API in C++ that allows applications to compress or
-decompress ZPAQ formatted data to or from files or objects in memory.
-It consists of a header file (libzpaq.h) that should be #included in
-the application, and 2 source code files (libzpaq.cpp and libzpaqo.cpp)
-that should be linked to it. libzpaqo.cpp is source code for optimizing
-the 3 default models (fast, mid, max). See libzpaq.txt for documentation.
-
-zpipe is a simple command line file compressor that compresses or
-decompresses from standard input to standard output. It supports 3
-compression levels: 1=fast, 2=mid, 3=max. For example:
-
-  zpipe -3 < input > archive.zpaq    (use best compression)
-  zpipe -d < archive.zpaq > output   (decompress)
-
-zpaq is an archiver. It will create, append to, list, and extract archives
-and create self extracting archives for Windows. It is compatible with zpipe
-and all other ZPAQ compliant programs (such as unzpaq). zpaq supports
-arbitrary compression algorithms written in the ZPAQL language and external
-preprocessors. See zpaq.cpp for documentation.
-
-zpaq creates, lists, and extracts archives containing many files.
-For example:
-
-  zpaq c3 archive file1 file2   (compress (3=max) 2 files to archive.zpaq)
-  zpaq a1 archive file3         (append (1=fast) another file)
-  zpaq l archive                (list contents: file1 file2 file3)
-  zpaq x archive                (extract all 3 files)
-
-zpaq also supports development of new compression algorithms which
-are specified in configuration (.cfg) files and external preprocessors.
-The files fast.cfg, mid.cfg, and max.cfg are included. For example:
-
-  zpaq cfast archive files...   (same as c1)
-
-Other configurations are available. For example, min.cfg and its accompanying
-preprocessor lzppre.exe (source lzppre.cpp) is faster than fast.cfg
-but does not compress as small.
-
-  zpaq cmin archive files...
-
-You can speed up compression and decompression with the "o" prefix if
-you have a C++ compiler. This option converts the ZPAQL code in the
-config file to C++ and compiles and runs it.
-
-  zpaq ocmin archive files...   (compress faster)
-  zpaq ox archive               (extract faster)
-
-To create a self extracting archive:
-
-  zpaq e archive                (creates archive.exe)
-  zpaq oe archive               (creates a faster archive.exe)
-
-To extract:
-
-  archive.exe
-
-No compiler is needed to extract even if created with "oe".
-
-zpaq makes a self extracting archive by appending it to zpsfx.exe
-(the decompression code, source zpsfx.cpp) and the 13 byte file zpsfx.tag
-which identifies the start of the data. These files are public domain
-so that archives can be distributed without source code. You can
-also modify zpsfx.cpp if you need to write an installer that does other
-stuff.
+libzpaq is a library API in C++ that provides services for compressing,
+decompressing, and listing ZPAQ archives or byte streams. See libzpaq.txt
+or the above website for usage.
 
 
-BENCHMARKS
+LICENSE
 
-"zpaq oc" speed is measured on a 2.0 GHz T3200 under 32 bit Windows.
-The input data is the 14 file Calgary corpus compressed into a single
-block (solid archive). Decompression uses about the same time and
-memory as compression. zip is shown for comparison.
+The source code has 3 parts:
 
-   Model      Memory     Speed     Calgary corpus
-  --------    ------  -----------  ---------------
-    (min)       4 MB  0.5  sec/MB  1,030,817 bytes
-  1 (fast)     38 MB  0.7  sec/MB    807,214 bytes
-  2 (mid)     111 MB  2.3  sec/MB    699,586 bytes
-  3 (max)     246 MB  6.4  sec/MB    644,545 bytes
-  zip -9       <1 MB  0.13 sec/MB  1,020,719 bytes
+- zpaq - main program.
+- libzpaq - library API providing compression and decompression.
+- libdivsufsort-lite - BWT compression for zpaq methods -m1 and -m2.
 
+The main program, zpaq, and library API, libzpaq are (C) 2011, Dell Inc.
+and written by Matt Mahoney. zpaq is licensed under GPL v3.
+(see http://www.gnu.org/copyleft/gpl.html). It may be used freely but
+any distribution must include source code, including modifications,
+under the same license. libzpaq is licensed under a modified MIT license
+allowing unrestricted use as described in the source code.
 
-TO INSTALL (Windows)
+libdivsufsort-lite v2.01 is (C) 2003-2008 by Yuta Mori, available
+at http://code.google.com/p/libdivsufsort/
+It is distributed under a standard MIT license allowing unrestricted
+use except that the copyright notice must be included, as described
+in the source code.
 
-1. Create a directory C:\zpaq and put all the files here.
-2. Add C:\zpaq to your PATH.
-3. Install MinGW g++ from http://www.mingw.org/
-4. Install upx from http://upx.sourceforge.net/
-5. Run compile.bat
-
-If you don't plan to use the "o" option then you only need steps 1 and 2.
-This does not affect speed for the 3 built in compression levels.
-Windows executables (.exe) files created by step 5 are already included.
-
-You can skip step 2 (set PATH) if you don't mind typing the command
-"\zpaq\zpaq" instead of "zpaq" every time.
-
-You can install in some other directory besides c:\zpaq but then
-you will need to edit the 3 .bat files (compile.bat, makezpaq.bat,
-and makezpsfx.bat) to replace "c:\zpaq" with your chosen folder every
-place it occurs.
-
-You don't need to install UPX, but then your executables and self
-extracting archives will be larger. A self extracting archive will
-add about 100 KB instead of 40 KB. You will also need to remove
-the "upx" commands from compile.bat and makezpsfx.bat. You can
-use other .exe compressors besides upx if you modify these two
-files appropriately to call them.
-
-You can use other compilers besides g++ but you will have to update
-the "g++" commands in the 3 .bat files appropriately to call your
-other compiler with appropriate options.
-
-You don't have to use the options provided. In particular, different
-optimization options might be more appropriate for your computer.
-
--DNDEBUG turns off run time checks. You can try removing this if you
-find a bug.
-
--DOPT is needed to create zpaq.o, but should not be used
-to create zpaq.exe. The effect is to disable the "o" option when
-zpaq creates and runs an optimized copy of itself. Note that some
-compilers produce .obj files instead of .o files. Adjust your .bat
-files accordingly.
-
-I have not tested this in Linux but I wrote the code with plans
-in mind.
-
-If you write your own compression algorithms, then put the config
-files and preprocessors either in the install directory (c:\zpaq)
-or the current directory.
+This readme file may be freely distributed.
 
 
 HISTORY
 
-Sep 27 2010: libzpaq 0.02, zp 2.00, zpipe 2.00
-
-Oct 14 2010: libzpaq 0.03, zp 2.01, zpipe 2.01. libzpaq interface changed.
-Reader and Writer were changed from template paramters to virtual
-base classes to speed up compilation. Corresponding changes made to
-zp and zpipe.
-
-Oct 20 2010: libzpaqo.cpp separates the optimized code from libzpaq.cpp.
-Added zpsfx 1.00.
-
-Oct 30 2010: replaced zp with zpaq 2.00. The library implementation
-(not interface) was changed to support it.
-
-Nov 05 2010: zpaq 2.01. Supports self extracting archives. Simplified
-installation (everything goes in C:\zpaq).
-
-Nov 13 2010: libzpaq 2.02, zpaq 2.02. zpaq displays memory usage
-statistics (like zpaq 1.10 but removed in 2.00). libzpaq support
-added. Fixed some compiler warnings.
+zpaq v3.00 merges the features of zpaq 2.05 (archiving and config
+file development) with zp 1.03 (multithreaded compression and
+decompression and BWT mode compression). It also includes a block
+editing command for reordering archive contents.

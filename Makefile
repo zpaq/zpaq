@@ -1,14 +1,15 @@
-CCFLAGS = -O3 -march=native -s -fomit-frame-pointer
+CCFLAGS = -O3 -march=native -s -fomit-frame-pointer -Wall -pedantic -DNDEBUG
 
-all: zpaq zpaq.o libzpaq.o
-
-zpaq: zpaq.cpp libzpaq.cpp libzpaqo.cpp libzpaq.h
-	g++ $(CCFLAGS) -DNDEBUG zpaq.cpp libzpaq.cpp libzpaqo.cpp -o zpaq \
-	-DOPT="\"g++ $(CCFLAGS) zpaq.o libzpaq.o zpaqopt.cpp -o zpaqopt.exe\""
-
-zpaq.o: zpaq.cpp libzpaq.h
-	g++ $(CCFLAGS) -DNDEBUG -c zpaq.cpp
+all: zpaq.exe libzpaq.o zpaq.o divsufsort.o
 
 libzpaq.o: libzpaq.cpp libzpaq.h
-	g++ $(CCFLAGS) -DNDEBUG -c libzpaq.cpp
+	g++ $(CCFLAGS) -c libzpaq.cpp
 
+zpaq.o: zpaq.cpp libzpaq.h
+	g++ $(CCFLAGS) -c -DOPT zpaq.cpp
+
+divsufsort.o: divsufsort.c divsufsort.h
+	gcc $(CCFLAGS) -c divsufsort.c
+
+zpaq.exe: zpaq.cpp libzpaq.o libzpaq.h divsufsort.o divsufsort.h
+	g++ $(CCFLAGS) zpaq.cpp libzpaq.o divsufsort.o -o zpaq

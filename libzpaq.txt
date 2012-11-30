@@ -1,17 +1,23 @@
-                           LIBZPAQ v2.00
-                    Matt Mahoney, Oct. 30, 2010
+                           LIBZPAQ v3.00
+                    Matt Mahoney, July 10, 2010
+
+  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so without restriction.
+  This Software is provided "as is" without warranty.
 
 Libzpaq is a C++ application programming interface library for compression
 and decompression of files or objects in ZPAQ format. Data compressed
 with libzpaq is compatible with the GPL programs zpaq, zp, zpipe, and
-unzpaq found at http://mattmahoney.net/dc/#zpaq
+unzpaq found at http://mattmahoney.net/dc/zpaq.html
 The format is described in http://mattmahoney.net/dc/zpaq1.pdf
 
-Libzpaq v2.00 is released to the public domain. There are no restrictions
-on the use of this code. The software is provided "as is" with
-no warranty.
-
-The LIBZPAQ v2.00 software consists of the following files:
+The LIBZPAQ v3.00 software consists of the following files:
 
   libzpaq.txt  - Documentation, this file.
   libzpaq.h    - Header file to be included by the application developer.
@@ -165,7 +171,7 @@ public:
   void startBlock(int level);  // level=1,2,3
   void startBlock(const char* hcomp);
   void startSegment(const char* filename = 0, const char* comment = 0);
-  void postProcess(const char* pcomp = 0);
+  void postProcess(const char* pcomp = 0, int len = 0);
   void setInput(Reader* in);
   bool compress(int n = 0);  // n bytes, 0=all, return true until done
   void endSegment(const char* sha1string = 0);  // reads 20 bytes
@@ -222,12 +228,14 @@ startBlock(level) initializes the compression algorithm to one of
 
   void startBlock(const char* hcomp);
   ...
-  void postProcess(const char* pcomp = 0);
+  void postProcess(const char* pcomp = 0, int len = 0);
 
 may be called with an arbitrary compression model defined in two
 strings, hcomp and pcomp. The format for these strings is described
 in the ZPAQ reference. The first 2 bytes of the string give the length
 of the rest of the string in little-endian (LSB, MSB) format.
+For postProcess(), the length may be passed as len rather than in
+the first 2 bytes.
 
 hcomp describes the COMP and HCOMP sections of the compression model,
 corresponding to these sections in a zpaq configuration file.
@@ -498,3 +506,7 @@ plus minor fixes.
 
 Oct. 30, 2010. v2.00 added functions to support zpaq.cpp. Interface
 is compatible with v0.04.
+
+July 10, 2011. v3.00 extends component memory for 64 bit systems.
+Array::size() return type is changed from int to size_t.
+Adds optional second argument to Compressor::postProcess().
