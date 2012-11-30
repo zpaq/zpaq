@@ -267,11 +267,11 @@ of the files after it. Extraction of single files will be slower
 because it is necessary to decompress and discard the output
 of earlier files in the same block.
 
-Furthermore, B<-bs> does not save original file sizes, checksums,
-or header locator tags, which saves a little extra space.
-That information is only needed for incremental update or
-recovery of subsequent blocks from corrupt archives,
-which would not be possible anyway.
+=item B<-f>
+
+Force overwrite of output files during extraction when the
+file differs. Normally, the output is overwritten if an output
+file is specified.
 
 =item B<-h>
 
@@ -301,6 +301,12 @@ in compression levels.
 By default, B<-m1> and B<-m2> use 80 MB memory per thread because the
 default block size is 16 MB.
 
+=item B<-n>
+
+Do not save block header locator tags, comments (file sizes)
+or checksums. This saves a few bytes for the smallest possible
+archive. However, incremental update and error recovery will not work.
+
 =item B<-q>
 
 Do not test the post-processor when compressing with a
@@ -309,6 +315,15 @@ preprocessed input (created with a user supplied preprocessor)
 through the post-processor specified in the configuration file
 and compare the SHA-1 checksum of the output with the original
 input and refuse to compress if they do not match.
+
+=item B<-r>
+
+Recurse subdirectories. For each directory specified on
+the command line, compress all of the files and directories
+in it. Otherwise directories are ignored. Also, in the Linux
+version, the program will compress only regular files, ignoring
+symbolic links, devices, named pipes, sockets, and other special
+file types.
 
 =item B<-tN>
 
@@ -1362,8 +1377,6 @@ one file and smaller than all of it.
 Extraction might overwrite a file that has write permission but
 not read permission.
 
-Recursive directory compression is not supported.
-
 Timestamps and other file attributes are not preserved. If you need this,
 make a B<.tar.zpaq> file.
 
@@ -1395,7 +1408,7 @@ C<libzpaq(3)>
 
 I<zpaq> uses code from I<libzpaq> v4.00 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v4.02 is copyright (C) 2011, Dell Inc. It is written by Matt
+I<zpaq> v4.03 is copyright (C) 2011, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
