@@ -1,7 +1,7 @@
-/*  zpaq v0.07 archiver and file compressor.
+/*  zpaq v0.08 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 28, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Mar. 8, 2009.
 
     LICENSE
 
@@ -81,7 +81,7 @@ case sensitive. Numeric values are mod 256. For example:
     *d<>a a+=*d a*= 192 *d=a
     halt
   post
-    pass
+    0
   end
 
 The meaning is as follows:
@@ -95,12 +95,12 @@ There are n components numbered i = 0 to n-1. Possible components are:
 - i CONST c
 - i CM sizebits limit
 - i ICM sizebits
-- i MATCH sizebits
+- i MATCH sizebits bufbits
 - i AVG j k wt
 - i MIX2 sizebits j k rate mask
 - i MIX sizebits j m rate mask
-- i IMIX2 sizebits j k wt rate
-- i SSE sizebits j start limit mask
+- i ISSE sizebits j
+- i SSE sizebits j start limit
 
 All argments are numbers in 0...255 except sizebits in (0...31),
 j, k in (0...i-1), m in (1...i-j).
@@ -136,8 +136,23 @@ and "L= 0" is a 2 byte instruction. "LJ M" is a 3 byte instruction
 with M coded as 2 bytes, LSB first. Negative operands to JT, JF, and
 JMP are coded mod 256.
 
+Possible POST commands are
+  0 (no post-processing)
+  p esc maxlen hmul (LZP with hash table size 2^ph, buffer size 2^pm, pm>=8)
+  x (EXE (E8E9) transform. Use ph=0, pm=3)
 
-To compile: g++ -O3 -march=pentiumpro -fomit-frame-pointer -s zpaq.cpp -o zpaq
+where esc, maxlen, and hmul are numbers in the range (0...255). LZP matches
+of length (maxlen+1...maxlen+255) are encoded as (esc, len-maxlen). The
+esc byte is encoded as (esc, 0). A match means to go back to the last
+position within 2^pm with the same context hash and copy the next len bytes.
+The context hash is updated with byte c as hash=(hash*hmul+c)%(2^ph).
+LZP removes long duplicate strings to speed compression.
+
+The x transform replaces sequences of the form (0xE8|0xe9 aaaa) by adding
+the file offset of the start of the sequence to aaaa interpreted as a 32
+bit number LSB first. It improves compression of x86 .exe and .dll files.
+
+To compile: g++ -O2 -march=pentiumpro -fomit-frame-pointer -s zpaq.cpp -o zpaq
 To turn off assertion checking (faster), compile with -DNDEBUG
 */
 
@@ -151,7 +166,7 @@ To turn off assertion checking (faster), compile with -DNDEBUG
 
 const int LEVEL=0;  // ZPAQ level 0=experimental 1=final
 
-// 1, 2, 4, 8 byte unsigned integers
+// 1, 2, 4 byte unsigned integers
 typedef unsigned char U8;
 typedef unsigned short U16;
 typedef unsigned int U32;
@@ -182,9 +197,7 @@ public:
   void resize(int sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
   int size() {return n+1;}  // get size
-  T& operator[](int i) {
-    if (i<0||i>n) fprintf(stderr, "i=%d n=%d offset=%d data=%p\n",i,n,offset,data);
-    assert(n>=0 && i>=0 && i<=n); return data[i];}
+  T& operator[](int i) {assert(n>=0 && i>=0 && i<=n); return data[i];}
   T& operator()(int i) {assert(n>=0 && (n&n+1)==0); return data[i&n];}
 };
 
@@ -593,7 +606,7 @@ void SHA1::SHA1PadMessage()
 
 // Symbolic constants, instruction size, and names
 typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE} CompType;
-static const int compsize[256]={0,2,3,2,2,4,6,6,3,5};
+static const int compsize[256]={0,2,3,2,3,4,6,6,3,5};
 static const char* compname[]=
   {"","const","cm","icm","match","avg","mix2","mix","isse","sse",0};
 
@@ -639,7 +652,7 @@ public:
   ZPAQL();
   void read(FILE* in);    // Read header from archive
   void write(FILE* out);  // Write header to archive
-  const char* compile(FILE* in); // Create header from config file
+  U32 compile(FILE* in);  // Create header from config file
   void list();            // Display header contents
   void inith();           // Initialize as HCOMP
   void initp();           // Initialize as PCOMP
@@ -750,9 +763,12 @@ void ZPAQL::write(FILE* out) {
   fwrite(&header[hbegin], 1, hend-hbegin, out);
 }
 
-// Compile a configuration file and store the result in header
-// Return the string after POST (preprocessing command)
-const char* ZPAQL::compile(FILE* in) {
+// Compile a configuration file and store the result in header.
+// Return the POST command as a 32 bit value with a single
+// letter in the low byte and up to 3 numeric parameters packed
+// into the higher bytes. For example: "POST A 100" returns
+// 'A' + 100*256.
+U32 ZPAQL::compile(FILE* in) {
 
   // Allocate header
   header.resize(0x11000); // includes hsize
@@ -828,7 +844,14 @@ const char* ZPAQL::compile(FILE* in) {
     printf("(cend=%d hbegin=%d hend=%d hsize=%d Memory=%1.3f MB)\n\n", 
       cend, hbegin, hend, hsize, memory()/1000000);
   }
-  return token(in);
+
+  // Compile POST section: cmd (0...255)[0..3]
+  U32 result=0;
+  const char* tok=token(in);
+  if (tok && strcmp(tok, "end")) result=tok[0];
+  for (int i=1; i<4 && (tok=token(in)) && strcmp(tok, "end"); ++i)
+    result+=atoi(tok)<<i*8;
+  return result;
 }
 
 // Display header contents. Assume it is constructed correctly.
@@ -995,10 +1018,10 @@ double ZPAQL::memory() {
     switch(header[cp]) {
       case CM: mem+=4*size; break;
       case ICM: mem+=64*size+1024; break;
-      case MATCH:
-      case MIX2: mem+=4*size; break;
+      case MATCH: mem+=4*size+pow(2, header[cp+2]); break; // bufbits
+      case MIX2: mem+=2*size; break;
       case MIX: mem+=4*size*header[cp+3]; break; // m
-      case ISSE: mem+=64*size+2048; break;
+      case ISSE: mem+=64*size+2560; break;
       case SSE: mem+=128*size; break;
     }
     cp+=compsize[header[cp]];
@@ -1448,15 +1471,68 @@ private:
 
 // Print component statistics
 void Predictor::stat() {
-  for (int i=0; i<256; ++i) {
-    if (comp[i].ht.size()>0) {
-      Component& cp=comp[i];
-      int hcount=0;
-      for (int j=0; j<cp.ht.size(); ++j)
-        if (cp.ht[j]>0) ++hcount;
-      printf("%2d: %d/%d (%1.2f%%)\n",
-          i, hcount, cp.ht.size(), hcount*100.0/cp.ht.size());
+  printf("\nMemory utilization:\n");
+  int cp=7;
+  for (int i=0; i<z.header[6]; ++i) {
+    assert(cp<z.header.size());
+    int type=z.header[cp];
+    assert(compsize[type]>0);
+    printf("%2d %s", i, compname[type]);
+    for (int j=1; j<compsize[type]; ++j)
+      printf(" %d", z.header[cp+j]);
+    Component& cr=comp[i];
+    if (type==MATCH) {
+      assert(cr.cm.size()>0);
+      assert(cr.ht.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (cr.cm[j]) ++count;
+      printf(": buffer=%d/%d index=%d/%d (%1.2f%%)", cr.limit/8, cr.ht.size(),
+        count, cr.cm.size(), count*100.0/cr.cm.size());
     }
+    else if (type==SSE) {
+      assert(cr.cm.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j) {
+        if (int(cr.cm[j])!=(squash((j&31)*64-992)<<17|z.header[cp+3]))
+          ++count;
+      }
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==CM) {
+      assert(cr.cm.size()>0);
+      int count=0;
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (cr.cm[j]!=0x80000000) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==MIX) {
+      int count=0;
+      int m=z.header[cp+3];
+      assert(m>0);
+      for (int j=0; j<cr.cm.size(); ++j)
+        if (int(cr.cm[j])!=65536/m) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.cm.size(),
+        count*100.0/cr.cm.size());
+    }
+    else if (type==MIX2) {
+      int count=0;
+      for (int j=0; j<cr.a16.size(); ++j)
+        if (int(cr.a16[j])!=32768) ++count;
+      printf(": %d/%d (%1.2f%%)", count, cr.a16.size(),
+        count*100.0/cr.a16.size());
+    }
+    else if (cr.ht.size()>0) {
+      int hcount=0;
+      for (int j=0; j<cr.ht.size(); ++j)
+        if (cr.ht[j]>0) ++hcount;
+      printf(": %d/%d (%1.2f%%)",
+          hcount, cr.ht.size(), hcount*100.0/cr.ht.size());
+    }
+    cp+=compsize[type];
+    printf("\n");
   }
 }     
 
@@ -1519,24 +1595,29 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
         break;
       case MATCH:  // sizebits
         cr.cm.resize(1, cp[1]);  // index
-        cr.ht.resize(4, cp[1]);  // buf
+        cr.ht.resize(1, cp[2]);  // buf
         cr.ht(0)=1;
         break;
       case AVG: // j k wt
         break;
       case MIX2:  // sizebits j k rate mask
         if (cp[3]>=i) error("MIX2 k >= i");
+        if (cp[2]>=i) error("MIX2 j >= i");
+        cr.c=(1<<cp[1]); // size (number of contexts)
+        cr.a16.resize(1, cp[1]);  // wt[size][m]
+        for (int j=0; j<cr.a16.size(); ++j)
+          cr.a16[j]=32768;
+        break;
       case MIX: {  // sizebits j m rate mask
         if (cp[2]>=i) error("MIX j >= i");
-        if (cp[0]==MIX && (cp[3]<1 || cp[3]>i-cp[2]))
+        if (cp[3]<1 || cp[3]>i-cp[2])
           error("MIX m not in 1..i-j");
         int m=cp[3];  // number of inputs
-        if (cp[0]==MIX2) m=1;
         assert(m>=1);
         cr.c=(1<<cp[1]); // size (number of contexts)
         cr.cm.resize(m, cp[1]);  // wt[size][m]
         for (int j=0; j<cr.cm.size(); ++j)
-          cr.cm[j]=65536/(m+(cp[0]==MIX2));
+          cr.cm[j]=65536/m;
         break;
       }
       case ISSE:  // sizebits j c rate
@@ -1589,8 +1670,8 @@ int Predictor::predict() {
         cr.cxt=cr.ht[cr.c+(hmap4&15)];
         p[i]=stretch(cr.cm(cr.cxt)>>17);
         break;
-      case MATCH: // sizebits: a=len, b=offset, c=bit, cxt=256/len,
-                  //           ht=buf, limit=8*pos+bp
+      case MATCH: // sizebits bufbits: a=len, b=offset, c=bit, cxt=256/len,
+                  //                   ht=buf, limit=8*pos+bp
         assert(cr.a>=0 && cr.a<=255);
         if (cr.a==0) p[i]=0;
         else {
@@ -1604,8 +1685,8 @@ int Predictor::predict() {
       case MIX2: { // sizebits j k rate mask
                    // c=size cm=wt[size][m] cxt=input
         cr.cxt=(z.h(i)+(c8&cp[5])&cr.c-1);
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.cm.size());
-        int w=cr.cm[cr.cxt];
+        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
+        int w=cr.a16[cr.cxt];
         assert(w>=0 && w<65536);
         p[i]=w*p[cp[2]]+(65536-w)*p[cp[3]]>>16;
         assert(p[i]>=-2048 && p[i]<2048);
@@ -1728,8 +1809,9 @@ void Predictor::update(int y) {
         cr.ht[cr.c+(hmap4&15)]=next[cr.ht[cr.c+(hmap4&15)]][y];
         train(cr, y);
         break;
-      case MATCH: // sizebits: a=len, b=offset, c=bit, cm=index, cxt=256/len
-                  //           ht=buf, limit=8*pos+bp
+      case MATCH: // sizebits bufbits:
+                  //   a=len, b=offset, c=bit, cm=index, cxt=256/len
+                  //   ht=buf, limit=8*pos+bp
       {
         assert(cr.a>=0 && cr.a<=255);
         assert(cr.c==0 || cr.c==1);
@@ -1753,14 +1835,14 @@ void Predictor::update(int y) {
         break;
       case MIX2: { // sizebits j k rate mask
                    // cm=input[2],wt[size][2], cxt=weight row
-        assert(cr.cm.size()==cr.c);
-        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.cm.size());
+        assert(cr.a16.size()==cr.c);
+        assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>5;
-        int w=cr.cm[cr.cxt];
+        int w=cr.a16[cr.cxt];
         w+=err*(p[cp[2]]-p[cp[3]])+(1<<12)>>13;
         if (w<0) w=0;
         if (w>65535) w=65535;
-        cr.cm[cr.cxt]=w;
+        cr.a16[cr.cxt]=w;
       }
         break;
       case MIX: {   // sizebits j m rate mask
@@ -2151,21 +2233,26 @@ const U32 EOS=U32(-1);
 
 class PreProcessor {
   Encoder* encp;
-  int state; // 0=init, 1=normal
-  const char* cmd;  // command
+  U32 cmd;  // command
   int ph, pm; // memory sizes for H, M from config file
-  U32 b, c;  // state for EXE transform (head, tail of queue m)
-  Array<U8> m;  // rotating buffer with at most 4 bytes
-  void exe(U32 a);  // EXE transform
+  int state;  // 0 = init, 1 = after
+  U32 b, c, d;  // general purpose state for transforms
+  Array<U8> m;
+  Array<U32> h;
+  void exe(U32 a);  // (x) EXE transform
+  void lzp(U32 a);  // (p) LZP transform
+  void lzp_flush(); // used by lzp()
 public:
-  PreProcessor(Encoder* p, const char* cm, int ph_, int pm_);
+  PreProcessor(Encoder* p, U32 cm, int ph_, int pm_);
   void compress(U32 a);
 };
 
-PreProcessor::PreProcessor(Encoder* p, const char* cm, int ph_, int pm_):
-    encp(p), state(0), cmd(cm), ph(ph_), pm(pm_) {
-  b=c=0;
-  m.resize(8);
+PreProcessor::PreProcessor(Encoder* p, U32 cm, int ph_, int pm_):
+    encp(p), cmd(cm), ph(ph_), pm(pm_) {
+  state=0;
+  b=c=d=0;
+  m.resize(1, pm);
+  h.resize(1, ph);
 }
 
 // EXE transform. Replace x86 CALL and JMP relative addresses with
@@ -2248,6 +2335,91 @@ void PreProcessor::exe(U32 a) {
   }
 }
 
+// POST p esc minlen hmul
+// LZP preprocessor. Strings of length (minlen+len) that match the
+// last occurrence occuring in the same context hash within 2^pm
+// are replaced with the 2 byte sequence (esc len) where len=(1...255).
+// The byte esc is replaced with (esc 0). The context hash is updated
+// by byte A by hash = hash*hmul+A mod 2^ph.
+void PreProcessor::lzp(U32 a) {
+  // State is as follows:
+  // F = is last byte ESC?
+  // D = context hash
+  // B = number of bytes output
+  // M = output buffer[0...B-1], size 2^pm
+  // C = pointer to match in M, C < B
+  // H = index mapping D to last match in M, size 2^ph */
+  const int ESC=cmd>>8&255;
+  const int MINLEN=cmd>>16&255;
+  const int HMUL=cmd>>24&255;
+
+  static const U8 prog[59]={
+    1,56,0,47,30,239,0,47,37,135,0,55,0,86,113,69,96,9,
+    17,57,24,151,0,131,24,7,0,2,55,0,239,0,39,236,56,223,0,
+    47,1,56,239,255,47,4,224,56,71,0,113,96,9,57,24,151,0,131,
+    24,56,0};
+  if (state==0) {
+    for (int i=0; i<59; ++i) {
+      if (i==36 || i==47) encp->compress(ESC);
+      else if (i==10) encp->compress(MINLEN);
+      else if (i==22 || i==54) encp->compress(HMUL);
+      else encp->compress(prog[i]);
+    }
+    state=1;
+  }
+
+  // Forward transform uses similar state information:
+  // b = number of bytes input
+  // c = number of bytes output
+  // d = hash of context at c
+  // m = buffer with pending output at m(c...b-1)
+  // h = index of context hashes h(d) -> m(0...c-1)
+
+  if (a==EOS) {
+    while (b!=c)
+      lzp_flush();
+    encp->compress(EOS);
+  }
+  else {
+    const int MINLEN=cmd>>16&255;
+    m(b++)=a;
+    if (b>256+MINLEN+c || b==(1<<pm)+c)
+      lzp_flush();
+  }
+}
+
+void PreProcessor::lzp_flush() {
+  assert(c!=b);
+  const int ESC=cmd>>8&255;
+  const int MINLEN=cmd>>16&255;
+  const int HMUL=cmd>>24&255;
+
+  // Look for a match
+  int len=0;
+  U32 p=h(d);
+  if (c-p>0 && c-p+258+MINLEN<U32(1<<pm))
+    while (len<255+MINLEN && m(p+len)==m(c+len) && c+len!=b)
+      ++len;
+  if (len>MINLEN) {
+    encp->compress(ESC);
+    encp->compress(len-MINLEN);
+    while (len-->0) {
+      assert(c!=b);
+      h(d)=c;
+      d=d*HMUL+m(c++);
+    }
+  }
+
+  // Encode a literal
+  else {
+    encp->compress(m(c));
+    if (m(c)==ESC)
+      encp->compress(0);
+    h(d)=c;
+    d=d*HMUL+m(c++);
+  }
+}
+
 // Compress one byte (0...255) or EOS
 void PreProcessor::compress(U32 a) {
   assert(encp);
@@ -2255,15 +2427,19 @@ void PreProcessor::compress(U32 a) {
   assert(cmd);
   assert(a<=255 || a==EOS);
 
-  if (cmd[0]=='x')  // E8E9
-    exe(a);
-  else if (cmd[0]=='0') {  // 0 = no transform
-    if (state==0)
-      encp->compress(0), state=1;
-    encp->compress(a);
+  switch(cmd&255) {
+    case '0':  // no transform
+      if (state==0)
+        encp->compress(0), state=1;  // append header
+      encp->compress(a);
+      break;
+    case 'x':
+      exe(a); break;
+    case 'p':
+      lzp(a); break;
+    default:
+      error("unknown POST command");
   }
-  else
-    error("unknown POST command");
 }
 
 //////////////////////////// Compress ////////////////////////////
@@ -2276,9 +2452,9 @@ void compress(int argc, char** argv) {
   assert(argv[1][0]=='a' || argv[1][0]=='b' || argv[1][0]=='c');
 
   // Compile config file
-  FILE* cfg=0;        // config file
-  const char* cmd=0;  // postprocessor command
-  ZPAQL z;            // HCOMP
+  FILE* cfg=0;   // config file
+  U32 cmd=0;     // postprocessor command
+  ZPAQL z;       // HCOMP
   if (argv[1][1]) {
     cfg=fopen(argv[1]+1, "rb");
     if (!cfg) perror(argv[1]+1), exit(1);
@@ -2456,7 +2632,7 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.07 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v0.08 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -2470,7 +2646,7 @@ void usage() {
     "  l        List contents of archive.\n"
     "  v        Verbose listing.\n"
     "For debugging:\n"
-    "  t                 Extract without postprocessing (for debugging).\n"
+    "  t                 Extract without postprocessing.\n"
     "  hconfig args...   Run HCOMP in config with numeric args (no archive).\n"
     "  pconfig in out    Run PCOMP on files (default stdin/stdout).\n"
     "  sconfig           To compile HCOMP to a list of bytes to stdout.\n");
@@ -2500,7 +2676,7 @@ int main(int argc, char** argv) {
     decompress(argc, argv);
     printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
   }
-  else if ((cmd=='l' || cmd=='v') && argc>=2)
+  else if ((cmd=='l' || cmd=='v') && argc>2)
     list(argc, argv);
   else if (cmd=='h')
     hstep(argc, argv);
