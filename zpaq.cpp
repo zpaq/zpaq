@@ -1,7 +1,7 @@
-/*  zpaq v2.00 archiver and file compressor.
+/*  zpaq v2.01 archiver and file compressor.
 
 (C) 2009, Dell Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 30, 2010
+    Written by Matt Mahoney, matmahoney@yahoo.com, Nov. 5, 2010
 
     LICENSE
 
@@ -19,76 +19,46 @@
 This program compresses files into archives and decompresses them.
 The archive format is compatible with other ZPAQ level 1 compliant
 programs. See http://mattmahoney.net/dc/ for the latest version of this
-program. zpaq is also a development environment for creating new
-compression algorithms using configuration (.cfg) files and external
-preprocessors.
+program. zpaq is also a development environment for creating and
+debugging new compression algorithms using configuration (.cfg) files
+and external preprocessors.
 
 
-Installation
-------------
+Installation (Windows)
+----------------------
 
-For Windows you only need zpaq.exe. For Linux, compile as follows:
+Create a folder c:\zpaq and put all files here.
 
-  g++ -O2 -DNDEBUG zpaq.cpp libzpaq.cpp libzpaqo.cpp -o zpaq
+zpaq is a command line program. To run it, use the command
 
-zpaq has a "o" option that speeds up compression and decompression
-when using config files other than the 3 built in models. To use
-this option you should have the following files, all in one folder,
-for example, c:\zpaq (Windows) or /usr/zpaq (Linux).
+  c:\zpaq\zpaq
 
-  zpaq.cpp       - zpaq source code
-  zpaq.o         - zpaq object code compiled with -DOPT
-  zpaq.exe       - Windows executable
-  libzpaq.cpp    - ZPAQ library source code
-  libzpaq.o      - libzpaq object code
-  libzpaqo.cpp   - ZPAQ library source code
-  libzpaq.h      - ZPAQ library header file
-  makezpaq.bat   - Script for compiling zpaqopt.cpp
+or put c:\zpaq in your PATH and simply use the command "zpaq".
 
-You must create the two .o files:
+zpaq has 3 built in compression levels (1=fast, 2=mid, 3=max)
+and the ability to use custom compression algorithms described
+in configuration (.cfg) files and external preprocessors, which
+should be in the same folder as zpaq.exe.
 
-  g++ -O2 -c -DNDEBUG -DOPT zpaq.cpp
-  g++ -O2 -c -DNDEBUG libzpaq.cpp
+If you want to use custom algorithms, then you can speed up compression
+and decompression (typically twice as fast) with a C++ compiler,
+preferably MinGW g++. To install run "compile.bat" to create
+the necessary object files.
 
-You must also edit makefile.bat to compile zpaqopt.cpp to zpaqopt.exe
-in the current directory, depending on where you put the other files
-like libzpaq.h. For example, in Linux:
-
-  #!/bin/sh
-  g++ -O2 -DNDEBUG zpaqopt.cpp /usr/zpaq/zpaq.o /usr/zpaq/libzpaq.o \
-  -I/usr/zpaq -o zpaqopt.exe
-
-In Windows (all on one line):
-
-  g++ -O2 -DNDEBUG zpaqopt.cpp c:\zpaq\zpaq.o c:\zpaq\libzpaq.o
-  -Ic:\zpaq -o zpaqopt.exe
-
-These folders are only suggestions. It is convenient to use a folder
-in your PATH so that you can run zpaq from the command line as just
-"zpaq" without entering the full path.
-
--DNDEBUG turns off run time checks. If zpaq crashes, try removing it,
-which may catch some errors. However the program will run slower.
-
-You may substitute -O2 with optimization options appropriate for
-your computer.
-
-You may use other compilers besides g++ with appropriate changes.
-
-If you don't have a C++ compiler installed then you can still
-run zpaq without the "o" option, which is not as fast.
+If you want to use a different install folder than c:\zpaq
+or different compiler than g++ then edit compile.bat and makezpaq.bat
+and make appropriate changes. You can also change compiler options
+as appropriate for your computer.
 
 
 Command summary
 ---------------
 
-To compress: zpaq [onsitv][ca][N][F[,N...]] archive [folder/] files...
-  o = compress faster (requires C++ compiler)
+To compress: zpaq [nsitokv][ca][N][F[,N...]] archive [folder/] files...
   n = don't store filenames (extraction will concatenate)
   s = don't store SHA1 checksums (saves 20 bytes)
   i = don't store file sizes as comments (saves a few bytes)
   t = append locator tag to non-ZPAQ data such as zpsfx.exe
-  v = verbose (show F as it compiles)
   c = create new archive.zpaq with 1 block
   a = or append 1 block to existing archive or archive.zpaq
   N = compression level 1=fast, 2=mid, 3=max
@@ -96,20 +66,21 @@ To compress: zpaq [onsitv][ca][N][F[,N...]] archive [folder/] files...
   ,N = pass numeric arguments to F.cfg
   folder/ = store path for extraction (default = filename only)
 To list contents: zpaq [v]l archive
-  v = verbose
-To extract: zpaq [o]x[N] archive [folder/] [files...]
-  o = extract faster (requires C++ compiler)
+To extract: zpaq [ok]x[N] archive [folder/] [files...]
   N = extract only block N (1, 2, 3...)
   folder/ = extract to folder (default = stored paths)
   files... = rename extracted files (clobbers)
       otherwise use stored names (does not clobber)
-To debug configuration file F.cfg: zpaq [ptv]rF[,N...] [args...]
-  o = run faster (requires C++ compiler)
+To make self extracting archive.exe: zpaq [ok]e archive
+To debug configuration file F.cfg: zpaq [ptokv]rF[,N...] [args...]
   p = run PCOMP (default is to run HCOMP)
   t = trace (single step), args are numeric inputs
       otherwise args are input, output (default stdin, stdout)
-  v = verbose compile
   ,N = pass numeric arguments to F
+For all commands:
+  o = compress or decompress faster (requires C++ compiler)
+  k = with o, keep zpaqopt.cpp, zpaqopt.exe
+  v = verbose (echo F.cfg)
 
 Prefixes, commands, and suffixes should be written without spaces,
 for example:
@@ -136,6 +107,7 @@ which describes the decompression algorithm, followed by a sequence
 of segments which must be decompressed in order from the beginning.
 Each segment has an optional filename, an optional checksum, compressed
 data, and an optional SHA-1 checksum.
+
 
 Compression
 -----------
@@ -191,20 +163,40 @@ then it has the following meaning:
   3 = max  (slowest and most memory but best compression)
 
 The config files fast.cfg, mid.cfg, and max.cfg are included but
-are also built into zpaq so they need not be present.
+are also built into zpaq so they need not be present. If a config
+file is specified without a leading path, then it must either
+be in the current directory or in the ZPAQ install directory
+where zpaq.exe is stored (normally c:\zpaq).
 
-The "v" (verbose) prefix displays the config file as it is
-read, which makes debugging easier. How to write config files
-is described later.
+Some configuration files specify an external preprocessor and matching
+postprocessing code which is embedded in the block header. If so, then
+the preprocessor must be either in the current directory or in the
+ZPAQ install directory where zpaq.exe is located (usually c:\zpaq).
+The preprocessor is run to create a temporary file archive.zpaq.pre
+in the current directory and then run through the specified
+postprocessing code to verify that the original will be restored during
+decompression. If the output SHA-1 checksum does not match, then the file
+is skipped.
 
 The "o" prefix tells zpaq to compress faster when using a config
 file. zpaq will translate the ZPAQL code in the config file into
-zpaqopt.cpp in the current directory, compile it with an external C++
-compiler to zpaqopt.exe in the current directory, then run it
-with the same arguments that were passed to zpaq. "o" has no effect for
-built in models (1..3) because these models have already been compiled
-for better speed. zpaqopt.cpp and zpaqopt.exe are deleted unless there
-is an error.
+zpaqopt.cpp in the current directory, call makezpaq.bat to compile it
+with an external C++ compiler to zpaqopt.exe in the current directory,
+then run it with the same arguments that were passed to zpaq. "o" has no
+effect on speed for built in models (1..3) because these models have
+already been compiled for better speed.
+
+The "k" prefix tells zpaq not to delete zpaqopt.cpp and zpaqopt.exe
+after using "o". These programs work just like zpaq except that "o"
+is ignored, and the model number (c1, a2, etc) selects an optimized
+model rather than the 3 standard models. Other models can be
+used but won't be as fast.
+
+The "v" (verbose) prefix displays the config file as it is
+read, which makes debugging easier. How to write config files
+is described later. It also prevents temporary file archive.zpaq.pre,
+from being deleted.
+
 
 List
 ----
@@ -222,6 +214,7 @@ in a format suitable for use as a config file. If the original
 config file specified an external preprocessing program, then that
 information will be missing because it is not needed for extraction.
 The SHA-1 checksum for each segment is also shown.
+
 
 Extraction
 ----------
@@ -263,7 +256,41 @@ in the current directory and runs it with the same command line
 arguments. This only helps if the archive was compressed
 with a config file different from fast, mid, or max with no arguments,
 because those 3 models are built in and automatically detected.
-zpaqopt.cpp and zpaqopt.exe are deleted unless there is an error.
+
+The "k" prefix keeps zpaqopt.cpp and zpaqopt.exe.
+
+
+Self extracting archives
+------------------------
+
+The "e" command tells zpaq to convert archive.zpaq to archive.exe,
+which can be run to extract the files it contains. archive.zpaq
+is not deleted.
+
+To run archive.exe, enter the file name including the .exe extension.
+If it is in a different folder, you must include the path to
+it even if that folder is in the PATH environment variable.
+When run, it will extract its contents using the file names as stored.
+If the named files exist, they will be overwritten. Command line
+arguments to archive.exe are ignored.
+
+You can also use zpaq to list or extract from archive.exe like a
+regular archive. If you append to it with "a" then those files
+will also self-extract when run.
+
+The "e" command is equivalent to:
+
+  copy/b c:\zpaq\zpsfx.exe+c:\zpaq\zpsfx.tag+archive.zpaq archive.exe
+
+zpsfx.exe reads itself to find the start of the archive marked by
+the 13 byte tag in zpsfx.tag. This is the same tag appended by "ta".
+
+The "o" prefix builds an optimized archive containing code which
+decompresses faster. It generates zpaqopt.cpp (as with "ox") and
+uses makezpsfx.bat to link zpsfx.o to create zpaqopt.exe.
+Then the tag and archive are appended as before.
+
+The "k" prefix keeps zpaqopt.cpp and zpaqopt.exe.
 
 
 Debugging
@@ -277,8 +304,6 @@ of the named config file (with optional arguments) once for each
 input byte with that input in the A register. Output is by the
 OUT instruction. The HCOMP code normally computes contexts.
 
-The "v" (verbose) prefix displays the config file F.cfg as it is read.
-
 The "p" prefix says to execute the PCOMP section rather than HCOMP.
 The PCOMP code normally post processes. It is run once per input
 byte and once more with EOF (-1) as input.
@@ -291,7 +316,7 @@ the memory contents are displayed. The input arguments are either
 decimal numbers like "255" or hexadecimal like "xFF". Contents are
 displayed in the same base.
 
-The "o" prefix works like with compression.
+The "o", "k", and "v" prefixes works like with compression.
 
 
 Configuration files
@@ -941,8 +966,13 @@ string String::sub(int i) const {
 
 //////////////////////////////// compile ///////////////////////////
 
-bool verbose=false;  // global: display lots of stuff?
-int args[9]={0};     // global configuration file arguments
+// This code is to read configuration files containing custom
+// compression algorithms written in ZPAQL.
+
+// Globals
+bool verbose=false;  // display config file as it compiles?
+int args[9]={0};     // configuration file arguments
+bool keep_option=false;  // keep temporary files?
 
 // Symbolic constants
 typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE,
@@ -1337,7 +1367,7 @@ void compile(FILE* in, String& hcomp, String& pcomp, String& pcomp_cmd) {
 // with or without a .cfg extension (min or min.cfg) and put the
 // numeric arguments in args[9] (args[0]=2, args[1]=1), and return 0.
 int compile_cmd(const char* cmd, String& hcomp,
-                String& pcomp, String& pcomp_cmd) {
+                String& pcomp, String& pcomp_cmd, const String& root) {
   int level=0;
   if (isdigit(cmd[0]))
     level=atoi(cmd);
@@ -1345,7 +1375,7 @@ int compile_cmd(const char* cmd, String& hcomp,
 
     // parse args
     int argnum=0;
-    string filename;
+    String filename;
     for (const char* p=cmd; *p && argnum<9; ++p) {
       if (*p==',')
         args[argnum++]=atoi(p+1);
@@ -1353,10 +1383,14 @@ int compile_cmd(const char* cmd, String& hcomp,
         filename+=*p;
     }
 
+    // Add .cfg extension
+    if (filename.sub(filename.len()-4)!=".cfg")
+      filename+=".cfg";
+
     // Compile F or F.cfg
     FILE* in=fopen(filename.c_str(), "r");
     if (!in) {
-      filename+=".cfg";
+      filename=root+filename;
       in=fopen(filename.c_str(), "r");
     }
     if (!in) perror(filename.c_str()), exit(1);
@@ -1371,6 +1405,8 @@ int compile_cmd(const char* cmd, String& hcomp,
 }
 
 /////////////////////////// optimize ///////////////////////
+
+// This code is to convert ZPAQL to C++.
 
 // Pad pcomp string with an empty COMP header with ph,pm from hcomp
 void fix_pcomp(const String& hcomp, String& pcomp) {
@@ -1403,8 +1439,70 @@ void testfile(const char* filename) {
 
 // Print and run a command
 void run_cmd(const string& cmd) {
-  fprintf(stderr, (cmd+"\n").c_str());
+  fprintf(stderr, "%s\n", cmd.c_str());
   system(cmd.c_str());
+}
+
+// ZPAQ install directory, defined in zpaqopt.cpp
+extern const char* zpaqdir;
+#ifndef OPT
+const char* zpaqdir=0;
+#endif
+
+// Return '/' in Linux or '\' in Windows or 0 if unknown
+char slash() {
+  const char* path=getenv("PATH");  // guess by counting slashes in PATH
+  if (!path) return 0;
+  int forward=0;
+  for (; *path; ++path) {
+    if (*path=='/') ++forward;
+    if (*path=='\\') --forward;
+  }
+  if (forward>0) return '/';
+  else if (forward<0) return '\\';
+  else return 0;
+}
+
+// Return the path to the install directory, e.g. "c:\zpaq\"
+// for finding config files and preprocessors
+String root(int argc, char** argv) {
+
+  // If zpaqdir is set then use it
+  if (zpaqdir)
+    return zpaqdir;
+
+  // If there is a command line path in argv[0], then use it
+  String self=argv[0];
+  for (int i=self.len()-1; i>=0; --i)  // find last slash
+    if (self(i)=='/' || self(i)=='\\' || (i==1 && self(i)==':'))
+      return self.sub(0, i+1);
+
+  // Look in current directory
+  if (exists(argv[0])) return "";
+  if (exists((String(argv[0])+".exe").c_str())) return "";
+
+  // Otherwise search PATH for this program with or without .exe extension
+  const char* path=getenv("PATH");
+  if (!path) error("no PATH");
+
+  // Guess OS to determine path separator : or ;
+  char slashchar=slash();
+  char sep=slashchar=='/' ? ':' : ';';
+
+  // Parse PATH. Look for both zpaq and zpaq.exe
+  while (*path) {  // for each dir
+    int i;
+    for (i=0; path[i] && path[i]!=sep; ++i) ;  // find end of dir
+    if (i>0) {
+      String dir=String(path).sub(0, i)+slashchar;
+      String file=dir+argv[0];
+      if (exists(file.c_str())) return dir;
+      String ext=file.sub(file.len()-4);
+      if (ext!=".exe" && exists((file+".exe").c_str())) return dir;
+    }
+    path+=i+(path[i]!=0);
+  }
+  error("ZPAQ install directory not found");
 }
 
 #ifndef OPT
@@ -2076,9 +2174,17 @@ void dump(FILE* out, const String& models, int p, int n) {
 // Then compile and run it with argc, argv
 void optimize(const String& models, int argc, char** argv) {
 
+  // Find the command c, a, x, l, r, e
+  char cmd=0;
+  for (int i=0; (cmd=argv[1][i])!=0; ++i)
+    if (strchr("caxlre", cmd))
+      break;
+
   // Open output file
-  FILE* out=fopen("zpaqopt.cpp", "w");
-  if (!out) perror("zpaqopt.cpp"), exit(1);
+  String rootdir=root(argc, argv);
+  String filename="zpaqopt.cpp";
+  FILE* out=fopen(filename.c_str(), "w");
+  if (!out) perror(filename.c_str()), exit(1);
 
   // Print models[]
   fprintf(out,
@@ -2104,10 +2210,11 @@ void optimize(const String& models, int argc, char** argv) {
   for (p=0, i=1; p<models.len()-2; p+=models(p)+models(p+1)*256+2, ++i)
     opt_predict(out, models, p, i);
   fprintf(out,
-    "    default: return predict0();\n"
+    "    default: return %s;\n"
     "  }\n"
     "}\n"
-    "\n");
+    "\n",
+    cmd!='e' ? "predict0()" : "(error(\"model not implemented\"),0)");
 
   // Write Predictor::update()
   fprintf(out,
@@ -2116,7 +2223,7 @@ void optimize(const String& models, int argc, char** argv) {
   for (p=0, i=1; p<models.len()-2; p+=models(p)+models(p+1)*256+2, ++i)
     opt_update(out, models, p, i);
   fprintf(out,
-    "    default: return update0(y);\n"
+    "    default: return %s;\n"
     "  }\n"
     "  c8+=c8+y;\n"
     "  if (c8>=256) {\n"
@@ -2129,7 +2236,8 @@ void optimize(const String& models, int argc, char** argv) {
     "  else\n"
     "    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);\n"
     "}\n"
-    "\n");
+    "\n",
+    cmd!='e' ? "update0(y)" : "error(\"model not implemented\")");
 
   // Write ZPAQL::run()
   fprintf(out,
@@ -2143,38 +2251,60 @@ void optimize(const String& models, int argc, char** argv) {
       "    }\n");
   }
   fprintf(out,
-    "    default: run0(input);\n"
+    "    default: %s;\n"
     "  }\n"
     "}\n"
     "}\n"
-    "\n");
+    "\n",
+    cmd!='e' ? "run0(input)" : "err()");
 
+
+  // Set global zpaqdir
+  fprintf(out,
+    "const char* zpaqdir=\"");
+  for (int i=0; i<rootdir.len(); ++i) {
+    int c=rootdir(i);
+    if (c=='\\' || c=='\"' || c=='\?' || c=='\'')
+      fprintf(out, "\\%c", c);
+    else if (c<32 || c>126)
+      fprintf(out, "x%02X", c);
+    else
+      fprintf(out, "%c", c);
+  }
+  fprintf(out, "\";\n");
+
+  // Close output and make sure it exists
   fclose(out);
-  testfile("zpaqopt.cpp");
-  fprintf(stderr, "Created zpaqopt.cpp\n");
+  testfile(filename.c_str());
+  fprintf(stderr, "Created %s\n", filename.c_str());
+
+  // Make optimized self extractor
+  if (cmd=='e') {
+    String cmd=rootdir+"makezpsfx.bat";
+    run_cmd(cmd);
+    testfile("zpsfxopt.exe");
+    return;
+  }
 
   // Run makefile.bat with the same path as this program
   // to compile zpaqopt.cpp to zpaqopt.exe
-  String cmd=argv[0];
-  for (i=cmd.len()-1; i>=0; --i)
-    if (cmd[i]=='/' || cmd[i]=='\\' || (i==1 && cmd[i]==':'))
-      break;
-  cmd=cmd.sub(0, i+1)+"makezpaq.bat";
   unlink("zpaqopt.exe");
-  run_cmd(cmd.c_str());
-  testfile("zpaqopt.exe");
+  String command=rootdir+"makezpaq.bat";
+  run_cmd(command);
 
   // Run it
-#ifdef unix
-  cmd="./zpaqopt.exe";
-#else
-  cmd="zpaqopt.exe";
-#endif
+  testfile("zpaqopt.exe");
+  command=String(".")+slash()+"zpaqopt.exe";
   for (int i=1; i<argc; ++i) {
-    cmd+=" ";
-    cmd+=argv[i];
+    command+=" ";
+    command+=argv[i];
   }
-  run_cmd(cmd);
+  run_cmd(command);
+  if (!keep_option) {
+    unlink("zpaqopt.exe");
+    unlink("zpaqopt.cpp");
+    fprintf(stderr, "zpaqopt.cpp and zpaqopt.exe deleted\n");
+  }
   exit(0);
 }
 
@@ -2184,17 +2314,15 @@ void optimize(const String& models, int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  fprintf(stderr, "ZPAQ v2.00 archiver, (C) 2010, Dell Inc.\n"
+  fprintf(stderr, "ZPAQ v2.01 archiver, (C) 2010, Dell Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "To compress: zpaq [onsitv][ca][N][F[,N...]] archive [folder/] files...\n"
-    "  o = compress faster (requires C++ compiler)\n"
+    "To compress: zpaq [nsitokv][ca][N][F[,N...]] archive [folder/] files...\n"
     "  n = don't store filenames (extraction will concatenate)\n"
     "  s = don't store SHA1 checksums (saves 20 bytes)\n"
     "  i = don't store file sizes as comments (saves a few bytes)\n"
     "  t = append locator tag to non-ZPAQ data such as zpsfx.exe\n"
-    "  v = verbose (show F as it compiles)\n"
     "  c = create new archive.zpaq with 1 block\n"
     "  a = or append 1 block to existing archive or archive.zpaq\n"
     "  N = compression level 1=fast, 2=mid, 3=max\n"
@@ -2202,20 +2330,21 @@ void usage() {
     "  ,N = pass numeric arguments to F.cfg\n"
     "  folder/ = store path for extraction (default = filename only)\n"
     "To list contents: zpaq [v]l archive\n"
-    "  v = verbose\n"
-    "To extract: zpaq [o]x[N] archive [folder/] [files...]\n"
-    "  o = extract faster (requires C++ compiler)\n"
+    "To extract: zpaq [ok]x[N] archive [folder/] [files...]\n"
     "  N = extract only block N (1, 2, 3...)\n"
     "  folder/ = extract to folder (default = stored paths)\n"
     "  files... = rename extracted files (clobbers)\n"
     "      otherwise use stored names (does not clobber)\n"
-    "To debug configuration file F.cfg: zpaq [ptv]rF[,N...] [args...]\n"
-    "  o = run faster (requires C++ compiler)\n"
+    "To make self extracting archive.exe: zpaq [ok]e archive\n"
+    "To debug configuration file F.cfg: zpaq [ptokv]rF[,N...] [args...]\n"
     "  p = run PCOMP (default is to run HCOMP)\n"
     "  t = trace (single step), args are numeric inputs\n"
     "      otherwise args are input, output (default stdin, stdout)\n"
-    "  v = verbose compile\n"
     "  ,N = pass numeric arguments to F\n"
+    "For all commands:\n"
+    "  o = compress or decompress faster (requires C++ compiler)\n"
+    "  k = with o, keep zpaqopt.cpp, zpaqopt.exe\n"
+    "  v = verbose (echo F.cfg)\n"
     );
   exit(0);
 }
@@ -2281,32 +2410,25 @@ string strip(const string& filename) {
 // Open filename. Depending on OS, change slashes to / or \.
 // If this fails then try creating directories in its path.
 // If it fails again, return 0, else return FILE*.
-FILE* create(string filename) {
+FILE* create(String filename) {
 
   // Find last slash in filename
-  int slash=-1;
-  for (int i=0; i<int(filename.size()); ++i)
-    if (filename[i]=='/' || filename[i]=='\\')
-      slash=i;
+  int slashpos=-1;
+  for (int i=0; i<filename.len(); ++i)
+    if (filename(i)=='/' || filename(i)=='\\')
+      slashpos=i;
 
   // If there is no path, then open file and return
-  if (slash<0)
+  if (slashpos<0)
     return fopen(filename.c_str(), "wb");
 
   // Guess the OS by counting / (Linux) or \ (Windows) in PATH
-  const char* path=getenv("PATH");
-  static int os=0; // <0 if Windows, >0 if Linux, 0 if unknown
-  if (os==0) {
-    for (int i=0; path && path[i]; ++i) {
-      if (path[i]=='/') ++os;
-      if (path[i]=='\\') --os;
-    }
-  }
+  char slashchar=slash();  // 0 if unknown
 
   // Change slashes in filename per OS if known.
-  for (int i=0; i<int(filename.size()); ++i) {
-    if (os>0 && filename[i]=='\\') filename[i]='/';
-    if (os<0 && filename[i]=='/') filename[i]='\\';
+  for (int i=0; i<filename.len(); ++i) {
+    if (slashchar=='/' && filename[i]=='\\') filename[i]='/';
+    if (slashchar=='\\' && filename[i]=='/') filename[i]='\\';
   }
 
   // Try opening file
@@ -2314,11 +2436,11 @@ FILE* create(string filename) {
   if (f) return f;
 
   // If this doesn't work, try creating a directory for it using "mkdir"
-  if (os) {
-    string cmd = os<=0 ? "mkdir " : "mkdir -p ";
-    cmd+=filename.substr(0, slash);
-    fprintf(stderr, "\n%s\n", cmd.c_str());
-    system(cmd.c_str());
+  if (slashchar) {
+    string cmd = slashchar=='\\' ? "mkdir " : "mkdir -p ";
+    cmd+=filename.sub(0, slashpos);
+    fprintf(stderr, "\n");
+    run_cmd(cmd);
 
     // Last try
     return fopen(filename.c_str(), "wb");
@@ -2326,7 +2448,7 @@ FILE* create(string filename) {
   return 0;
 }
 
-// Decompress: [oq]x[N] archive [path/] [files...]
+// Decompress: [ovk]x[N] archive [path/] [files...]
 void decompress(int argc, char** argv) {
   assert(argc>=3);
 
@@ -2337,6 +2459,8 @@ void decompress(int argc, char** argv) {
   assert(cmd);
   while (*cmd) {
     if (*cmd=='o') ocmd=true;
+    else if (*cmd=='v') verbose=true;
+    else if (*cmd=='k') keep_option=true;
     else if (*cmd=='x') break;
     else usage();
     ++cmd;
@@ -2480,7 +2604,7 @@ static bool is_file(const char* filename) {
   return true;
 }
 
-// Compress files: [onsitv][ca][N][F[,N]...] archive [folder/] files...
+// Compress files: [onsitvk][ca][N][F[,N]...] archive [folder/] files...
 static void compress(int argc, char** argv) {
   assert(argc>=3);
 
@@ -2495,6 +2619,7 @@ static void compress(int argc, char** argv) {
     else if (cmd[0]=='s') scmd=true;
     else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='o') ocmd=true;
+    else if (cmd[0]=='k') keep_option=true;
     else if (cmd[0]=='a') {acmd=true; break;}
     else if (cmd[0]=='c') {ccmd=true; break;}
     else usage();
@@ -2505,7 +2630,7 @@ static void compress(int argc, char** argv) {
 
   // Compile config file
   String hcomp, pcomp, pcomp_cmd;
-  int level=compile_cmd(cmd, hcomp, pcomp, pcomp_cmd);
+  int level=compile_cmd(cmd, hcomp, pcomp, pcomp_cmd, root(argc, argv));
 
 #ifndef OPT
   if (ocmd && level==0)
@@ -2529,7 +2654,7 @@ static void compress(int argc, char** argv) {
   pp.setSHA1(&sha2);
   if (hcomp.len()>5)
     pp.init(hcomp(4), hcomp(5));  // ph, pm array sizes
-  String tmp=string(argv[2])+".zpaq.tmp";  // preprocessed input filename
+  String tmp=string(argv[2])+".zpaq.pre";  // preprocessed input filename
 
   // Compress files in argv[3...argc-1]
   int filecount=0;  // number of files compressed
@@ -2559,15 +2684,16 @@ static void compress(int argc, char** argv) {
     sprintf(comment, "%1.0f", sha1.size());
     const char* sha1result=sha1.result();
 
-    // Preprocess to a temporary file archive.zpaq.tmp
+    // Preprocess to a temporary file archive.zpaq.pre
     // Test by running through a PostProcessor and comparing checksums.
-    // If OK, then compress and delete the temporary file, else quit.
+    // If OK, then compress the temporary file, else skip.
+    // Look for preprocessor in the current directory first, then
+    // in the install directory.
     if (pcomp!="") {
       fclose(in.f);
       in.count=0;
-      String cmd=pcomp_cmd+" "+argv[i]+" "+tmp;
-      fprintf(stderr, "Preprocessing: %s\n", cmd.c_str());
-      system(cmd.c_str());
+      String cmd=root(argc, argv)+pcomp_cmd+" "+argv[i]+" "+tmp;
+      run_cmd(cmd);
 
       // Test whether post(pre(in)) == in
       in.f=fopen(tmp.c_str(), "rb");
@@ -2584,8 +2710,9 @@ static void compress(int argc, char** argv) {
       fprintf(stderr, 
         "%s -> %1.0f -> %1.0f\n", comment, in.count, sha2.size());
       if (memcmp(sha1result, sha2.result(), 20)) {
-        fprintf(stderr, "pre/post check failed\n");
-        break;
+        fprintf(stderr, "pre/post check failed, skipping...\n");
+        fclose(in.f);
+        continue;
       }
       rewind(in.f);
       in.count=0;
@@ -2904,7 +3031,7 @@ int ntoi(const char* s) {
   return n*sign;
 }
 
-// Debug config file: [opvt]rF[,N...] [args...]
+// Debug config file: [opvtk]rF[,N...] [args...]
 // p=run PCOMP, v=verbose, t=trace once per numeric arg
 // otherwise args are output, input (default stdout, stdin),
 // h=trace in hexadecimal, o=generate zpaqopt.h.
@@ -2920,6 +3047,7 @@ void run(int argc, char** argv) {
     else if (cmd[0]=='o') ocmd=true;
     else if (cmd[0]=='v') verbose=true;
     else if (cmd[0]=='t') tcmd=true;
+    else if (cmd[0]=='k') keep_option=true;
     else if (cmd[0]=='r') break;
     else usage();
     ++cmd;
@@ -2929,7 +3057,7 @@ void run(int argc, char** argv) {
 
   // Parse comma separated arguments after config file (now in cmd)
   String hcomp, pcomp, pcomp_cmd;
-  if (compile_cmd(cmd, hcomp, pcomp, pcomp_cmd))
+  if (compile_cmd(cmd, hcomp, pcomp, pcomp_cmd, root(argc, argv)))
     error("no config file");
 
 #ifndef OPT
@@ -2974,6 +3102,76 @@ void run(int argc, char** argv) {
   }
 }
 
+////////////////////////////// sfx /////////////////////////
+
+// This code is for making self extracting archives
+
+// Append a file
+void copy(String from, String to) {
+  fprintf(stderr, "Appending from %s to %s\n", from.c_str(), to.c_str());
+
+  // Open files
+  FILE* in=fopen(from.c_str(), "rb");
+  if (!in) perror(from.c_str()), exit(1);
+  FILE* out=fopen(to.c_str(), "ab");
+  if (!out) perror(to.c_str()), exit(1);
+
+  // Copy
+  int c;
+  while ((c=getc(in))!=EOF)
+    putc(c, out);
+
+  // Close files
+  fclose(out);
+  fclose(in);
+}
+
+// Create self extracting archive.exe: [ok]e archive
+void sfx(int argc, char** argv) {
+
+  // Get command options
+  bool ocmd=false;
+  char *cmd=argv[1];
+  while (cmd && cmd[0]) {
+    if (cmd[0]=='o') ocmd=true;
+    else if (cmd[0]=='k') keep_option=true;
+    else if (cmd[0]=='e') break;
+    else usage();
+    ++cmd;
+  }
+
+  // Get file names
+  String rootdir=root(argc, argv);
+  String sfx=rootdir+"zpsfx.exe";
+  String input=argv[2];
+  if (!exists(input.c_str()))
+    input+=".zpaq";
+  testfile(input.c_str());
+  String output=input;
+  if (output.sub(output.len()-5)==".zpaq")
+    output=output.sub(0, output.len()-5);
+  output+=".exe";
+
+  // Optimize archive to zpsfxopt.exe
+#ifndef OPT
+  if (ocmd) {
+    libzpaq::Decompresser d;
+    File in(open_archive(argv[2], "rb"));
+    d.setInput(&in);
+    optimize(getModels(d, false), argc, argv);
+    fclose(in.f);
+    sfx="zpsfxopt.exe";
+  }
+#endif
+
+  // Make self extracting archive
+  unlink(output.c_str());
+  copy(sfx, output);
+  copy(rootdir+"zpsfx.tag", output);
+  copy(input, output);
+  testfile(output.c_str());
+}
+
 ///////////////////////////// Main ///////////////////////////
 
 // Command syntax as in usage()
@@ -2983,10 +3181,10 @@ int main(int argc, char** argv) {
   if (argc<2) 
     usage();
 
-  // Find the command c, a, x, l, r
+  // Find the command c, a, x, l, r, e
   char cmd=0;
   for (int i=0; (cmd=argv[1][i])!=0; ++i)
-    if (strchr("caxlr", cmd))
+    if (strchr("caxlre", cmd))
       break;
 
   // Do the command
@@ -2996,6 +3194,8 @@ int main(int argc, char** argv) {
     decompress(argc, argv);
   else if (argc>=3 && cmd=='l')
     list(argc, argv);
+  else if (cmd=='e')
+    sfx(argc, argv);
   else if (cmd=='r')
     run(argc, argv);
   else
