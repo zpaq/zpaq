@@ -1,7 +1,7 @@
-/*  zpaq v1.06 archiver and file compressor.
+/*  zpaq v1.07 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 2, 2009.
 
     LICENSE
 
@@ -26,8 +26,8 @@ at this website.
 Command summary
 ---------------
 
-To compress to new archive: zpaq [pnsivt]c[F] archive files...
-To append to archive:       zpaq [pnsivt]a[F] archive files...
+To compress to new archive: zpaq [pnsivt]c[F[,N...]] archive files...
+To append to archive:       zpaq [pnsivt]a[F[,N...]] archive files...
 Optional modifiers:
   p = store filename paths in archive
   n = don't store filenames (extractor will append to last named file)
@@ -36,6 +36,7 @@ Optional modifiers:
   v = verbose
   t = append locator tag to non-ZPAQ data
   F = use options in configuration file F (min.cfg, max.cfg)
+  ,N = pass numeric arguments to configuration file
 To list contents: zpaq [v]l archive
   v = verbose
 To extract: zpaq [pnt]x[N] archive [files...]
@@ -45,12 +46,13 @@ To extract: zpaq [pnt]x[N] archive [files...]
   N = extract only block N (1, 2, 3...)
   files... = rename extracted files (clobbers)
       otherwise use stored names (does not clobber)
-To debug configuration file F: zpaq [pvth]rF [args...]
+To debug configuration file F: zpaq [pvth]rF[,N...] [args...]
   p = run PCOMP (default is to run HCOMP)
   v = verbose compile and show initialization lists
   t = trace (single step), args are numeric inputs
       otherwise args are input, output (default stdin, stdout)
   h = trace display in hexadecimal
+  ,N = numeric config file arguments
 To make self extracting archive: append to a copy of zpaqsfx.exe
 
 
@@ -145,14 +147,22 @@ in file names.
 Compression options
 -------------------
 
-  zpaq {p|n|s|i|v|t}*{c|a}[F] archive files...
+  zpaq [pnsivt]ca[F[,N...]] archive files...
 
-Create or append archive with optional modifiers and an optional
+Create (c) or append (a) archive with optional modifiers and an optional
 configuration file F. Three files are included:
 
   min.cfg - for fast but poor compression.
   max.cfg - for slow but good compression.
   mid.cfg - for moderate speed and compression (default).
+
+An argument 1, 2, 3, etc. may be appended to F to increase memory
+usage for better compression. Each increment doubles usage.
+There should be no space before or after the comma.
+
+  zpaq cmax.cfg archive files...    = 278 MB
+  zpaq cmax.cfg,1 archive files...  = 556 MB
+  zpaq cmax.cfg,2 archive files...  = 1112 MB
 
 Modifiers may be in any order before the "c" or "a" command.
 The modifiers, command, and configuration file must be written
@@ -787,6 +797,23 @@ LJ instead. There are no special forms for WHILE, UNTIL, or FOREVER.
 The compiler will automatically use the long forms when needed.
 
 
+Parameters
+----------
+
+In a config file, paramaters may be passed as $1, $2, ..., $9. These
+are replaced with numeric values passed on the command line. For example:
+
+  zpaq cmax.cfg,3,4 archive files...
+
+would have the effect of replacing $1 with 3 and $2 with 4. The default
+value is 0, i.e. $3 through $9 are replaced with 0.
+
+In addition, a parameter may have the form $N+M, where N is 1 through
+9 and M is a number. The effect is to add M. For example,
+$2+10 would be replaced with 14. Parameters may be used anywhere in the
+config file where a number is allowed.
+
+
 Pre/Post processing
 -------------------
 
@@ -939,24 +966,16 @@ private:
   int n;   // user size-1
   int offset;  // distance back in bytes to start of actual allocation
   void operator=(const Array&);  // no assignment
+  Array(const Array&);  // no copy
 public:
   Array(int sz=0, int ex=0): data(0), n(-1), offset(0) {
     resize(sz, ex);} // [0..sz-1] = 0
-  Array(const Array&);  // copy
   void resize(int sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
   int size() const {return n+1;}  // get size
   T& operator[](int i) {assert(n>=0 && i>=0 && U32(i)<=U32(n)); return data[i];}
   T& operator()(int i) {assert(n>=0 && (n&(n+1))==0); return data[i&n];}
 };
-
-// Copy
-template<class T>
-Array<T>::Array(const Array<T>& a): data(0), n(-1), offset(0) {
-  resize(a.size());
-  if (size()>0)
-    memcpy(data, a.data, size()*sizeof(T));
-}
 
 // Change size to sz<<ex elements of 0
 template<class T>
@@ -979,33 +998,6 @@ void Array<T>::resize(int sz, int ex) {
   offset=64-int((long)data&63);
   assert(offset>0 && offset<=64);
   data=(T*)((char*)data+offset);
-}
-/*
-// Concatenate string s to a, error if not enough room
-void cat(Array<char>& a, const char* s) {
-  int len=strlen(&a[0]);
-  if (len+int(strlen(s))>=a.size()) error("string full");
-  strcpy(&a[len], s);
-}
-*/
-// a=s1+s2+s3+s4+s5+s6 (concatenate 1 to 6 strings to a)
-const char* cat(Array<char>& a, const char* s1, const char* s2="",
-                const char* s3="", const char* s4="",
-                const char* s5="", const char* s6="") {
-  int len1=strlen(s1);
-  int len2=strlen(s2);
-  int len3=strlen(s3);
-  int len4=strlen(s4);
-  int len5=strlen(s5);
-  int len6=strlen(s6);
-  a.resize(len1+len2+len3+len4+len5+len6+1);
-  strcpy(&a[0], s1);
-  strcpy(&a[len1], s2);
-  strcpy(&a[len1+len2], s3);
-  strcpy(&a[len1+len2+len3], s4);
-  strcpy(&a[len1+len2+len3+len4], s5);
-  strcpy(&a[len1+len2+len3+len4+len5], s6);
-  return &a[0];
 }
 
 //////////////////////////// SHA-1 //////////////////////////////
@@ -1392,15 +1384,15 @@ void SHA1::SHA1PadMessage()
 // Symbolic constants, instruction size, and names
 typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE,
   JT=39,JF=47,JMP=63,LJ=255,
-  POST=256,PCOMP,END,
-  IF,IFNOT,ELSE,ENDIF,DO,WHILE,UNTIL,FOREVER,
-  IFL,IFNOTL,ELSEL} CompType;
+  POST=256,PCOMP,END,IF,IFNOT,ELSE,ENDIF,DO,
+  WHILE,UNTIL,FOREVER,IFL,IFNOTL,ELSEL,SEMICOLON} CompType;
 static const int compsize[256]={0,2,3,2,3,4,6,6,3,5};
 static const char* compname[]=
   {"","const","cm","icm","match","avg","mix2","mix","isse","sse",0};
+bool verbose=false;  // global: display lots of stuff?
 
 // Opcodes from ZPAQ spec, table 1, without operands (N, M)".
-static const char* opcodelist[271]={
+static const char* opcodelist[272]={
 "error","a++",  "a--",  "a!",   "a=0",  "",     "",     "a=r",
 "b<>a", "b++",  "b--",  "b!",   "b=0",  "",     "",     "b=r",
 "c<>a", "c++",  "c--",  "c!",   "c=0",  "",     "",     "c=r",
@@ -1434,41 +1426,32 @@ static const char* opcodelist[271]={
 "",     "",     "",     "",     "",     "",     "",     "",
 "",     "",     "",     "",     "",     "",     "",     "lj",
 "post", "pcomp","end",  "if",   "ifnot","else", "endif","do",
-"while","until","forever","ifl","ifnotl","elsel",0};
+"while","until","forever","ifl","ifnotl","elsel",";",    0};
 
-// A ZPAQL machine HCOMP or PCOMP.
+// A ZPAQL machine COMP+HCOMP or PCOMP.
 class ZPAQL {
 public:
   ZPAQL();
   void load(int cn, int hn, const U8* data); // init from data[cn+hn]
   void read(FILE* in);    // Read header from archive
   void write(FILE* out);  // Write header to archive
-  U32 compile(FILE* in);  // Create header from config file
   void list();            // Display header contents
-  void inith();           // Initialize as HCOMP
-  void initp();           // Initialize as PCOMP
+  void inith();           // Initialize as HCOMP to run
+  void initp();           // Initialize as PCOMP to run
   void run(U32 input);    // Execute with input
   void step(U32 input, bool ishex); // Execute while displaying progress
   void prints();          // Print header as an array initialization
   double memory();        // Return memory requirement in bytes
-  int ph() {return header[4];}  // ph
-  int pm() {return header[5];}  // pm
+  U32 H(int i) {return h(i);}  // get element of h
   FILE* output;           // Destination for OUT instruction, or 0 to suppress
   SHA1* sha1;             // Points to checksum computer
-  bool verbose;           // Show config file during compile?
-  Array<char> pcomp_cmd;  // Command string after compiling PCOMP
-  friend class Predictor;
-  friend class PostProcessor;
-  friend void compress(int argc, char** argv);
-private:
 
   // ZPAQ1 block header
-  int hsize;          // Header size
   Array<U8> header;   // hsize[2] hh hm ph pm n COMP (guard) HCOMP (guard)
-  int cend;           // COMP in header[7...cend-1] (empty for PCOMP)
-  int hbegin, hend;   // HCOMP in header[hbegin...hend-1]
-  int pbegin, pend;   // PCOMP in header[pbegin...pend-1]
+  int cend;           // COMP in header[7...cend-1]
+  int hbegin, hend;   // HCOMP/PCOMP in header[hbegin...hend-1]
 
+private:
   // Machine state for executing HCOMP
   Array<U8> m;        // memory array M for HCOMP
   Array<U32> h;       // hash array H for HCOMP
@@ -1476,16 +1459,8 @@ private:
   U32 a, b, c, d;     // machine registers
   int f;              // condition flag
   int pc;             // program counter
-  int pc_start;       // execution start, hbegin or pbegin
-  int pc_end;         // hend or pend
 
   // Support code
-  CompType compile_comp(FILE* in, int& begin, int& end);
-    // compile HCOMP or PCOMP section of config file
-  const char* token(FILE* in);  // read and print a token or 0 at EOF
-  int rtoken(FILE* in, const char* list[]=0);  // read token in list -> index
-  void rtoken(FILE* in, const char* s);  // read a token that must be s
-  int rtoken(FILE* in, int low, int high);  // read token in low...high
   void init(int hbits, int mbits);  // initialize H and M sizes
   int execute();  // execute 1 instruction, return 0 after HALT, else 1
   void div(U32 x) {if (x) a/=x; else a=0;}
@@ -1497,10 +1472,8 @@ private:
 
 // Constructor
 ZPAQL::ZPAQL() {
-  hsize=cend=hbegin=hend=pbegin=pend=0;
-  pc_start=pc_end=0;
-  a=b=c=d=f=pc=0;
-  verbose=true;
+  cend=hbegin=hend=0;  // COMP and HCOMP locations
+  a=b=c=d=f=pc=0;      // machine state
   output=0;
   sha1=0;
 }
@@ -1519,8 +1492,7 @@ void ZPAQL::load(int cn, int hn, const U8* data) {
     header[i]=data[i];
   for (int i=0; i<hn; ++i)
     header[hbegin+i]=data[cn+i];
-  hsize=cn+hn-2;
-  assert(header[0]+256*header[1]==hsize);
+  assert(header[0]+256*header[1]==cn+hn-2);
   assert(header[cend-1]==0);
   assert(header[hend-1]==0);
 }
@@ -1530,7 +1502,7 @@ void ZPAQL::read(FILE* in) {
   assert(in);
 
   // Get header size and allocate
-  hsize=getc(in);
+  int hsize=getc(in);
   hsize+=getc(in)*256;
   header.resize(hsize+300);
   cend=hbegin=hend=0;
@@ -1575,259 +1547,9 @@ void ZPAQL::write(FILE* out) {
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
   assert(hend>hbegin && hend<header.size());
-  assert(hsize==header[0]+256*header[1]);
-  assert(hsize==cend-2+hend-hbegin);
+  assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   fwrite(&header[0], 1, cend, out);
   fwrite(&header[hbegin], 1, hend-hbegin, out);
-}
-
-// Stack of n elements of type T
-template<class T>
-class Stack {
-  Array<T> s;
-  int top;
-public:
-  Stack(int n): s(n), top(0) {}
-  void push(const T& x) {
-    if (top>=s.size()) error("stack full");
-    s[top++]=x;
-  }
-  T pop() {
-    if (top<=0) error("stack empty");
-    return s[--top];
-  }
-};
-
-// Compile HCOMP or PCOMP code. Exit on error. Return
-// code for end token (POST, PCOMP, END)
-CompType ZPAQL::compile_comp(FILE *in, int& begin, int& end) {
-  int op=0;
-  Stack<U16> if_stack(1000), do_stack(1000);  // IF, DO saved addresses
-  if (verbose) printf("\n");
-  int indent=0;  // program listing indentation
-  while (end<0x10000) {
-    if (verbose) {
-      printf("(%4d) ", end-begin);
-      for (int i=0; i<indent; ++i) printf("  ");
-    }
-    op=rtoken(in, opcodelist);
-    if (op==POST || op==PCOMP || op==END) break;
-    int operand=-1; // 0...255 if 2 bytes
-    int operand2=-1;  // 0...255 if 3 bytes
-    if (op==IF) {
-      op=JF;
-      operand=0; // set later
-      if_stack.push(end+1); // save jump target location
-      ++indent;
-    }
-    else if (op==IFNOT) {
-      op=JT;
-      operand=0;
-      if_stack.push(end+1); // save jump target location
-      ++indent;
-    }
-    else if (op==IFL || op==IFNOTL) {  // long if
-      if (op==IFL) header[end++]=JT;
-      if (op==IFNOTL) header[end++]=JF;
-      header[end++]=3;
-      op=LJ;
-      operand=operand2=0;
-      if_stack.push(end+1);
-      if (verbose)
-        printf("(%s 3 (%d 3) lj 0 0)",
-          opcodelist[header[end-2]], header[end-2]);
-      ++indent;
-    }
-    else if (op==ELSE || op==ELSEL) {
-      if (op==ELSE) op=JMP, operand=0;
-      if (op==ELSEL) op=LJ, operand=operand2=0;
-      int a=if_stack.pop();  // conditional jump target location
-      assert(a>begin && a<end);
-      if (header[a-1]!=LJ) {  // IF, IFNOT
-        assert(header[a-1]==JT || header[a-1]==JF || header[a-1]==JMP);
-        int j=end-a+1+(op==LJ); // offset at IF
-        assert(j>=0);
-        if (j>127) error("IF too big, try IFL, IFNOTL");
-        header[a]=j;
-        if (verbose) printf("((%d) %s %d (to %d)) ",
-          a-begin-1, opcodelist[header[a-1]], j, end-begin+2);
-      }
-      else {  // IFL, IFNOTL
-        int j=end-begin+2+(op==LJ);
-        assert(j>=0);
-        header[a]=j&255;
-        header[a+1]=(j>>8)&255;
-        if (verbose) printf("((%d) lj %d) ", a-begin-1, j);
-      }
-      if_stack.push(end+1);  // save JMP target location
-    }
-    else if (op==ENDIF) {
-      int a=if_stack.pop();  // jump target address
-      assert(a>begin && a<end);
-      int j=end-a-1;  // jump offset
-      assert(j>=0);
-      if (header[a-1]!=LJ) {
-        assert(header[a-1]==JT || header[a-1]==JF || header[a-1]==JMP);
-        if (j>127) error("IF too big, try IFL, IFNOTL, ELSEL\n");
-        header[a]=j;
-        if (verbose) printf("((%d) %s %d (to %d))\n",
-          a-begin-1, opcodelist[header[a-1]], j, end-begin);
-      }
-      else {
-        j=end-begin;
-        header[a]=j&255;
-        header[a+1]=(j>>8)&255;
-        if (verbose) printf("((%d) lj %d)\n", a-1, j);
-      }
-      --indent;
-    }
-    else if (op==DO) {
-      do_stack.push(end);
-      if (verbose) printf("\n");
-      ++indent;
-    }
-    else if (op==WHILE || op==UNTIL || op==FOREVER) {
-      int a=do_stack.pop();
-      assert(a>=begin && a<end);
-      int j=a-end-2;
-      assert(j<=-2);
-      if (j>=-127) {  // backward short jump
-        if (op==WHILE) op=JT;
-        if (op==UNTIL) op=JF;
-        if (op==FOREVER) op=JMP;
-        operand=j&255;
-        if (verbose)
-          printf("(%s %d) (to %d)) ", opcodelist[op], j, end-begin+2+j);
-      }
-      else {  // backward long jump
-        j=a-begin;
-        assert(j>=0 && j<end-begin);
-        if (op==WHILE) {
-          header[end++]=JF;
-          header[end++]=3;
-          if (verbose) printf("(jf 3) ");
-        }
-        if (op==UNTIL) {
-          header[end++]=JT;
-          header[end++]=3;
-          if (verbose) printf("(jt 3) ");
-        }
-        op=LJ;
-        operand=j&255;
-        operand2=j>>8;
-        if (verbose) printf("(lj %d) ", j);
-      }
-      --indent;
-    }
-    else if ((op&7)==7) { // 2 byte operand, read N
-      if (op==LJ) {
-        operand=rtoken(in, 0, 65535);
-        operand2=operand>>8;
-        operand&=255;
-        if (verbose) printf("(to %d) ", operand+256*operand2);
-      }
-      else if (op==JT || op==JF || op==JMP) {
-        operand=rtoken(in, -128, 127);
-        if (verbose) printf("(to %d) ", end-begin+2+operand);
-        operand&=255;
-      }
-      else
-        operand=rtoken(in, 0, 255);
-    }
-    if (verbose) {
-      if (operand2>=0)
-        printf("(%d %d %d)\n", op, operand, operand2);
-      else if (operand>=0)
-        printf("(%d %d)\n", op, operand);
-      else if (op>=0 && op<=255)
-        printf("(%d)\n", op);
-    }
-    if (op>=0 && op<=255)
-      header[end++]=op;
-    if (operand>=0)
-      header[end++]=operand;
-    if (operand2>=0)
-      header[end++]=operand2;
-    if (end-begin>=0x10000 || end>header.size()-144)
-      error("program too big");
-  }
-  header[end++]=0; // END
-  return CompType(op);
-}
-
-// Compile a configuration file and store the result in header.
-// Return the POST command as a 32 bit value with a single
-// letter in the low byte and up to 3 numeric parameters packed
-// into the higher bytes. For example: "POST A 100" returns
-// 'A' + 100*256. If there is PCOMP instead of POST then
-// store the program in header[pbegin...pend-1] and return 0.
-U32 ZPAQL::compile(FILE* in) {
-
-  // Allocate header
-  header.resize(0x21000); // includes hsize
- 
-  // Compile the COMP section of header
-  cend=hbegin=hend=2;
-  rtoken(in, "comp");
-  header[cend++]=rtoken(in, 0, 255); // hh
-  header[cend++]=rtoken(in, 0, 255); // hm
-  header[cend++]=rtoken(in, 0, 255); // ph
-  header[cend++]=rtoken(in, 0, 255); // pm
-  int n=header[cend++]=rtoken(in, 0, 255); // n
-  if (verbose) printf("\n");
-  for (int i=0; i<n; ++i) {
-    if (verbose) printf("  ");
-    rtoken(in, i, i);
-    CompType type=CompType(header[cend++]=rtoken(in, compname));
-    int clen=compsize[type];
-    assert(clen>0 && clen<10);
-    for (int j=1; j<clen; ++j)
-      header[cend++]=rtoken(in, 0, 255);
-    if (verbose) printf("\n");
-  }
-  header[cend++]=0; // END
-
-  // Compile HCOMP
-  hbegin=hend=cend+128;  // leave a guard gap to catch backwards jumps
-  rtoken(in, "hcomp");
-  CompType op=compile_comp(in, hbegin, hend);
-  if (verbose) printf("\n");
-  if (hend>=0x10000) printf("\nProgram too big\n"), exit(1);
-
-  // Compute header size
-  hsize=hend-hbegin+cend-2;
-  header[0]=hsize&255;
-  header[1]=hsize>>8;
-  if (verbose) {
-    printf("(cend=%d hbegin=%d hend=%d hsize=%d Memory=%1.3f MB)\n\n", 
-      cend, hbegin, hend, hsize, memory()/1000000);
-  }
-
-  // Compile POST section: cmd (0...255)[0..3] END
-  U32 result=0;
-  if (op==POST) {
-    const char* tok=token(in);
-    if (tok && strcmp(tok, "end")) result=tok[0];
-    for (int i=1; i<4 && ((tok=token(in)))!=0 && strcmp(tok, "end"); ++i)
-      result+=atoi(tok)<<i*8;
-  }
-
-  // Compile PCOMP pcomp_cmd\n program... END
-  else if (op==PCOMP) {
-    pcomp_cmd.resize(512);
-    int c, len=0;
-    while (len<pcomp_cmd.size()-1 && (c=getc(in))>=' ')
-      pcomp_cmd[len++]=c;
-    if (verbose) printf("%s\n", &pcomp_cmd[0]);
-    pbegin=pend=hend+144;
-    op=compile_comp(in, pbegin, pend);
-    if (op!=END)
-      error("Expected END in configuation file");
-    if (verbose)
-      printf("(pbegin=%d pend=%d pcomp size=%d)\n",
-        pbegin, pend, pend-pbegin);
-  }
-  return result;
 }
 
 // Display header contents. Assume it is constructed correctly.
@@ -1835,9 +1557,9 @@ void ZPAQL::list() {
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
   assert(hend>hbegin && hend<header.size());
-  assert(hsize==header[0]+256*header[1]);
 
   // Display COMP section
+  int hsize=header[0]+256*header[1];
   printf("comp %d %d %d %d %d (hh hm ph pm n, header size=%d)\n",
     header[2], header[3], header[4], header[5], header[6], hsize);
   printf("  (Memory requirement: %1.3f MB)\n", memory()/1000000);
@@ -1883,34 +1605,25 @@ void ZPAQL::list() {
 
 // Initialize machine state as HCOMP
 void ZPAQL::inith() {
-  pc_start=hbegin;
-  pc_end=hend;
+  assert(header.size()>6);
   init(header[2], header[3]); // hh, hm
 }
 
 // Initialize machine state as PCOMP
 void ZPAQL::initp() {
-  if (pbegin) {
-    assert(pbegin>=hend+128);
-    assert(pend>=pbegin);
-    pc_start=pbegin;
-    pc_end=pend;
-  }
-  else {
-    pc_start=hbegin;
-    pc_end=hend;
-  }
-  init(header[4], header[5]);  // ph, pm
+  assert(header.size()>6);
+  init(header[4], header[5]); // ph, pm
 }
 
-// Initialize machine state
+// Initialize machine state to run a program
 void ZPAQL::init(int hbits, int mbits) {
-  assert(pc_end>=pc_start);
-  assert(pc_end==0 || pc_start>=hbegin);
+  assert(header.size()>0);
   assert(h.size()==0);
   assert(m.size()==0);
-  assert(hbegin>=cend+128);
   assert(cend>=7);
+  assert(hbegin>=cend+128);
+  assert(hend>=hbegin);
+  assert(hend<header.size()-130);
   h.resize(1, hbits);
   m.resize(1, mbits);
   r.resize(256);
@@ -1920,13 +1633,12 @@ void ZPAQL::init(int hbits, int mbits) {
 // Run program on input
 void ZPAQL::run(U32 input) {
   assert(cend>6);
-  assert(hbegin==cend+128);
-  assert(hend>hbegin);
+  assert(hbegin>=cend+128);
+  assert(hend>=hbegin);
   assert(hend<header.size()-130);
   assert(m.size()>0);
   assert(h.size()>0);
-  assert(pc_start==hbegin || pc_start==pbegin);
-  pc=pc_start;
+  pc=hbegin;
   a=input;
   while (execute()) ;
 }
@@ -1934,13 +1646,12 @@ void ZPAQL::run(U32 input) {
 // Execute program input and show progress
 void ZPAQL::step(U32 input, bool ishex) {
   assert(cend>6);
-  assert(hbegin==cend+128);
-  assert(hend>hbegin);
+  assert(hbegin>=cend+128);
+  assert(hend>=hbegin);
   assert(hend<header.size()-130);
   assert(m.size()>0);
   assert(h.size()>0);
-  assert(pc_start==hbegin || pc_start==pbegin);
-  pc=pc_start;
+  pc=hbegin;
   a=input;
   printf("\n"
   "  pc   opcode  f      a          b      *b      c      *c      d         *d\n"
@@ -1968,53 +1679,75 @@ void ZPAQL::step(U32 input, bool ishex) {
       f, a, b, m(b), c, m(c), d, h(d));
   }
 
-  // Dump memory
-  printf("\n\nH (size %d) =", h.size());
-  for (int i=0; i<h.size(); ++i) {
-    if (i%4==0) printf("\n%8X %8d:", i, i);
-    printf(ishex ? " %08X" : " %10u", h[i]);
+  // Print R, skipping rows of 4 zeros
+  printf("\n\nR (size %d) = (rows of all 0 omitted)\n", r.size());
+  for (int i=0; i<r.size(); i+=4) {
+    if (r(i) || r(i+1) || r(i+2) || r(i+3))
+      printf(ishex ? "%8X: %08X %08X %08X %08X\n"
+                   : "%10u: %10u %10u %10u %10u\n",
+        i, r(i), r(i+1), r(i+2), r(i+3));
   }
-  printf("\n\nM (size %d) =", m.size());
-  for (int i=0; i<m.size(); ++i) {
-    if (i%8==0) printf("\n%8X %8d:", i, i);
-    printf(ishex ? " %02X" : " %3d", m[i]);
+
+  // Print H, skipping rows of 4 zeros
+  printf("\nH (size %d) = (rows of all 0 omitted)\n", h.size());
+  for (int i=0; i<h.size(); i+=4) {
+    if (h(i) || h(i+1) || h(i+2) || h(i+3))
+      printf(ishex ? "%8X: %08X %08X %08X %08X\n"
+                   : "%10u: %10u %10u %10u %10u\n",
+        i, h(i), h(i+1), h(i+2), h(i+3));
   }
-  int rsize=r.size(); // don't print trailing zeros
-  while (rsize>4 && r[rsize-1]==0) --rsize;
-  printf("\n\nR (size %d) =", r.size());
-  for (int i=0; i<rsize; ++i) {
-    if (i%4==0) printf("\n%02X %3d:", i, i);
-    printf(ishex ? " %08X" : " %10u", r[i]);
+
+  // Print M, skipping rows of 16 zeros
+  printf("\nM (size %d) = (rows of all 0 omitted)\n", m.size());
+  for (int i=0; i<m.size(); i+=16) {
+    bool found=false;
+    for (int j=0; j<16; ++j)
+      if (m(i+j)) found=true;
+    if (found) {
+      printf(ishex ? "%8X:" : "%10u:", i);
+      for (int j=0; j<16; ++j) {
+        printf(ishex ? " %02X" : " %3d", m(i+j));
+        if (j%4==3) printf(" ");
+      }
+      printf("\n");
+    }
   }
   printf("\n\n");
 }
 
 // Print header as an array initialization in C
 void ZPAQL::prints() {
-  assert(header.size()>hend);
+  assert(header.size()>=hend);
   assert(hend>=hbegin);
   assert(hbegin>=0);
-  printf("\n\n  header=[%d]={ // COMP %d bytes\n    ",
-      cend+hend-hbegin, cend);
-  for (int i=0; i<cend; ++i) {
-    printf("%d,", header[i]);
-    if (i%16==15) printf("\n    ");
+
+  // If no COMP, print start of POST array for compiled PCOMP section
+  int hsize=hend-hbegin;
+  if (cend<=7) {
+    if (hsize)
+      printf("\n  post_header[%d]={1,%d,%d,\n    ", 
+        hsize+3, hsize&255, hsize>>8);
+    else
+      printf("\n  post_header[1]={0};\n");
   }
-  printf("\n    // HCOMP %d bytes\n    ", hend-hbegin);
-  for (int i=hbegin; i<hend; ++i) {
-    printf("%d", header[i]);
-    if (i<hend-1) printf(",");
-    if ((i-hbegin)%16==15) printf("\n    ");
+
+  // Else print COMP, HCOMP arrays
+  else {
+    printf("\n  header=[%d]={ // COMP %d bytes\n    ",
+        cend+hend-hbegin, cend);
+    for (int i=0; i<cend; ++i) {
+      printf("%d,", header[i]);
+      if (i%16==15) printf("\n    ");
+    }
+    printf("\n    // HCOMP %d bytes\n    ", hend-hbegin);
   }
-  printf("};\n");
-  if (pend>pbegin) {
-    int psize=pend-pbegin;
-    printf("  pcomp[%d]={%d,%d,%d, // PCOMP\n    ",
-      psize+3, 1, psize&255, (psize>>8)&255);
-    for (int i=pbegin; i<pend; ++i) {
+
+  // Print PCOMP contents
+  if (hsize) {
+    for (int i=hbegin; i<hend; ++i) {
       printf("%d", header[i]);
-      if (i<pend-1) printf(",");
-      if ((i-pbegin)%16==15) printf("\n    ");
+      if (i<hend-1) printf(",");
+      if ((i-hbegin)%16==15) printf("\n    ");
     }
     printf("};\n");
   }
@@ -2041,81 +1774,6 @@ double ZPAQL::memory() {
     cp+=compsize[header[cp]];
   }
   return mem;
-}
-
-// Read a token and return it, or return 0 at EOF. Skip (comments).
-// Convert to lower case. Tokens are separated by white space.
-// In verbose mode, print the token.
-const char* ZPAQL::token(FILE* in) {
-  static char s[16];  // result
-  int len=0;  // length of s
-
-  // skip to start of token
-  int paren=0, c=0;
-  while (c<=' ' || paren>0) {
-    c=getc(in);
-    if (c=='(') ++paren;
-    if (c==')') --paren, c=' ';
-    if (c==EOF) return 0;
-  }
-
-  // read token separated by whitespace
-  do {
-    if (isupper(c)) c=tolower(c);
-    s[len++]=c;
-  }
-  while (len<15 && (c=getc(in))!=EOF && c>' ');
-  s[len++]=0;
-  if (verbose) printf("%s ", s);
-  return s;
-}
-
-// Read a token, which must be in the NULL terminated list or else
-// exit with an error. If found, return its index.
-int ZPAQL::rtoken(FILE* in, const char* list[]) {
-  assert(in);
-  assert(list);
-  const char* tok=token(in);
-  if (!tok) fprintf(stderr, "\nUnexpected end of configuration file\n"), exit(1);
-  for (int i=0; list[i]; ++i)
-    if (!strcmp(list[i], tok))
-      return i;
-  fprintf(stderr, "\nConfiguration file error at %s\n", tok), exit(1);
-  assert(0);
-  return -1; // not reached
-}
-
-// Read a token which must be the specified value s
-void ZPAQL::rtoken(FILE* in, const char* s) {
-  assert(s);
-  const char* t=token(in);
-  if (!t) fprintf(stderr, "\nExpected %s, found EOF\n", s), exit(1);
-  if (strcmp(s, t)) fprintf(stderr, "\nExpected %s, found %s\n", s, t), exit(1);
-}
-
-// Read a number in (low...high) or exit with an error
-int ZPAQL::rtoken(FILE* in, int low, int high) {
-  const char* tok=token(in);
-  if (!tok) fprintf(stderr, "\nUnexpected end of configuration file\n"), exit(1);
-  int n=0;
-  const char* p=tok;
-  int sign=1;
-  if (*p=='-') sign=-1, ++p;
-  while (*p) {
-    if (isdigit(*p))
-      n=n*10+*p-'0';
-    else
-      fprintf(stderr, "\nConfiguration file error at %s: expected a number\n", tok),
-      exit(1);
-    ++p;
-  }
-  n*=sign;
-  if (n>=low && n<=high)
-    return n;
-  fprintf(stderr, "\nConfiguration file error: expected (%d...%d), found %d\n",
-    low, high, n);
-  exit(1);
-  return 0;
 }
 
 // Execute one instruction, return 0 after HALT else 1
@@ -2395,7 +2053,7 @@ print"    default: err();\n  }\n";
     case 237: f = (a > U32(m(c))); break; // A>*C
     case 238: f = (a > h(d)); break; // A>*D
     case 239: f = (a > U32(header[pc++])); break; // A> N
-    case 255: if((pc=pc_start+header[pc]+256*header[pc+1])>=pc_end)err();break;//LJ
+    case 255: if((pc=hbegin+header[pc]+256*header[pc+1])>=hend)err();break;//LJ
     default: err();
   }
   return 1;
@@ -2403,13 +2061,360 @@ print"    default: err();\n  }\n";
 
 // Print illegal instruction error message and exit
 void ZPAQL::err() {
+  --pc;
   fprintf(stderr, "\nExecution aborted: pc=%d a=%d b=%d->%d c=%d->%d d=%d->%d\n",
     pc-hbegin, a, b, m(b), c, m(c), d, h(d));
-  if (pc>=pc_start && pc<pc_end) fprintf(stderr, "opcode = %d %s\n",
-    header[pc-pc_start], opcodelist[header[pc-pc_start]]);
+  if (pc>=hbegin && pc<hend) fprintf(stderr, "opcode = %d %s\n",
+    header[pc-hbegin], opcodelist[header[pc-hbegin]]);
   else
-    fprintf(stderr, "pc out of range. Program size is %d\n", pc_end-pc_start);
+    fprintf(stderr, "pc out of range. Program size is %d\n", hend-hbegin);
   exit(1);
+}
+
+//////////////////////////////// compile ///////////////////////////
+
+int args[9]={0};  // global configuration file arguments
+
+// Append string s to array a, enlarging as needed
+void append(Array<char>& a, const char* s) {
+  if (!s) return;
+  if (!a.size()) a.resize(strlen(s)+1);
+  int len=strlen(&a[0])+strlen(s)+1;
+  if (len>a.size()) {
+    Array<char> tmp(a.size());
+    strcpy(&tmp[0], &a[0]);
+    a.resize(len*5/4+64);
+    strcpy(&a[0], &tmp[0]);
+  }
+  strcat(&a[0], s);
+}
+
+// Read a token and return it, or return 0 at EOF. Skip (comments).
+// Convert to lower case. Tokens are separated by white space.
+// In verbose mode, print the token.
+const char* token(FILE* in) {
+  static char s[512];  // result
+  int len=0;  // length of s
+
+  // skip to start of token
+  int paren=0, c=0;
+  while (c<=' ' || paren>0) {
+    c=getc(in);
+    if (c=='(') ++paren;
+    if (c==')') --paren, c=' ';
+    if (c==EOF) return 0;
+  }
+
+  // read token separated by whitespace
+  do {
+    if (isupper(c)) c=tolower(c);
+    s[len++]=c;
+  }
+  while (len<511 && (c=getc(in))!=EOF && c>' ');
+  s[len++]=0;
+  if (verbose) printf("%s ", s);
+
+  // Substitute parameters $1..$9 with args[0..8], $i+n with args[i-1]+n
+  if (s[0]=='$' && s[1]>='1' && s[1]<='9') {
+    int i=s[1]-'1';
+    assert(i>=0 && i<9);
+    int val=args[i];
+    if (s[2]=='+')
+      val+=atoi(s+3);
+    sprintf(s, "%d", val);
+    if (verbose) printf("(%s) ", s);
+  }
+  return s;
+}
+
+// Read a token, which must be in the NULL terminated list or else
+// exit with an error. If found, return its index.
+int rtoken(FILE* in, const char* list[]) {
+  assert(in);
+  assert(list);
+  const char* tok=token(in);
+  if (!tok) fprintf(stderr, "\nUnexpected end of configuration file\n"), exit(1);
+  for (int i=0; list[i]; ++i)
+    if (!strcmp(list[i], tok))
+      return i;
+  fprintf(stderr, "\nConfiguration file error at %s\n", tok), exit(1);
+  assert(0);
+  return -1; // not reached
+}
+
+// Read a token which must be the specified value s
+void rtoken(FILE* in, const char* s) {
+  assert(s);
+  const char* t=token(in);
+  if (!t) fprintf(stderr, "\nExpected %s, found EOF\n", s), exit(1);
+  if (strcmp(s, t)) fprintf(stderr, "\nExpected %s, found %s\n", s, t), exit(1);
+}
+
+// Read a number in (low...high) or exit with an error
+int rtoken(FILE* in, int low, int high) {
+  const char* tok=token(in);
+  if (!tok) fprintf(stderr, "\nUnexpected end of configuration file\n"), exit(1);
+  int n=0;
+  const char* p=tok;
+  int sign=1;
+  if (*p=='-') sign=-1, ++p;
+  while (*p) {
+    if (isdigit(*p))
+      n=n*10+*p-'0';
+    else
+      fprintf(stderr, "\nConfiguration file error at %s: expected a number\n", tok),
+      exit(1);
+    ++p;
+  }
+  n*=sign;
+  if (n>=low && n<=high)
+    return n;
+  fprintf(stderr, "\nConfiguration file error: expected (%d...%d), found %d\n",
+    low, high, n);
+  exit(1);
+  return 0;
+}
+
+// Stack of n elements of type T
+template<class T>
+class Stack {
+  Array<T> s;
+  int top;
+public:
+  Stack(int n): s(n), top(0) {}
+  void push(const T& x) {
+    if (top>=s.size()) error("stack full");
+    s[top++]=x;
+  }
+  T pop() {
+    if (top<=0) error("stack empty");
+    return s[--top];
+  }
+};
+
+// Compile HCOMP or PCOMP code. Exit on error. Return
+// code for end token (POST, PCOMP, END)
+CompType compile_comp(FILE *in, ZPAQL& z) {
+  int op=0;
+  Stack<U16> if_stack(1000), do_stack(1000);  // IF, DO saved addresses
+  if (verbose) printf("\n");
+  int indent=0;  // program listing indentation
+  while (z.hend<0x10000) {
+    if (verbose) {
+      printf("(%4d) ", z.hend-z.hbegin);
+      for (int i=0; i<indent; ++i) printf("  ");
+    }
+    op=rtoken(in, opcodelist);
+    if (op==POST || op==PCOMP || op==END) break;
+    int operand=-1; // 0...255 if 2 bytes
+    int operand2=-1;  // 0...255 if 3 bytes
+    if (op==IF) {
+      op=JF;
+      operand=0; // set later
+      if_stack.push(z.hend+1); // save jump target location
+      ++indent;
+    }
+    else if (op==IFNOT) {
+      op=JT;
+      operand=0;
+      if_stack.push(z.hend+1); // save jump target location
+      ++indent;
+    }
+    else if (op==IFL || op==IFNOTL) {  // long if
+      if (op==IFL) z.header[z.hend++]=JT;
+      if (op==IFNOTL) z.header[z.hend++]=JF;
+      z.header[z.hend++]=3;
+      op=LJ;
+      operand=operand2=0;
+      if_stack.push(z.hend+1);
+      if (verbose)
+        printf("(%s 3 (%d 3) lj 0 0)",
+          opcodelist[z.header[z.hend-2]], z.header[z.hend-2]);
+      ++indent;
+    }
+    else if (op==ELSE || op==ELSEL) {
+      if (op==ELSE) op=JMP, operand=0;
+      if (op==ELSEL) op=LJ, operand=operand2=0;
+      int a=if_stack.pop();  // conditional jump target location
+      assert(a>z.hbegin && a<z.hend);
+      if (z.header[a-1]!=LJ) {  // IF, IFNOT
+        assert(z.header[a-1]==JT || z.header[a-1]==JF || z.header[a-1]==JMP);
+        int j=z.hend-a+1+(op==LJ); // offset at IF
+        assert(j>=0);
+        if (j>127) error("IF too big, try IFL, IFNOTL");
+        z.header[a]=j;
+        if (verbose) printf("((%d) %s %d (to %d)) ",
+          a-z.hbegin-1, opcodelist[z.header[a-1]], j, z.hend-z.hbegin+2);
+      }
+      else {  // IFL, IFNOTL
+        int j=z.hend-z.hbegin+2+(op==LJ);
+        assert(j>=0);
+        z.header[a]=j&255;
+        z.header[a+1]=(j>>8)&255;
+        if (verbose) printf("((%d) lj %d) ", a-z.hbegin-1, j);
+      }
+      if_stack.push(z.hend+1);  // save JMP target location
+    }
+    else if (op==ENDIF) {
+      int a=if_stack.pop();  // jump target address
+      assert(a>z.hbegin && a<z.hend);
+      int j=z.hend-a-1;  // jump offset
+      assert(j>=0);
+      if (z.header[a-1]!=LJ) {
+        assert(z.header[a-1]==JT || z.header[a-1]==JF || z.header[a-1]==JMP);
+        if (j>127) error("IF too big, try IFL, IFNOTL, ELSEL\n");
+        z.header[a]=j;
+        if (verbose) printf("((%d) %s %d (to %d))\n",
+          a-z.hbegin-1, opcodelist[z.header[a-1]], j, z.hend-z.hbegin);
+      }
+      else {
+        j=z.hend-z.hbegin;
+        z.header[a]=j&255;
+        z.header[a+1]=(j>>8)&255;
+        if (verbose) printf("((%d) lj %d)\n", a-1, j);
+      }
+      --indent;
+    }
+    else if (op==DO) {
+      do_stack.push(z.hend);
+      if (verbose) printf("\n");
+      ++indent;
+    }
+    else if (op==WHILE || op==UNTIL || op==FOREVER) {
+      int a=do_stack.pop();
+      assert(a>=z.hbegin && a<z.hend);
+      int j=a-z.hend-2;
+      assert(j<=-2);
+      if (j>=-127) {  // backward short jump
+        if (op==WHILE) op=JT;
+        if (op==UNTIL) op=JF;
+        if (op==FOREVER) op=JMP;
+        operand=j&255;
+        if (verbose)
+          printf("(%s %d (to %d)) ", opcodelist[op], j, z.hend-z.hbegin+2+j);
+      }
+      else {  // backward long jump
+        j=a-z.hbegin;
+        assert(j>=0 && j<z.hend-z.hbegin);
+        if (op==WHILE) {
+          z.header[z.hend++]=JF;
+          z.header[z.hend++]=3;
+          if (verbose) printf("(jf 3) ");
+        }
+        if (op==UNTIL) {
+          z.header[z.hend++]=JT;
+          z.header[z.hend++]=3;
+          if (verbose) printf("(jt 3) ");
+        }
+        op=LJ;
+        operand=j&255;
+        operand2=j>>8;
+        if (verbose) printf("(lj %d) ", j);
+      }
+      --indent;
+    }
+    else if ((op&7)==7) { // 2 byte operand, read N
+      if (op==LJ) {
+        operand=rtoken(in, 0, 65535);
+        operand2=operand>>8;
+        operand&=255;
+        if (verbose) printf("(to %d) ", operand+256*operand2);
+      }
+      else if (op==JT || op==JF || op==JMP) {
+        operand=rtoken(in, -128, 127);
+        if (verbose) printf("(to %d) ", z.hend-z.hbegin+2+operand);
+        operand&=255;
+      }
+      else
+        operand=rtoken(in, 0, 255);
+    }
+    if (verbose) {
+      if (operand2>=0)
+        printf("(%d %d %d)\n", op, operand, operand2);
+      else if (operand>=0)
+        printf("(%d %d)\n", op, operand);
+      else if (op>=0 && op<=255)
+        printf("(%d)\n", op);
+    }
+    if (op>=0 && op<=255)
+      z.header[z.hend++]=op;
+    if (operand>=0)
+      z.header[z.hend++]=operand;
+    if (operand2>=0)
+      z.header[z.hend++]=operand2;
+    if (z.hend-z.hbegin>=0x10000 || z.hend>z.header.size()-144)
+      error("program too big");
+  }
+  z.header[z.hend++]=0; // END
+  return CompType(op);
+}
+
+// Compile a configuration file. Store COMP/HCOMP section in z.
+// If there is a PCOMP section, store it in pz and store the PCOMP
+// command in pcomp_cmd. Replace "$1..$9+n" with args[0..8]+n
+void compile(FILE* in, ZPAQL& z, ZPAQL& pz, Array<char>& pcomp_cmd,
+             int args[]) {
+
+  // Allocate header
+  z.header.resize(0x11000);
+ 
+  // Compile the COMP section of header
+  z.cend=z.hbegin=z.hend=2;
+  rtoken(in, "comp");
+  z.header[z.cend++]=rtoken(in, 0, 255); // hh
+  z.header[z.cend++]=rtoken(in, 0, 255); // hm
+  z.header[z.cend++]=rtoken(in, 0, 255); // ph
+  z.header[z.cend++]=rtoken(in, 0, 255); // pm
+  int n=z.header[z.cend++]=rtoken(in, 0, 255); // n
+  if (verbose) printf("\n");
+  for (int i=0; i<n; ++i) {
+    if (verbose) printf("  ");
+    rtoken(in, i, i);
+    CompType type=CompType(z.header[z.cend++]=rtoken(in, compname));
+    int clen=compsize[type];
+    assert(clen>0 && clen<10);
+    for (int j=1; j<clen; ++j)
+      z.header[z.cend++]=rtoken(in, 0, 255);
+    if (verbose) printf("\n");
+  }
+  z.header[z.cend++]=0; // END
+
+  // Compile HCOMP
+  z.hbegin=z.hend=z.cend+128;  // leave a guard gap to catch backwards jumps
+  rtoken(in, "hcomp");
+  CompType op=compile_comp(in, z);
+  if (verbose) printf("\n");
+  if (z.hend>=0x10000) printf("\nProgram too big\n"), exit(1);
+
+  // Compute header size
+  int hsize=z.hend-z.hbegin+z.cend-2;
+  z.header[0]=hsize&255;
+  z.header[1]=hsize>>8;
+
+  // Compile POST 0 END
+  if (op==POST) {
+    rtoken(in, 0, 0);
+    rtoken(in, "end");
+  }
+
+  // Compile PCOMP pcomp_cmd\n program... END
+  else if (op==PCOMP) {
+    pz.header.resize(0x10300);
+    pz.header[4]=z.header[4]; // copy ph
+    pz.header[5]=z.header[5]; // copy pm
+    pz.cend=7;  // empty COMP section
+
+    // get pcomp_cmd ending with ";"
+    const char *tok;
+    while ((tok=token(in))!=0 && strcmp(tok, ";")) {
+      if (pcomp_cmd.size() && pcomp_cmd[0]) append(pcomp_cmd, " ");
+      append(pcomp_cmd, tok);
+    }
+    pz.hbegin=pz.hend=pz.cend+144;
+    op=compile_comp(in, pz);
+    if (op!=END)
+      error("Expected END in configuation file");
+  }
 }
 
 ///////////////////////////// Predictor ///////////////////////////
@@ -2781,12 +2786,12 @@ int Predictor::predict() {
       case CONST:  // c
         break;
       case CM:  // sizebits limit
-        cr.cxt=z.h(i)^hmap4;
+        cr.cxt=z.H(i)^hmap4;
         p[i]=stretch(cr.cm(cr.cxt)>>17);
         break;
       case ICM: // sizebits
         assert((hmap4&15)>0);
-        if (c8==1 || (c8&0xf0)==16) cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
+        if (c8==1 || (c8&0xf0)==16) cr.c=find(cr.ht, cp[1]+2, z.H(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];
         p[i]=stretch(cr.cm(cr.cxt)>>8);
         break;
@@ -2804,7 +2809,7 @@ int Predictor::predict() {
         break;
       case MIX2: { // sizebits j k rate mask
                    // c=size cm=wt[size][m] cxt=input
-        cr.cxt=((z.h(i)+(c8&cp[5]))&(cr.c-1));
+        cr.cxt=((z.H(i)+(c8&cp[5]))&(cr.c-1));
         assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
         int w=cr.a16[cr.cxt];
         assert(w>=0 && w<65536);
@@ -2816,7 +2821,7 @@ int Predictor::predict() {
                    // c=size cm=wt[size][m] cxt=index of wt in cm
         int m=cp[3];
         assert(m>=1 && m<=i);
-        cr.cxt=z.h(i)+(c8&cp[5]);
+        cr.cxt=z.H(i)+(c8&cp[5]);
         cr.cxt=(cr.cxt&(cr.c-1))*m; // pointer to row of weights
         assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-m);
         int* wt=(int*)&cr.cm[cr.cxt];
@@ -2829,14 +2834,14 @@ int Predictor::predict() {
       case ISSE: { // sizebits j -- c=hi, cxt=bh
         assert((hmap4&15)>0);
         if (c8==1 || (c8&0xf0)==16)
-          cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
+          cr.c=find(cr.ht, cp[1]+2, z.H(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];  // bit history
         int *wt=(int*)&cr.cm[cr.cxt*2];
         p[i]=clamp2k((wt[0]*p[cp[2]]+wt[1]*64)>>16);
       }
         break;
       case SSE: { // sizebits j start limit
-        cr.cxt=(z.h(i)+c8)*32;
+        cr.cxt=(z.H(i)+c8)*32;
         int pq=p[cp[2]]+992;
         if (pq<0) pq=0;
         if (pq>1983) pq=1983;
@@ -2895,13 +2900,13 @@ void Predictor::update(int y) {
         if ((++cr.limit&7)==0) {
           int pos=cr.limit>>3;
           if (cr.a==0) {  // look for a match
-            cr.b=pos-cr.cm(z.h(i));
+            cr.b=pos-cr.cm(z.H(i));
             if (cr.b&(cr.ht.size()-1))
               while (cr.a<255 && cr.ht(pos-cr.a-1)==cr.ht(pos-cr.a-cr.b-1))
                 ++cr.a;
           }
           else cr.a+=cr.a<255;
-          cr.cm(z.h(i))=pos;
+          cr.cm(z.H(i))=pos;
           if (cr.a>0) cr.cxt=2048/cr.a;
         }
       }
@@ -3063,6 +3068,7 @@ int Decoder::decompress() {
 
 class PostProcessor {
   int state;   // input parse state
+  int hsize;   // header size
   int ph, pm;  // sizes of H and M in z
   ZPAQL z;     // holds PCOMP
 public:
@@ -3073,7 +3079,7 @@ public:
 
 // Copy ph, pm from block header
 PostProcessor::PostProcessor(ZPAQL& hz) {
-  state=0;
+  state=hsize=0;
   ph=hz.header[4];
   pm=hz.header[5];
 }
@@ -3093,17 +3099,15 @@ void PostProcessor::write(int c) {
       break;
     case 2: // PROG
       if (c<0) error("Unexpected EOS");
-      z.hsize=c;  // low byte of psize
+      hsize=c;  // low byte of size
       state=3;
       break;
     case 3:  // PROG psize[0]
       if (c<0) error("Unexpected EOS");
-      z.hsize+=c*256+1;  // high byte of psize
-      z.header.resize(z.hsize+300);
+      hsize+=c*256;  // high byte of psize
+      z.header.resize(hsize+300);
       z.cend=8;
       z.hbegin=z.hend=136;
-      z.header[0]=z.hsize&255;
-      z.header[1]=z.hsize>>8;
       z.header[4]=ph;
       z.header[5]=pm;
       state=4;
@@ -3112,7 +3116,7 @@ void PostProcessor::write(int c) {
       if (c<0) error("Unexpected EOS");
       assert(z.hend<z.header.size());
       z.header[z.hend++]=c;  // one byte of pcomp
-      if (z.hend-z.hbegin==z.hsize-1) {  // last byte of pcomp?
+      if (z.hend-z.hbegin==hsize) {  // last byte of pcomp?
         z.header[z.hend++]=0;
         z.initp();
         state=5;
@@ -3406,9 +3410,11 @@ public:
   void setOutput(FILE* f) {out=f;}
 };
 
+// Compress to file f using model z
 Encoder::Encoder(FILE* f, ZPAQL& z): 
   out(f), low(1), high(0xFFFFFFFF), pr(z) {}
 
+// compress bit y having probability p/64K
 inline void Encoder::encode(int y, int p) {
   assert(out);
   assert(p>=0 && p<65536);
@@ -3425,6 +3431,7 @@ inline void Encoder::encode(int y, int p) {
   }
 }
 
+// compress byte c (0..255 or -1=EOS)
 void Encoder::compress(int c) {
   assert(out);
   if (c==-1)
@@ -3444,20 +3451,34 @@ void Encoder::compress(int c) {
 
 //////////////////////////// Compress ////////////////////////////
 
-// Compress files: [pnsiv]c|a[F] archive files...
+// Parse up to 9 comma separated numeric arguments appended to
+// cmd and put in global args[0..8]. Replace commas with 0 in cmd.
+void get_args(char *cmd) {
+  if (cmd && cmd[0]) {
+    int i=0;
+    char *s=cmd, *sn;
+    while (i<9 && (sn=strchr(s, ','))!=0) {
+      args[i++]=atoi(sn+1);
+      *sn=0;
+      s=sn+1;
+    }
+  }
+}
+
+// Compress files: [pnsiv]c|a[F[,N...]] archive files...
 void compress(int argc, char** argv) {
   assert(argc>=3);
 
   // Get command options
-  bool pcmd=false, ncmd=false, scmd=false, icmd=false, vcmd=false, // options
+  bool pcmd=false, ncmd=false, scmd=false, icmd=false, // options
        tcmd=false, acmd=false, ccmd=false;
-  const char *cmd=argv[1];
+  char *cmd=argv[1];
   while (cmd && cmd[0]) {
     if (cmd[0]=='p') pcmd=true, ncmd=false;
     else if (cmd[0]=='n') ncmd=true, pcmd=false;
     else if (cmd[0]=='s') scmd=true;
     else if (cmd[0]=='i') icmd=true;
-    else if (cmd[0]=='v') vcmd=true;
+    else if (cmd[0]=='v') verbose=true;
     else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='a') {acmd=true; break;}
     else if (cmd[0]=='c') {ccmd=true; break;}
@@ -3467,13 +3488,16 @@ void compress(int argc, char** argv) {
   ++cmd;
   if (acmd==ccmd) usage();
 
+  // Parse comma separated arguments after config file (now in cmd)
+  get_args(cmd);
+
   // Compile config file F now in cmd
-  ZPAQL z; // compression model
+  ZPAQL z, pz; // compression and postprocessing models
+  Array<char> pcomp_cmd;  // name of external preprocessor
   if (cmd[0]) {  // config file name?
     FILE* cfg=fopen(cmd, "rb");
     if (!cfg) perror(cmd), exit(1);
-    z.verbose=vcmd;
-    z.compile(cfg);
+    compile(cfg, z, pz, pcomp_cmd, args);
     fclose(cfg);
     printf("%1.3f MB memory required.\n", z.memory()/1000000);
   }
@@ -3488,13 +3512,15 @@ void compress(int argc, char** argv) {
       207,8,112,56,0};
     z.load(34, 37, header);
   }
-  ZPAQL zp=z; // for testing preprocessor
-  zp.initp();
+  if (pz.hend>pz.hbegin)
+    pz.initp();
 
   // Construct temporary file names from archive name
   Array<char> prefile, tempfile;
-  cat(prefile,  argv[2], ".$zpaq.pre");
-  cat(tempfile, argv[2], ".$zpaq.tmp");
+  append(prefile, argv[2]);
+  append(prefile, ".$zpaq.pre");
+  append(tempfile, argv[2]);
+  append(tempfile, ".$zpaq.tmp");
 
   // Initialize preprocessor
   remove(&tempfile[0]);
@@ -3520,15 +3546,20 @@ void compress(int argc, char** argv) {
     rewind(in);
 
     // Verify post(pre(in)) == in
-    if (z.pend) {  // PCOMP section?
+    if (pz.hend>pz.hbegin) {  // PCOMP section?
       fclose(in);
       remove(&prefile[0]);
 
       // Run external preprocessor
-      Array<char> syscmd;
-      cat(syscmd, &z.pcomp_cmd[0], " ", argv[i], " ", &prefile[0]);
-      printf("%s ... ", &syscmd[0]);
-      system(&syscmd[0]);
+      int len=strlen(&pcomp_cmd[0]);
+      assert(len>=0 && len<pcomp_cmd.size());
+      append(pcomp_cmd, " ");
+      append(pcomp_cmd, argv[i]);
+      append(pcomp_cmd, " ");
+      append(pcomp_cmd, &prefile[0]);
+      printf("%s ... ", &pcomp_cmd[0]);
+      system(&pcomp_cmd[0]);
+      pcomp_cmd[len]=0; // chop last 2 arguments
 
       // Open preprocessor output
       FILE *in=fopen(&prefile[0], "rb");
@@ -3539,10 +3570,10 @@ void compress(int argc, char** argv) {
 
       // Run preprocessed data through postprocessor
       SHA1 check2;
-      zp.sha1=&check2;
+      pz.sha1=&check2;
       while ((c=getc(in))!=EOF)
-        zp.run(c);
-      zp.run(-1);
+        pz.run(c);
+      pz.run(-1);
 
       // Compare postprocessed output with unpreprocessed input
       bool match=true;
@@ -3558,7 +3589,7 @@ void compress(int argc, char** argv) {
 
       // If OK then use preprocessed input
       rewind(in);
-      zp.sha1=0;
+      pz.sha1=0;
     } // end if PCOMP
 
     // Open archive for first file
@@ -3592,9 +3623,9 @@ void compress(int argc, char** argv) {
 
     // Compress PCOMP or POST 0
     if (first) {
-      const int psize=z.pend-z.pbegin;
+      const int psize=pz.hend-pz.hbegin;
       assert(psize>=0 && psize<0x10000);
-      assert(z.header.size()>=z.pend);
+      assert(pz.header.size()>=pz.hend);
       if (psize==0)
         enc.compress(0);  // PASS
       else {
@@ -3602,7 +3633,7 @@ void compress(int argc, char** argv) {
         enc.compress(psize&255);     // size low byte
         enc.compress(psize>>8&255);  // size high byte
         for (int j=0; j<psize; ++j)  // PCOMP code
-          enc.compress(z.header[z.pbegin+j]);
+          enc.compress(pz.header[pz.hbegin+j]);
       }
     }
 
@@ -3656,7 +3687,7 @@ void list(int argc, char** argv) {
   assert(argc>2 && argv[2]);
 
   // Verbose?
-  bool verbose=strchr(argv[1], 'v')!=0;
+  verbose=strchr(argv[1], 'v')!=0;
 
   // Open archive
   FILE* in=fopen(argv[2], "rb");
@@ -3695,7 +3726,7 @@ void list(int argc, char** argv) {
       if (c==EOF) error("unexpected end of file");
       while ((c=getc(in))==0) ;
       if (c==253) {  // print SHA1 in verbose mode
-        if (argv[1][0]=='v') {
+        if (verbose) {
           printf(" SHA1=");
           for (int i=0; i<20; ++i)
             printf("%02x", getc(in));
@@ -3723,12 +3754,12 @@ void run(int argc, char** argv) {
   assert(argc>=2);
 
   // Get options
-  bool pcmd=false, vcmd=false, tcmd=false, hcmd=false;
-  const char *cmd=argv[1];
+  bool pcmd=false, tcmd=false, hcmd=false;
+  char *cmd=argv[1];
   assert(cmd);
   while (cmd[0]) {
     if (cmd[0]=='p') pcmd=true;
-    else if (cmd[0]=='v') vcmd=true;
+    else if (cmd[0]=='v') verbose=true;
     else if (cmd[0]=='t') tcmd=true;
     else if (cmd[0]=='h') hcmd=true;
     else if (cmd[0]=='r') break;
@@ -3738,15 +3769,23 @@ void run(int argc, char** argv) {
   ++cmd; // now points config file name
   if (!cmd[0]) usage();
 
+  // Parse comma separated arguments after config file (now in cmd)
+  get_args(cmd);
+
   // Initialze virtual machine
-  ZPAQL z;
-  z.verbose=vcmd;
+  ZPAQL hz, pz;  // HCOMP, PCOMP virtual machines
+  Array<char> pcomp_cmd;  // PCOMP command (not used)
   FILE* in=fopen(cmd, "r");
   if (!in) perror(cmd), exit(1);
-  z.compile(in);
+  compile(in, hz, pz, pcomp_cmd, args);
+  ZPAQL& z=pcmd?pz:hz;  // the machine to be run
+  if (z.hend<=z.hbegin) error("no program to run");
   if (pcmd) z.initp();
   else z.inith();
-  if (vcmd) z.prints();
+  if (verbose) {
+    hz.prints();
+    pz.prints();
+  }
 
   // Run the program
   if (tcmd) {  // trace with numeric args
@@ -3775,12 +3814,12 @@ void run(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.06 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.07 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "To compress to new archive: zpaq [pnsivt]c[F] archive files...\n"
-    "To append to archive:       zpaq [pnsivt]a[F] archive files...\n"
+    "To compress to new archive: zpaq [pnsivt]c[F[,N...]] archive files...\n"
+    "To append to archive:       zpaq [pnsivt]a[F[,N...]] archive files...\n"
     "Optional modifiers:\n"
     "  p = store filename paths in archive\n"
     "  n = don't store filenames (extractor will append to last named file)\n"
@@ -3789,6 +3828,7 @@ void usage() {
     "  v = verbose\n"
     "  t = append locator tag to non-ZPAQ data\n"
     "  F = use options in configuration file F (min.cfg, max.cfg)\n"
+    "  ,N = pass numeric arguments to configuration file\n"
     "To list contents: zpaq [v]l archive\n"
     "  v = verbose\n"
     "To extract: zpaq [pnt]x[N] archive [files...]\n"
@@ -3798,12 +3838,13 @@ void usage() {
     "  N = extract only block N (1, 2, 3...)\n"
     "  files... = rename extracted files (clobbers)\n"
     "      otherwise use stored names (does not clobber)\n"
-    "To debug configuration file F: zpaq [pvt]rF [args...]\n"
+    "To debug configuration file F: zpaq [pvt]rF[,N...] [args...]\n"
     "  p = run PCOMP (default is to run HCOMP)\n"
     "  v = verbose compile and show initialization lists\n"
     "  t = trace (single step), args are numeric inputs\n"
     "      otherwise args are input, output (default stdin, stdout)\n"
     "  h = trace display in hexadecimal\n"
+    "  ,N = numeric config file arguments\n"
     "To make self extracting archive: append to a copy of zpaqsfx.exe\n");
   exit(0);
 }

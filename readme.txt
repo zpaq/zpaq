@@ -1,5 +1,5 @@
-README for ZPAQ v1.06
-Matt Mahoney - Sept. 29, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.07
+Matt Mahoney - Oct. 2, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -13,17 +13,11 @@ http://www.gnu.org/copyleft/gpl.html
 
 Contents:
 
-  zpaq1.pdf -    The ZPAQ open standard format for highly compressed
-                 data. Revision 1 last updated Sept.29, 2009.
-
-  unzpaq106.cpp -Reference standard decoder (GPL). It is part of the
-                 specification. v1.03 last updated Sept. 29, 2009.
-
   zpaq.exe -     The ZPAQ compressor, decompressor, and environment for
                  developing new compression algorithms in the ZPAQ format.
                  Compiled for 32 bit Windows.
 
-  zpaq106.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
+  zpaq107.cpp -  Source code (GPL) for zpaq.exe. See comments for usage.
 
   min.cfg -      ZPAQ config file for fast compression.
 
@@ -42,7 +36,7 @@ Contents:
   zpaqsfx.exe -  Stub for making self extracting archives.
 
   zpaqsfx.cpp -  Source (GPL) for zpaqsfx v1.06.
-
+ 
   zpaqsfx.tag -  16 byte locater tag appended to zpaqsfx.exe.
 
   readme.txt -   This file.
@@ -208,3 +202,9 @@ v1.06 - Sept. 29, 2009. Updated specification zpaq1.pdf to include
         Also added "ta" to append this tag. Some minor bug fixes
         and porting issues fixed. Changed unzpaq to extract to current
         directory by default.
+
+v1.07 - Oct. 2, 2009. zpaq config files now accept arguments. Fixed
+        a bug in min.cfg. Cleaned up "tr" command display. min.cfg,
+        mid.cfg, max.cfg accept an argument to change memory.
+        min.cfg takes a second argument to change LZP minimum match.
+        pcomp external preprocessor command must end with ;
