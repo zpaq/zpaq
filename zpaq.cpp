@@ -1,7 +1,7 @@
-/*  zpaq v1.09 archiver and file compressor.
+/*  zpaq v1.10 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 21, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Dec. 28, 2009.
 
     LICENSE
 
@@ -4296,7 +4296,7 @@ void compress(int argc, char** argv) {
       pcomp_cmd[len]=0; // chop last 2 arguments
 
       // Open preprocessor output
-      FILE *in=fopen(&prefile[0], "rb");
+      in=fopen(&prefile[0], "rb");
       if (!in) {
         perror(&prefile[0]);
         continue;
@@ -4342,7 +4342,7 @@ void compress(int argc, char** argv) {
 
       // Write block header
       enc.setOutput(out);
-      outsize+=fprintf(out, "zPQ%c%c", LEVEL, 1);
+      outsize+=fprintf(out, "%cPQ%c%c", 'z', LEVEL, 1);
       outsize+=z.write(out);
       first=true;
     }
@@ -4555,7 +4555,7 @@ void run(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.09 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.10 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
