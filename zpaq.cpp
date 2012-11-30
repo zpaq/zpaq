@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.02 - Journaling incremental deduplicating archiving compressor
+/* zpaq.cpp v6.03 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -15,37 +15,27 @@
     General Public License for more details at
     Visit <http://www.gnu.org/copyleft/gpl.html>.
 
-zpaq is for creating compressed archives for incremental
-user-level backups of files and directory trees. It is:
+zpaq is for creating journaling compressed archives for incremental
+backups of files and directory trees. Incremental update of an entire
+disk is fast because only those files whose last-modified date has
+changed are added. zpaq is journaling, which means that both the
+old and new versions are saved. You can extract the old versions
+by rolling back the archive to an earlier date. zpaq deduplicates:
+it saves files and file fragments (average size 64 KB along
+content-dependent bounaries) only once by comparing SHA-1
+hashes to those stored in the archive.
 
-Journaling - When you change or delete files, both the old and new
-versions are saved in the archive. You can restore the old versions
-of your files and directories by reverting to an earlier version of
-the archive.
+zpaq compresses in the open-standard ZPAQ format specified at
+http://mattmahoney.net/zpaq/
+The format is self describing, meaning that new versions of the
+archiver that improve compression will still produce archives that
+older decompressers can read, because the decompression instructions
+are stored in the archive.
 
-Incremental - Successive backups of the same files or directories
-save only the changes, which is faster and takes less space.
-
-Deduplicating - Multiple copies of files are saved only once. When
-a file is added, it is divided into fragments of about 64 KB along
-boundaries that depend on the local file contents. The SHA-1 hashes
-of the fragments are compared to those already in the archive, and
-only those with no match are compressed and added. If a file is
-edited, only the fragments that have changed need to be added.
-
-zpaq is not intended for administrator level backup of the operating
-system or for multiple users. It does not save permissions and
-ownership information, and restores using default permissions.
-It saves only the last modification date, rounded to seconds.
-
-zpaq compresses using the ZPAQ level 2 self describing format
-described in http://mattmahoney.net/zpaq/
-This allows new compression algorithms to be introduced in a way
-that does not break compatibility with older decompressers.
-zpaq also has tools to help compression algorithm developers
-create new and better compression methods. It allows methods
-to be described in external configuration files and preprocessors,
-and includes commands for testing and debugging them.
+There are 5 built-in compression levels. zpaq also has tools for
+compression experts to develop custom compression algorithms. It
+accepts algorithm descriptions in the ZPAQL language and has tools
+for testing and debugging them. (ZPAQL is described in libzpaq.h).
 
 Usage: zpaq -options [arguments] ...
 
@@ -57,212 +47,130 @@ It is recommended that if zpaq is run from a script that abbreviations
 not be used because future versions might add options that would make
 existing abbreviations ambiguous.
 
-  -list archive files ...
+  -add archive files...
 
-Show contents of archive and compare with the listed files
-and directory trees, if any. A listing shows for each file version the
-version number, last-modified date, size, filename, comparison result,
-and list of fragment identifiers. Files containing identical fragments
-will share identifiers. The comparison character has the following
-meanings:
+Add files and directory trees to archive.zpaq. The .zpaq extension
+is assumed. Directories are scanned recursively. Only ordinary
+files are added, not special types (devices, symbolic links, etc),
+nor empty directories. Symbolic links are not followed.
 
-  = internal and external file dates are identical.
-  # internal and external file dates differ.
-  > external file does not exist.
-  < internal file does not exist.
+  -list archive [files]...
 
-If no file or directory arguments are given, then all internal
-files are compared. Otherwise, only the listed files and directory
-trees are displayed and compared. Directories and their subdirectories
-are scanned recursively and all ordinary files are compared.
-In Linux, symbolic links are not followed.
+Show archive contents. There are two tables. The first shows a
+list of transactions (each -add) giving the version number,
+date, time (UTC), compressed size (not including the index), and
+starting fragment number. The second table lists each version
+of each file, the last-modified time, attributes, uncompressed size,
+comparison status, and list of fragment IDs. The comparison status
+is shown as = if the last-modified time is the same as the external
+file, # if different, or > if the external file does not exist.
+Attributes (permissions) are listed in octal in Linux (as with chmod) or
+hexadecimal in Windows.
 
-If the archive does not exist, then archive.zpaq is tried.
+  -extract archive [files]...
 
-A listing also shows a transaction history. For each transaction,
-the version number, date, and the number of files, fragments, uncompressed
-bytes, and compressed bytes is shown.
+Extract the latest version of the indicated files and directory
+trees, or the entire archive by default. If any files would be
+overwritten, then it is an error and no files are created.
+Otherwise, last-modified dates and attributes are restored,
+creating non-empty directories as needed.
 
-  -to files ...
+  -to files...
 
-Rename the external files and directories for the purpose of comparison.
-For example, "-list archive dir1 -to dir2" would compare internal
-dir1/file to external dir2/file, and so on.
+Rename external files corresponding to the arguments of the
+above commands. For example, "zpaq -ex arc dir1 -to dir2"
+would extract dir1 from arc.zpaq as dir2.
 
-  -not files ...
+  -not files...
 
-Exclude the listed files from the argument list (before renaming). For
-example, "-list archive dir -not dir/dir2 dir/foo" would exclude dir/foo
-and all files in dir/dir2 from comparison.
-
-  -add archive files ...
-
-Update the archive as follows:
-
-  = no action.
-  # update in archive.
-  > delete from archive.
-  < add to archive.
-
-Older versions of updated or deleted files can be recovered using the
--date option to roll back the archive to an earlier state. Options
--to and -not apply. -to really means "from". For example,
-"-add archive dir1 -to dir2" means save dir2/file as dir1/file.
--add with no arguments will update or delete all the files in the
-archive depending on the comparison result.
-
-  -extract archive files ...
-
-Create files and directories as follows:
-
-  =,# error (file exists) or overwrite with -force option.
-  > create file.
-  < no action.
-
-Thus, with no arguments, the entire archive is extracted. Options
--to and -not apply as before. -to really means what it says, as in
-"-extract archive dir1 dir2 dir3 -to dir4 dir5" would extract
-dir1/file to dir4/file, and dir2/file to dir5/file, but not rename any
-files in dir3.
+Exclude from the above commands (before renaming if any). For example,
+"zpaq -a arc dir1 -not dir1/dir2" would add dir1 except dir1/dir2.
 
   -force
 
-Do not compare files. -list will show contents as if the external
-files do not exist. -extract will clobber existing files. -add will
-update files even if the dates match. If the files really are identical
-then only the index is updated.
+Do not compare files. With -add, files are added (and deduplicated)
+even if the dates are identical. -extract will overwrite existing
+output files. -list will show all comparisons as ">".
 
   -version N
 
-Use version N of the archive, ignoring any versions of any files that
-were added later. Versions are shown by -list. Each -add operation
-increments the current version, beginning at 1.
+List or extract files as of version N or earlier. With -add, newer
+versions are discarded before update. The default is the latest
+version.
 
-  -method 0..4
+  -threads N
 
-Choose compression method for -add, from 0 (fastest) to 4 (best).
-The default is "-method 1". Methods are briefly described:
+Compress or decompress N blocks in parallel in separate threads.
+The default is the number of processors, detected by the environment
+variable %NUMBER_OF_PROCESSORS% in Windows or from /proc/cpuinfo
+in Linux. Using fewer threads can save memory, but using more is
+not any faster.
+
+  -quiet
+
+With -add and -extract, don't display any output except for errors
+and warnings.
+
+  -detailed
+
+With -add and -extract, show internal steps. With -list, display
+detailed contents, including components of the central index and
+a disassmbly of the ZPAQL code used to decompress each block.
+
+  -streaming
+
+With -add, save in an older format that does not support deduplication,
+but is compatible with older versions of zpaq (including zpipe, zpaqsfx,
+the reference decoder, and peazip). Attributes are not saved. Identical
+files are not deduplicated. Listing is slower because the entire archive
+must be scanned. Compression is usually worse.
+
+A streaming archive compresses each file in a separate block and
+splits large files into 16 MB blocks that are compressed or extracted
+in parallel. File names, sizes, and checksums are stored with each block.
+In the default format, files are fragented and grouped into 16 MB blocks
+which are stored separately from the index and skipped over by -list.
+
+  -solid
+
+Like -streaming except that all files are stored in a single block.
+Compression is better but single-threaded.
+
+  -tiny
+
+Like -solid, except that error recovery tags (13 bytes per block),
+sizes, and SHA-1 checksums are not stored in order to get the very
+best possible compression.
+
+  -method 0...4
+
+Compress faster...better. The default is -method 1. The algorithms are:
 
   0 = Not compressed.
   1 = Byte aligned LZ77.
   2 = LZ77 + context model + arithmetic coding.
   3 = BWT (Burrows-Wheeler transform) + order 0-1 indirect model.
-  4 = CM (context mixing) dependent on file type.
+  4 = CM (context mixing) with 8 components.
 
-  -method config arg1 ... arg9
+Methods 1, 2, and 3 are not supported in -solid and -tiny modes.
+
+  -method config [arg]...
 
 Specify a custom compression algorithm described in ZPAQL in the
 file config.cfg with up to 9 numeric arguments. See libzpaq.h
 for a description of the ZPAQL language. If the config file specifies
 an external preprocessor program, then the program is called once
-for each block to be compressed with two additional commmand line
-arguments consisting of temporary input and output file names.
-zpaq will report an error at compress time if the postprocessor
-would not regenerate the original data correctly. Temporary file
-names have the form zpaqtmp{PID}_{thread}.{in|out} where {PID}
-is the process ID and {thread} is a number 0 or higher. Temporaries
-are placed in %TEMP% if defined, or else in $TMPDIR, or else in /tmp,
-or else in the current directory.
+for each block in default and -streaming mode, and once for each
+input file in -solid and -tiny mode.
 
-  -streaming
-  -solid
-  -tiny
+The preprocessor must be supplied by the user and should expect an input
+and output file as its last two arguments. zpaq will create temporary
+files in the first of %TEMP%, $TMPDIR, /tmp, or the current directory
+and have a name of the form zpaqtmp*. The postprocessor (PCOMP section)
+is tested to verify decompression except in -tiny mode.
 
-Compress in a format that is readable by
-older ZPAQ versions but that does not support journaling, incremental
-updates, or deduplication. Dates and attributes are not saved.
-Files are added unconditionally, without checking if the files are
-already in the archive.
-
-In -streaming format, each file is stored in a separately compressed
-block and large files are split into 16 MB blocks. Each block has a
-header locator tag and one segment. The segment filename field of
-the first block of each file contains the file name and is empty in
-subsequent segments. The comment field contains the uncompressed
-segment size as a decimal string. The checksum field contains the
-SHA-1 hash of the segment.
-
-In -solid format, all of the files are compressed into a single block
-with the fields as in -streaming mode. The block can only be compressed
-or extracted in a single thread. Compression is usually better.
--method 1, 2, and 3 are not supported. The default is -method 4 unless
-a config file is specified. If the config file specifies an external
-preprocessor, then it is called once for each input file with output
-to a temporary file, and the postprocessor state is maintained between
-calls. Compression statistics are displayed showing the fraction of
-memory used by each component.
-
--tiny format is like -solid except that no header locator tags, comments,
-or checksums are saved. Archives containing any -tiny blocks can only
-be extracted in a single thread even if multiple blocks are present.
-Pre/post processing is not verified at compress time, which means that
-decompression errors can only be caught by comparing to the original file.
-
-The default format is JIDAC. Files are fragmented along content-dependent
-boundaries and those fragments whose SHA-1 hashes do not match those
-already in the archive are grouped into blocks up to 16 MB and compressed.
-Each update is an append-only operation that is considered a dated
-transaction that is undone if interrupted before finished. A transaction
-consists of a header block, a set of data blocks containing fragments,
-a set of fragment table blocks, and a set of index update blocks. Each
-block has a locator tag and a single segment with all fields used.
-The comment field contains the size as a decimal string followed by
-the 5 byte string " jDC\x01".
-
-The filename fields are in lexicographical order, beginning with "jDC"
-followed by the 14 digit transaction date in the form YYYYMMDDHHMMSS,
-a letter indicating its type (c,d,h,i), and a 10 digit number N,
-for example, "jDC20121231235959d0000000001". The blocks are as follows:
-
-  Type        Contents
-  --------     --------
-  c header    csize[8]
-  d data      frag[fsize[N..N+F-1]][F] fsize[F][4] N[4] F[4]
-  h hashes    bsize[4] (sha1[20] fsize[4])[N...]
-  i index     (0[8] filename 0 | 
-               date[8] filename 0 na[4] attr[na] ni[4] ptr[4][ni])[]
-
-The header block (type c) contains the 8 byte compressed size of the sequence
-of data blocks (type d) to follow. All numbers are in little-endian (LSB
-first) format. Skipping over these blocks speeds up reading the index.
-N is the first fragment ID of the first data block of the transaction.
-
-The data blocks (type d) contain a sequence of fragments. At the
-end is a list containing the size of the fragments, followed by the
-ID of the first fragment (same as N in the filename) and then the
-number of fragments. The first fragment ID in the archive is 1, after
-which they are ordered consecutively.
-
-There is one hash table (type h) block for each data block, with the
-corresponding N in the filename. It contains the compressed size
-of the corresponding block, followed by a list of SHA-1 hashes
-and sizes of the corresponding segments. The sizes must be consistent
-with those at the end of the data block. Fragments with identical
-hashes are assumed to be identical.
-
-There may be any number of index (type i) blocks which contain updates
-to the archive index when the transactions are processed in order.
-An update is either a new/changed or a deleted file. A deletion is indicated
-by a date of 0. Otherwise the filename is followed by the number of
-attribute bytes (always 0), then those bytes (reserved for future use),
-then the number of fragments, and finally a list of fragment indexes
-which point to either the current or earlier transactions.
-A file is extracted by concatenating those data fragments. The filename is
-UTF-8 encoded with "/" as the path separator, and NUL terminated.
-The number N in the filename is arbitrary but different for each index
-block.
-
-  -threads N
-
-Specify the number of parallel threads for compression or decompression.
-Each thread needs about 100-150 MB memory depending on the compression
-method. (Custom methods could be arbitrarily high). The default is
-the number of cores. Cores are detected by %NUMBER_OF_PROCESSORS%
-in Windows or from /proc/cpuinfo in Linux. N does not include threads
-for reading or writing.
-
-  -run hcomp in out
-  -run pcomp in out
+  -run hcomp [in [out]]
+  -run pcomp [in [out]]
 
 Run the HCOMP or PCOMP section of config.cfg specified by -method,
 taking input from in (default stdin) and writing to out (default stdout).
@@ -280,17 +188,6 @@ displayed in the same format. The output shows the ZPAQL instruction
 and registers after each step, and a memory dump (omitting zeros) at
 the end, once per argument.
 
-  -detailed
-
-With -list, give a techinal listing that includes the decompiled
-ZPAQL block headers, segment header contents, and JIDAC fragment
-tables and indexes. With -add and -extract, show detailed steps.
-
-  -quiet
-
-With -add and -extract, display only errors and warnings.
-
-
 TO COMPILE:
 
 This program needs libzpaq from http://mattmahoney.net/zpaq/ and
@@ -305,8 +202,8 @@ With Visual C++:
 
 For Linux:
 
-  g++ -O3 -s -msse2 -Dunix -fopenmp -DNDEBUG \
-  zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq
+  g++ -O3 -s -msse2 -Dunix -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c \
+  -fopenmp -o zpaq
 
 Possible options:
 
@@ -749,8 +646,8 @@ public:
     (void)ftruncate(fileno(out), newsize);
   }
 
-  // Close file and set date if not 0
-  void close(int64_t date=0) {
+  // Close file and set date if not 0. Set permissions if attr low byte is 'u'
+  void close(int64_t date=0, int64_t attr=0) {
     if (out) fclose(out);
     out=0;
     if (date>0) {
@@ -759,6 +656,8 @@ public:
       ub.modtime=unix_time(date);
       utime(filename.c_str(), &ub);
     }
+    if ((attr&255)=='u')
+      chmod(filename.c_str(), attr>>8);
   }
 
   ~OutputFile() {close();}
@@ -771,6 +670,7 @@ class OutputFile: public libzpaq::Writer {
   HANDLE out;               // output file handle
   libzpaq::Array<char> buf; // output buffer
   DWORD ptr;                // number of pending output bytes
+  std::wstring filename;    // filename as wide string
 public:
   OutputFile(): out(INVALID_HANDLE_VALUE), buf(BUFSIZE), ptr(0) {}
 
@@ -780,24 +680,24 @@ public:
   }
 
   // Open file ready to update or append, create if needed
-  bool open(const char* filename) {
+  bool open(const char* filename_) {
     assert(!isopen());
     ptr=0;
-    std::wstring w=utow(filename);
-    out=CreateFile(w.c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+    filename=utow(filename_);
+    out=CreateFile(filename.c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
                    FILE_ATTRIBUTE_NORMAL, NULL);
     if (out==INVALID_HANDLE_VALUE) {  // print error message
       int err=GetLastError();
       if (err==ERROR_FILE_NOT_FOUND)
-        fwprintf(stderr, L"%s: file not found\n", w.c_str());
+        fwprintf(stderr, L"%s: file not found\n", filename.c_str());
       else if (err==ERROR_PATH_NOT_FOUND)
-        fwprintf(stderr, L"%s: path not found\n", w.c_str());
+        fwprintf(stderr, L"%s: path not found\n", filename.c_str());
       else if (err==ERROR_ACCESS_DENIED)
-        fwprintf(stderr, L"%s: access denied\n", w.c_str());
+        fwprintf(stderr, L"%s: access denied\n", filename.c_str());
       else if (err==ERROR_SHARING_VIOLATION)
-        fwprintf(stderr, L"%s: in use by another process\n", w.c_str());
+        fwprintf(stderr, L"%s: sharing violation\n", filename.c_str());
       else
-        fwprintf(stderr, L"%s: Windows error %d\n", w.c_str(), err);
+        fwprintf(stderr, L"%s: Windows error %d\n", filename.c_str(), err);
     }
     else
       SetFilePointer(out, 0, NULL, FILE_END);
@@ -864,8 +764,8 @@ public:
     SetEndOfFile(out);
   }
 
-  // Close file and set date if not 0
-  void close(int64_t date=0) {
+  // Close file and set date if not 0. Set attr if low byte is 'w'.
+  void close(int64_t date=0, int64_t attr=0) {
     if (isopen()) {
       flush();
       if (date>0) {
@@ -885,6 +785,9 @@ public:
       }
       CloseHandle(out);
       out=INVALID_HANDLE_VALUE;
+      if ((attr&255)=='w')
+        SetFileAttributes(filename.c_str(), attr>>8);
+      filename=L"";
     }
   }
   ~OutputFile() {close();}
@@ -1087,15 +990,17 @@ struct HT {
 struct DTV {
   int64_t date;          // decimal YYYYMMDDHHMMSS (UT) or 0 if deleted
   int64_t size;          // size or -1 if unknown
+  int64_t attr;          // first 8 attribute bytes
   vector<unsigned> ptr;  // list of fragment indexes to HT
   int version;           // which transaction was it added?
   bool streaming;        // true if any fragment sizes are unknown or too big
-  DTV(): date(0), size(0), version(0), streaming(false) {}
+  DTV(): date(0), size(0), attr(0), version(0), streaming(false) {}
 };
 
 // filename entry
 struct DT {
   int64_t edate;         // date of external file, 0=not found
+  int64_t eattr;         // external file attributes ('u' or 'w' in low byte)
   vector<DTV> dtv;       // list of versions
   int written;           // 0..ptr.size() = fragments output. -1=ignore
   DT(): edate(0), written(-1) {}
@@ -1143,14 +1048,14 @@ private:
   int64_t read_archive();  // read index block chain into ht, dt
   void read_args(bool force);  // read command line args, scan directories
   void scandir(const char* filename);   // scan dirs and add args to dt
-  void addfile(const char* filename, int64_t date);  // add to dt
+  void addfile(const char* filename, int64_t date, int64_t attr);
   void write_fragments(CompressJob& job, StringBuffer& b,
                        unsigned& block_start);  // compress fragments in b
 };
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.02 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.03 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ...\n"
@@ -1335,6 +1240,11 @@ int64_t Jidac::read_archive() {
     return 0;
   }
   if (!quiet) printf("Reading archive %s\n", archive.c_str());
+  if (command=="-list") {
+    printf(
+    "Version    Date Time UTC Attrib     Size   Cmp File : Frag IDs\n"
+    "---- ---------- -------- ------ ----------- - ----------------\n");
+   }
 
   // Scan archive contents
   libzpaq::Decompresser d;
@@ -1413,11 +1323,12 @@ int64_t Jidac::read_archive() {
               && fdate<30000000000000LL) {
             data_offset=in.tell();
             bool isbreak=false;
+            int64_t jmp=0;
             if (++fversion>version)  // roll back archive to here
               isbreak=true;
             else if (os.size()==8) {  // jump
               const char* s=os.c_str();
-              int64_t jmp=btol(s);
+              jmp=btol(s);
               if (jmp<0) {
                 fprintf(stderr, "Incomplete transaction ignored\n");
                 isbreak=true;
@@ -1430,13 +1341,12 @@ int64_t Jidac::read_archive() {
               isbreak=true;
             }
             if (isbreak) {
-              if (!quiet)
-                printf("Archive truncated to %1.0f\n", double(block_offset));
               in.close();
               return block_offset;
             }
-            if (!quiet)
-              printf("%4d %s\n", fversion, datetostring(fdate).c_str());
+            if (command=="-list")
+              printf("%4d %s %18.0f   : %u\n", fversion,
+                     datetostring(fdate).c_str(), double(jmp), num);
           }
 
           // Fragment table. Filename is jDCYYYYMMDDHHMMSSdNNNNNNNNNN
@@ -1480,7 +1390,8 @@ int64_t Jidac::read_archive() {
               s+=strlen(fp)+1;  // skip filename
               if (dtv.date && s<=end-8) {
                 const unsigned na=btoi(s);
-                s+=na;  // skip attr
+                for (unsigned i=0; i<na && s<end; ++i, ++s)  // read attr
+                  if (i<8) dtv.attr+=int64_t(*s&255)<<(i*8);
                 if (s<=end-4) {
                   const unsigned ni=btoi(s);
                   dtv.ptr.resize(ni);
@@ -1513,8 +1424,6 @@ int64_t Jidac::read_archive() {
             if (size(dtr.dtv)>0 && dtr.dtv.back().version>=fversion) {
               fversion=dtr.dtv.back().version+1;
               if (fversion>version) {
-                if (!quiet)
-                  printf("Archive truncated to %1.0f\n",double(block_offset));
                 in.close();
                 return block_offset;
               }
@@ -1591,7 +1500,7 @@ void Jidac::scandir(const char* filename) {
   struct stat sb;
   if (!lstat(filename, &sb)) {
     if (S_ISREG(sb.st_mode))
-      addfile(filename, decimal_time(sb.st_mtime));
+      addfile(filename, decimal_time(sb.st_mtime), 'u'+(sb.st_mode<<8));
 
     // Traverse directory
     else if (S_ISDIR(sb.st_mode)) {
@@ -1611,7 +1520,7 @@ void Jidac::scandir(const char* filename) {
     }
   }
   else
-    addfile(filename, 0);
+    addfile(filename, 0, 0);
 
 #else  // Windows
 
@@ -1625,7 +1534,8 @@ void Jidac::scandir(const char* filename) {
       if (FileTimeToSystemTime(&sb.ftLastWriteTime, &st)) {
         addfile(filename,
                 st.wYear*10000000000LL+st.wMonth*100000000LL+st.wDay*1000000
-                +st.wHour*10000+st.wMinute*100+st.wSecond);
+                +st.wHour*10000+st.wMinute*100+st.wSecond,
+                'w'+(int64_t(sb.dwFileAttributes)<<8));
       }
     }
 
@@ -1647,14 +1557,15 @@ void Jidac::scandir(const char* filename) {
     }
   }
   else
-    addfile(filename, 0);
+    addfile(filename, 0, 0);
 #endif
 }
 
 // Add external file and its date to dt
-void Jidac::addfile(const char* filename, int64_t edate) {
+void Jidac::addfile(const char* filename, int64_t edate, int64_t attr) {
   DT& d=dt[unrename(filename)];
   d.edate=edate;
+  d.eattr=attr;
   d.written=0;
 }
 
@@ -2672,7 +2583,19 @@ void Jidac::add() {
     else if (p->second.edate
              && (force || p->second.edate!=p->second.dtv.back().date)) {
       is+=ltob(p->second.edate)+p->first+'\0';
-      is+=itob(0)+itob(size(p->second.dtv.back().ptr));
+      if ((p->second.eattr&255)=='u') {  // unix attributes
+        is+=itob(3);
+        is.put('u');
+        is.put(p->second.eattr>>8&255);
+        is.put(p->second.eattr>>16&255);
+      }
+      else if ((p->second.eattr&255)=='w') {  // windows attributes
+        is+=itob(5);
+        is.put('w');
+        is+=itob(p->second.eattr>>8);
+      }
+      else is+=itob(0);
+      is+=itob(size(p->second.dtv.back().ptr));  // list of frag pointers
       for (int i=0; i<size(p->second.dtv.back().ptr); ++i)
         is+=itob(p->second.dtv.back().ptr[i]);
     }
@@ -2915,7 +2838,7 @@ ThreadReturn decompressThread(void* arg) {
           assert(dtr.dtv.back().date);
           assert(job.outf.isopen());
           assert(job.lastdt!=job.jd.dt.end());
-          job.outf.close(dtr.dtv.back().date);
+          job.outf.close(dtr.dtv.back().date, dtr.dtv.back().attr);
           job.lastdt=job.jd.dt.end();
         }
       }
@@ -3188,7 +3111,7 @@ void Jidac::list() {
                   putchar(' ');
                   if (p>end-4) break;
                   int n=btoi(p);  // na
-                  while (n>0 && p<end)
+                  while (n-->0 && p<end)
                     printf("%02x", *p++&255); // attr
                   if (p>end-4) break;
                   n=btoi(p);  // ni
@@ -3230,12 +3153,17 @@ void Jidac::list() {
     }
     if (files.size() && p->second.written==-1) continue;
     for (unsigned i=0; i<p->second.dtv.size(); ++i) {
-      printf("%4d ", p->second.dtv[i].version);
+      printf("%4d ", p->second.dtv[i].version);  // print date
       const int64_t t=p->second.dtv[i].date;
       printf("%s ", datetostring(t).c_str());
 
+      // Print attributes
+      char cmp=p->second.dtv[i].attr&255;
+      printf(cmp=='u' ? "%6o" : cmp=='w' ? "0x%04x" : "      ",
+        int(p->second.dtv[i].attr>>8));
+
       // Compute comparison result symbol
-      char cmp=' ';
+      cmp=' ';
       if (p->second.written==0 && i+1==p->second.dtv.size()) {
         if (p->second.dtv[i].date) {
           if (p->second.edate==0) cmp='>';
@@ -3244,6 +3172,8 @@ void Jidac::list() {
         }
         else if (p->second.edate) cmp='<';
       }
+
+      // Print size, comparison, filename, fragment list
       if (p->second.dtv[i].size>=0 && p->second.dtv[i].date)
         printf("%12.0f ", double(p->second.dtv[i].size));
       else printf("             ");
