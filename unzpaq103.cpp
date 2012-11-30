@@ -1,7 +1,7 @@
-/*  unzpaq1 v1.02 ZPAQ reference decompressor
+/*  unzpaq1 v1.03 ZPAQ reference decompressor
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, June 14, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 8, 2009.
 
     LICENSE
 
@@ -45,6 +45,10 @@ and help message. No functional changes.
 
 1.02 - June 14, 2009. Closes output files immediately instead of
 when program exits. Fixed g++ 4.4 warnings.
+
+1.03 - Sept. 8, 2009. Added support for extracting segmented files.
+(Unnamed segments are appended to the last named segment). Rejects
+absolute paths and suspicious filenames in archive.
 
 */
 
@@ -1550,7 +1554,21 @@ void PostProcessor::write(int c) {
 
 /////////////////////////// Decompress ///////////////////////
 
+// Reject archive filenames that might cause problems
+bool validate_filename(const char* filename) {
+  int len=strlen(filename);
+  if (len<1) return true;  // No name is OK
+  if (len>511) return false;  // name too long
+  if (strstr(filename, "../")) return false; // no backward paths
+  if (strstr(filename, "..\\")) return false;
+  if (filename[0]=='/' || filename[0]=='\\') return false; // no absolute path
+  for (int i=0; i<len; ++i)  // no control chars, drive letters, or devices
+    if ((filename[i]&255)<32 || filename[i]==':') return false;
+  return true;
+}
+
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
+// If a segment has no filename, then append to the previous file.
 void decompress(int argc, char** argv) {
   assert(argc>=3);
   assert(argv[1][0]=='x');
@@ -1559,10 +1577,9 @@ void decompress(int argc, char** argv) {
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
 
-  // number of files extracted
-  int filecount=0;
-
   // Read the archive
+  int filecount=0;  // number of files extracted
+  FILE *out=0;  // file to extract
   int c;
   while ((c=getc(in))=='z') {
     if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
@@ -1590,43 +1607,53 @@ void decompress(int argc, char** argv) {
       while ((c=getc(in))!=EOF && c!=0) ;
       if (getc(in)) error("reserved");  // reserved 0
 
-      // If the user gave an output file starting at argv[3], use it instead.
-      // If the user doesn't name all the files, then stop after the last
-      // named file.
-      FILE* out=0;
-      if (argc>3) {
-        if (filecount+3 < argc) {
-          out=fopen(argv[filecount+3], "wb");
-          if (!out) {
-            perror(argv[filecount+3]);
-            printf("skipping %s -> %s ... ", filename, argv[filecount+3]);
-          }
-          else
-            printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
-        }
-        else {
-          printf("Skipping %s and remaining files\n", filename);
-          goto end;
-        }
-      }
+      // If a segment is named, or no output file is open, then
+      // create a new output file.
+      if (filename[0] || !out) {
+        if (out) fclose(out), out=0;
 
-      // Otherwise, use the names in the archive, but don't clobber.
-      else {
-        out=fopen(filename, "rb");
-        if (out) {
-          printf("Won't overwrite %s, skipping... ", filename);
-          fclose(out);
-          out=0;
-        }
-        else {
-          out=fopen(filename, "wb");
-          if (!out) {
-            perror(filename);
-            printf("skipping %s ... ", filename);
+        // If the user gave an output file starting at argv[3], use it instead.
+        // If the user doesn't name all the files, then stop after the last
+        // named file.
+        if (argc>3) {
+          if (filecount+3 < argc) {
+            out=fopen(argv[filecount+3], "wb");
+            if (!out) {
+              perror(argv[filecount+3]);
+              goto end;
+            }
+            else
+              printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
+          }
+          else {
+            printf("Skipping %s and remaining files\n", filename);
+            goto end;
           }
         }
-        if (out)
-          printf("Decompressing %s ... ", filename);
+
+        // Otherwise, use the names in the archive, but don't clobber
+        // or use suspicious filenames
+        else {
+          if (!validate_filename(filename)) {
+            printf("Bad filename in archive: %s\n", filename);
+            goto end;
+          }
+          out=fopen(filename, "rb");
+          if (out) {
+            printf("Error: won't overwrite %s\n", filename);
+            goto end;
+          }
+          else {
+            out=fopen(filename, "wb");
+            if (!out) {
+              perror(filename);
+              goto end;
+            }
+          }
+          if (out)
+            printf("Decompressing %s ... ", filename);
+        }
+        ++filecount;
       }
 
       // Decompress
@@ -1635,8 +1662,6 @@ void decompress(int argc, char** argv) {
       while ((c=dec.decompress())!=EOF)
         pp.write(c);
       pp.write(-1);
-      ++filecount;
-      if (out) fclose(out);
 
       // Check for end of segment and block markers
       int eos=getc(in);  // 253=SHA1 follows, 254=EOS
@@ -1671,6 +1696,7 @@ void decompress(int argc, char** argv) {
 
   // Close the archive
 end:
+  if (out) fclose(out);
   printf("%d file(s) extracted\n", filecount);
   fclose(in);
 }
@@ -1732,7 +1758,7 @@ void list(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("UNZPAQ v1.02 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
+  printf("UNZPAQ v1.03 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
