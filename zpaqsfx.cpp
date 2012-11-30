@@ -1,4 +1,4 @@
-/*  zpaqsfx v1.03 ZPAQ self extracting archive stub.
+/*  zpaqsfx v1.04 ZPAQ self extracting archive stub.
 
 (C) 2009, Ocarina Networks, Inc.
     Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 14, 2009.
@@ -1803,7 +1803,7 @@ void list(int argc, char** argv) {
 
 // Command syntax: zpaqsfx.exe [x [files...]]
 int main(int argc, char** argv) {
-  if (argc>1 && argv[1][0]=='x' and argv[1][1]==0)
+  if (argc>1 && argv[1][0]=='x' && argv[1][1]==0)
     decompress(argc, argv);
   else
     list(argc, argv);

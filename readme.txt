@@ -1,5 +1,5 @@
-README for ZPAQ v1.03
-Matt Mahoney - Sept. 14, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v1.04
+Matt Mahoney - Sept. 18, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
@@ -23,6 +23,12 @@ and l (list) commands. zpaq understand the following:
   x archive - Extract all files using stored names (does not clobber).
   x archive files... - Extract and rename (clobbers).
   l archive - List archive contents.
+
+zpaq (but not unzpaq) can read and append to self
+extracting archives. To make a Windows self-extracting archive,
+append to a copy of zpaqsfx.exe. When the appended program is
+run, it will list its contents and prompt to use the x command
+to extract its contents.
 
 Advanced options:
 
@@ -263,11 +269,12 @@ Contents:
 
   unzpaq.exe -   32 bit Windows executable, compiled as follows with
                  MinGW g++ 4.4:
-                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
-                   -DNDEBUG unzpaq103.cpp -o unzpaq.exe
+                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro  \
+                   -DNDEBUG unzpaq103.cpp -fno-exceptions -fno-rtti \
+                   -o unzpaq.exe 
                  upx unzpaq.exe
 
-  zpaq103.cpp -  Compressor source code, not a part of the standard.
+  zpaq104.cpp -  Compressor source code, not a part of the standard.
                  Compiled as above.
 
   zpaq.exe -     32 bit Windows executable.
@@ -282,10 +289,11 @@ Contents:
 
   zpaqsfx.tag -  16 random bytes appended to zpaqsfx.exe.
 
-  zpaqsfx.exe -  Stub for self extracting archives created as follows:
-                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro
-                   -DNDEBUG zpaqsfx.cpp
-                 upx a.exe
+  zpaqsfx.exe -  Stub for self extracting archives created as follows
+                 with MINGW g++ 4.4.0 and upx 3.00w:
+                 g++ -O2 -s -fomit-frame-pointer -march=pentiumpro \
+                   -DNDEBUG zpaqsfx.cpp -fno-exceptions -fno-rtti
+                 upx --all-methods --all-filters a.exe
                  copy/b a.exe+zpaqsfx.tag zpaqsfx.exe
 
   readme.txt -   This file
@@ -385,3 +393,7 @@ v1.03 - Sept. 8, 2009. unzpaq and zpaq: added support for appending
         full header as a C array.
 
         Sept. 14, 2009. Added zpaqsfx 1.03.
+
+v1.04 - Sept. 18, 2009. zpaq will extract from self extracting archives.
+        Added progress meter. zpaqsfx.exe is slightly smaller. Fixed
+        zpaqsfx.cpp compiler issue (replaced "and" with "&&" in main()).
