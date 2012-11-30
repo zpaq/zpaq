@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.05 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.06 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -43,21 +43,20 @@ Usage: zpaq -options ... (may be abbreviated)
   -method C [N]...           or use ZPAQL program C.cfg with args
   -force                     Add even if file dates are unchanged
   -streaming -solid -tiny    Add unconditionally in older formats
+-list A [F]...               Show F... in A.zpaq (default: all)
+  -summary [N]               Show top N files and types (default: 20)
+  -history [N]               Show last N updates (default: all)
+  -compare                   Compare -internal and +external files
+  -detailed                  Technical listing
 -extract A [F]...            Decompress files/dirs F... (default: all)
   -to E...                   Extract F... to E...
   -force                     Overwrite existing files
--list A [F]...               Show F... in A.zpaq (default: all)
-  -detailed                  Technical listing
-  -summary                   Summary of contents only
-  -history [N]               Show last N updates (default: all)
-  -force                     Do not compare to external files
 -not F...                    Do not add/extract/list
 -version N                   Roll back archive (default: latest)
 -quiet                       Display only errors and warnings
 -threads N                   Default shown is cores detected
 -run hcomp|pcomp [in [out]]  Run C.cfg (default: stdin, stdout)
 -trace hcomp|pcomp [N|xN]... Single step with decimal/hex inputs
-
 
 Some options can take a variable number of arguments, which will
 be filled in with default values as needed. With no options, the
@@ -273,48 +272,16 @@ are not valid.
   -list A [F]...
 
 List the contents of files and directories F... (default: all)
-in archive A.zpaq. A listing produces two tables. The first
-table lists each version giving the version number, date, time,
-size, and first fragment ID. Versions start with 1 and are
-incremented for each update (-add). The date and time of the
-update is given in universal coordinated time (UTC) based on
-the computer's clock. The size is the total uncompressed size of the
-file fragments after deduplication. Fragments IDs are added
-sequentially from 1, so it is possible to determine the number
-of fragments by subtracting the starting fragment of the previous
-version.
-
-The second table lists all files that match F or are in directory
-F. Matching is case-insensitive in Windows. For each match, there
-may be multiple versions. Each line shows the version number,
-last-modified time of that version, attributes, uncompressed size,
-comparison result, file name, and list of fragments, for example:
-
-   8 2009-09-27 20:05:56 0x0020      768771 = calgary/book1 : 3-9
-
-This shows that calgary/book1, dated 2009, was added in version 8
-of the archive. If the file is later deleted, the time will be
-replaced with "deleted". The file is stored in fragment numbers
-3 through 9. The "=" means that the file has the same date as
-stored on external disk. The other possible comparison results
-are "#" if the dates are different or ">" if the external file
-does not exist or option -force is used.
-
-The version number is incremented once by each -add in normal mode,
-as detected by the dated transaction header. If a file is added in
--streaming, -solid, or -tiny mode (which lacks such headers), then
-the version number is incremented as required so that each copy
-of the file has a different version number.
-
-The attributes are given as a hexadecimal number in Windows or
-octal in Linux. The meaning in Windows is given in
-http://msdn.microsoft.com/en-us/library/windows/desktop/gg258117(v=vs.85).aspx
-The most common values are 0x0080 for a normal file or 0x0020
-if the archive bit is set. In Linux, the number is octal and interpreted
-as in chmod with the first 2 digits "10" meaning a normal file.
-A common value is 100644 meaning user read and write permission
-and read-only for group and others. Directory permissions are
-not saved or restored.
+in archive A.zpaq. For each file, the last-modified time,
+attributes, uncompressed size, and filename is shown. For
+files added in Windows, the attributes are shown in the form
+"+ASHRI" where the letters are blank unless the archive, system,
+hidden, read-only, and index attributes are respectively set. In Linux,
+the attributes are shown as a 6 digit octal number as would normally
+be passed to chmod(), e.g. "100644" for a normal file with user
+read-write permissions and read-only for group and others.
+If no attributes are shown then none are stored and the file
+will be restored with default attributes.
 
 File names with international characters are stored and displayed
 in UTF-8 format, which will display incorrectly in a Windows terminal,
@@ -322,28 +289,40 @@ even though they will be extracted correctly.
 
   -history N
 
-Modifies the second -list table so it is grouped by version rather than
-grouped by extension and file name. If N is given, then show only the
-last N (default: all) versions. Each line of output indicates either
-an update/addition or a deletion from the previous version.
+Modifies -list to show a summary of the last N (default all) updates and
+the files that were added or deleted. For each update, the version number,
+archive offset, date and time (UTC), number of files added and deleted, the
+range of fragment IDs, and data size before compression, after
+deduplication, after compression, and after storing the index is shown.
+Each file added is shown with a + followed by the date, attributes,
+size, and file name. Deleted files are shown with a - and the name.
 
-  -summary
+  -summary N
 
-Modifies -list to give a summary which is more useful for very large
-archives. Instead of listing all files F... in the second table,
-only the 99 largest files and directories matching F... in the latest
-version are listed, in descending order by size. For each one, the rank,
-size, number of files, and the file or directory name is given.
-Directories are indicated by a trailing "/". -force has no effect.
+Modifies -list to summarize statistics about the archive. There are
+3 tables. The first table shows the top N (default 20) files,
+directories, and file types (extensions) ranked by total size,
+giving the rank, size, and number of files in each category.
+A second table shows deduplication statistics: the number of
+fragments and bytes that are shared by 0, 1, 2,... files.
+A third table summarizes updates, showing for each one the version
+number, date, number of files added and deleted, and bytes added
+before and after compression. In addition the following is
+reported: number of fragments, number of fragments with unknown
+size (compressed with -tiny), number of blocks, number of blocks
+not referenced by any file, and total size before and after compression.
 
-A third table is also given to show deduplication statistics.
-It shows the number of fragments and corresponding number of bytes
-that are referenced by 0, 1, 2, 3... files in the latest version.
+  -compare
 
-Also given: the number of blocks, the number of blocks containing
-at least one referenced segment, uncompressed size of F...,
-compressed size of the archive, and compression ratio (valid only
-when F... is omitted to list all files).
+Modifies -list to compare internal and external files by last-modified
+date. When there are any differences, show the internal files with
+a leading - (date, attributes, size, and filename) and the external
+files with a leading +. The effect of replacing -list with -add
+with the same arguments F... is to delete files marked -
+and add files marked +. The effect of -extract with the same F...
+is to extract files marked - and overwrite files marked + 
+(requiring -force). With -to, external files are renamed and the
+comparision is to the renamed files.
 
   -detailed
 
@@ -697,13 +676,38 @@ std::wstring utow(const char* ss) {
 
 // Convert 64 bit decimal YYYYMMDDHHMMSS to "YYYY-MM-DD HH:MM:SS"
 // where -1 = unknown date, 0 = deleted.
-string datetostring(int64_t date) {
-  if (date<0)       return "unknown date       ";
-  else if (date==0) return "deleted            ";
+string dateToString(int64_t date) {
+  if (date<=0) return "                   ";
   string s="0000-00-00 00:00:00";
   static const int t[]={18,17,15,14,12,11,9,8,6,5,3,2,1,0};
   for (int i=0; i<14; ++i) s[t[i]]+=int(date%10), date/=10;
   return s;
+}
+
+// Convert 'u'+(N*256) to octal N or 'w'+(N*256) to hex N or "+RASHI"
+string attrToString(int64_t attrib) {
+  string r="      ";
+  if ((attrib&255)=='u') {
+    for (int i=0; i<6; ++i)
+      r[5-i]=(attrib>>(8+3*i))%8+'0';
+  }
+  else if ((attrib&255)=='w') {
+    attrib>>=8;
+    if (attrib&~0x20a7) {  // non-standard flags set?
+      r="0x    ";
+      for (int i=0; i<4; ++i)
+        r[5-i]="0123456789abcdef"[attrib>>(4*i)&15];
+    }
+    else {
+      r="+     ";
+      if (attrib&0x20) r[1]='A';
+      if (attrib&0x04) r[2]='S';
+      if (attrib&0x02) r[3]='H';
+      if (attrib&0x01) r[4]='R';
+      if (attrib&0x2000) r[5]='I';
+    }
+  }
+  return r;
 }
 
 // Convert seconds since 0000 1/1/1970 to 64 bit decimal YYYYMMDDHHMMSS
@@ -782,6 +786,21 @@ public:
 
 #else  // Windows
 
+// Print error message
+void winError(const std::wstring& filename) {
+  int err=GetLastError();
+  if (err==ERROR_FILE_NOT_FOUND)
+    fwprintf(stderr, L"%s: file not found\n", filename.c_str());
+  else if (err==ERROR_PATH_NOT_FOUND)
+    fwprintf(stderr, L"%s: path not found\n", filename.c_str());
+  else if (err==ERROR_ACCESS_DENIED)
+    fwprintf(stderr, L"%s: access denied\n", filename.c_str());
+  else if (err==ERROR_SHARING_VIOLATION)
+    fwprintf(stderr, L"%s: sharing violation\n", filename.c_str());
+  else
+    fwprintf(stderr, L"%s: Windows error %d\n", filename.c_str(), err);
+}
+
 class InputFile: public libzpaq::Reader {
   enum {BUFSIZE=4096};      // input buffer max size
   HANDLE in;                // input file handle
@@ -799,19 +818,7 @@ public:
     std::wstring w=utow(filename);
     in=CreateFile(w.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (in==INVALID_HANDLE_VALUE) {  // print error message
-      int err=GetLastError();
-      if (err==ERROR_FILE_NOT_FOUND)
-        fwprintf(stderr, L"%s: file not found\n", w.c_str());
-      else if (err==ERROR_PATH_NOT_FOUND)
-        fwprintf(stderr, L"%s: path not found\n", w.c_str());
-      else if (err==ERROR_ACCESS_DENIED)
-        fwprintf(stderr, L"%s: access denied\n", w.c_str());
-      else if (err==ERROR_SHARING_VIOLATION)
-        fwprintf(stderr, L"%s: sharing violation\n", w.c_str());
-      else
-        fwprintf(stderr, L"%s: Windows error %d\n", w.c_str(), err);
-    }
+    if (in==INVALID_HANDLE_VALUE) winError(w);
     return in!=INVALID_HANDLE_VALUE;
   }
 
@@ -950,21 +957,8 @@ public:
     filename=utow(filename_);
     out=CreateFile(filename.c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
                    FILE_ATTRIBUTE_NORMAL, NULL);
-    if (out==INVALID_HANDLE_VALUE) {  // print error message
-      int err=GetLastError();
-      if (err==ERROR_FILE_NOT_FOUND)
-        fwprintf(stderr, L"%s: file not found\n", filename.c_str());
-      else if (err==ERROR_PATH_NOT_FOUND)
-        fwprintf(stderr, L"%s: path not found\n", filename.c_str());
-      else if (err==ERROR_ACCESS_DENIED)
-        fwprintf(stderr, L"%s: access denied\n", filename.c_str());
-      else if (err==ERROR_SHARING_VIOLATION)
-        fwprintf(stderr, L"%s: sharing violation\n", filename.c_str());
-      else
-        fwprintf(stderr, L"%s: Windows error %d\n", filename.c_str(), err);
-    }
-    else
-      SetFilePointer(out, 0, NULL, FILE_END);
+    if (out==INVALID_HANDLE_VALUE) winError(filename);
+    else SetFilePointer(out, 0, NULL, FILE_END);
     return isopen();
   }
 
@@ -1177,6 +1171,13 @@ bool ispath(const char* a, const char* b) {
   return *a==0 && (*b==0 || *b=='/' || *b=='\\');
 }
 
+// Convert string to lower case
+string lowercase(string s) {
+  for (unsigned i=0; i<s.size(); ++i)
+    if (s[i]>='A' && s[i]<='Z') s[i]+='a'-'A';
+  return s;
+}
+
 // Read 4 byte little-endian int and advance s
 int btoi(const char* &s) {
   s+=4;
@@ -1276,59 +1277,37 @@ struct DT {
   vector<DTV> dtv;       // list of versions
   int written;           // 0..ptr.size() = fragments output. -1=ignore
   DT(): edate(0), esize(0), eattr(0), written(-1) {}
-  void print(const char* filename, int i) const;  // print i'th version
 };
 
-// Print list of numbers. Shorten like "1 2 3 4 5" to "1-5".
-void printList(const vector<unsigned>& ptr) {
-  bool hyphen=false;
-  for (int i=0; i<size(ptr); ++i) {
-    if (i==0 || i==size(ptr)-1 || ptr[i]!=ptr[i-1]+1 || ptr[i]!=ptr[i+1]-1) {
-      if (!hyphen) printf(" ");
-      hyphen=false;
-      printf("%d", ptr[i]);
-    }
-    else {
-      if (!hyphen) printf("-");
-      hyphen=true;
-    }
+// Version info
+struct VER {
+  int64_t date;          // 0 if not JIDAC
+  int64_t usize;         // uncompressed size of files
+  int64_t fsize;         // uncompressed size of fragments
+  int64_t csize;         // compressed size of data only
+  int64_t offset;        // start of transaction
+  int updates;           // file updates
+  int deletes;           // file deletions
+  int fragments;         // number of fragments
+  int firstFragment;     // first fragment ID
+  VER() {memset(this, 0, sizeof(*this));}
+  void print(int i, int64_t next_offset) const {
+    printf("Archive version:     %d\n", i);
+    printf("Archive offset:      %1.0f\n", double(offset));
+    printf("Time of update (UT): %s\n", dateToString(date).c_str());
+    printf("Files updated:       %d\n", updates);
+    printf("Files deleted:       %d\n", deletes);
+    printf("First fragment ID:   %d\n", firstFragment);
+    printf("Number of fragments: %d\n", fragments);
+    printf("Uncompressed bytes:  %12.0f\n", double(usize));
+    printf("Deduplicated bytes:  %12.0f\n", double(fsize));
+    printf("Compressed bytes:    %12.0f\n", double(csize));
+    printf("Including index:     %12.0f\n", double(next_offset-offset));
+    printf("\n");
   }
-  printf("\n");
-}
+};
 
-// Print i'th element of DT
-void DT::print(const char* filename, int i) const {
-  printf("%4d ", dtv[i].version);  // print version, date
-  const int64_t t=dtv[i].date;
-  printf("%s ", datetostring(t).c_str());
-
-  // Print attributes
-  char cmp=dtv[i].attr&255;
-  printf(cmp=='u' ? "%6o" : cmp=='w' ? "0x%04x" : "      ",
-    int(dtv[i].attr>>8));
-
-  // Compute comparison result symbol
-  cmp=' ';
-  if (written==0) {
-    if (dtv[i].date) {
-      if (edate==0) cmp='>';
-      else if (edate==dtv[i].date) cmp='=';
-      else cmp='#';
-    }
-    else if (edate) cmp='<';
-  }
-
-  // Print size, comparison, filename, fragment list
-  if (dtv[i].size>=0 && dtv[i].date)
-    printf("%12.0f ", double(dtv[i].size));
-  else printf("             ");
-  printf("%c %s ", cmp, filename);
-  if (dtv[i].streaming) printf("*");
-  else printf(":");
-  printList(dtv[i].ptr);
-}
-
-// Compare by filename extension
+// Compare by case-insensitive filename extension
 struct Compare {
   bool operator()(const string& a, const string& b) {
     const char* as=a.c_str();
@@ -1336,11 +1315,11 @@ struct Compare {
     const char* ap=strrchr(as, '.');
     const char* bp=strrchr(bs, '.');
     if (!ap && !bp) return strcmp(as, bs)<0;
-    if (!ap) return false;
-    if (!bp) return true;
-    const int cmp=strcmp(ap, bp);
-    if (cmp) return cmp<0;
-    return strcmp(as, bs)<0;
+    if (!ap) return true;
+    if (!bp) return false;
+    while (*ap && *bp && tolower(*ap)==tolower(*bp)) ++ap, ++bp;
+    if (*ap==*bp) return strcmp(as, bs)<0;
+    return *ap<*bp;
   }
 };
 
@@ -1366,16 +1345,18 @@ private:
   vector<string> tofiles;   // files renamed with -to
   int64_t date;             // now as decimal YYYYMMDDHHMMSS (UT)
   bool force;               // true if -force selected
-  int version;              // Set by -ersion
+  bool compare;             // true if -compare selected
+  int version;              // Set by -version
   int threads;              // default is number of cores + 1
   int history;              // If >0 show updates in -list
-  bool summary;             // true if -summary
+  int summary;              // Arg to -summary
   string method;            // "0".."4" or ZPAQL source code
   int args[9];              // arguments to method
 
   // Archive state
   vector<HT> ht;            // list of fragments
   DTMap dt;                 // set of files
+  vector<VER> ver;          // version info
 
   // Commands
   void add();
@@ -1387,8 +1368,8 @@ private:
   // Support functions
   string rename(const string& name);    // replace files prefix with tofiles
   string unrename(const string& name);  // undo rename
-  int64_t read_archive(int* fvp=0);     // read index block chain into ht, dt
-  void read_args(bool force);  // read command line args, scan directories
+  int64_t read_archive();               // read index block chain
+  void read_args(bool scan, bool all=false);  // read args, scan dirs
   void scandir(const char* filename);   // scan dirs and add args to dt
   void addfile(const char* filename, int64_t edate, int64_t esize,
                int64_t eattr);
@@ -1399,7 +1380,7 @@ private:
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.05 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.06 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ... (may be abbreviated)\n"
@@ -1408,14 +1389,14 @@ void Jidac::usage() {
   "  -method C [N]...           or use ZPAQL program C.cfg with args\n"
   "  -force                     Add even if file dates are unchanged\n"
   "  -streaming -solid -tiny    Add unconditionally in older formats\n"
+  "-list A [F]...               Show F... in A.zpaq (default: all)\n"
+  "  -summary [N]               Show top N files and types (default: 20)\n"
+  "  -history [N]               Show last N updates (default: all)\n"
+  "  -compare                   Compare -internal and +external files\n"
+  "  -detailed                  Technical listing\n"
   "-extract A [F]...            Decompress files/dirs F... (default: all)\n"
   "  -to E...                   Extract F... to E...\n"
   "  -force                     Overwrite existing files\n"
-  "-list A [F]...               Show F... in A.zpaq (default: all)\n"
-  "  -detailed                  Technical listing\n"
-  "  -summary                   Summary of contents only\n"
-  "  -history [N]               Show last N updates (default: all)\n"
-  "  -force                     Do not compare to external files\n"
   "-not F...                    Do not add/extract/list\n"
   "-version N                   Roll back archive (default: latest)\n"
   "-quiet                       Display only errors and warnings\n"
@@ -1452,7 +1433,7 @@ string Jidac::unrename(const string& name) {
 string expandOption(const char* opt) {
   const char* opts[]={"-list","-detailed",
     "-add","-method","-streaming","-solid","-tiny",
-    "-extract","-force","-quiet", "-history", "-summary",
+    "-extract","-force","-quiet", "-history", "-summary","-compare",
     "-to","-not","-version","-threads","-run","-trace",
     "hcomp","pcomp",0};
   const int n=strlen(opt);
@@ -1474,8 +1455,8 @@ void Jidac::doCommand(int argc, char** argv) {
 
   // initialize to default values
   command="";
-  detailed=force=summary=false;
-  history=0;
+  detailed=force=compare=false;
+  summary=history=0;
   date=0;  // only needed by -add in JIDAC mode
   version=0x7fffffff;
   threads=numberOfProcessors();
@@ -1497,10 +1478,14 @@ void Jidac::doCommand(int argc, char** argv) {
     else if (opt=="-detailed") detailed=true;
     else if (opt=="-quiet") quiet=true;
     else if (opt=="-force") force=true;
-    else if (opt=="-summary") summary=true;
+    else if (opt=="-compare") compare=true;
     else if (opt=="-history") {
       history=0x7fffffff;
       if (i<argc-1 && isdigit(argv[i+1][0])) history=atoi(argv[++i]);
+    }
+    else if (opt=="-summary") {
+      summary=20;
+      if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
     }
     else if (opt=="-threads" && i<argc-1) {
       threads=atoi(argv[++i]);
@@ -1565,10 +1550,10 @@ void Jidac::doCommand(int argc, char** argv) {
   else usage();
 }
 
-// Read archive up to -date into ht, dt. Return place to append.
-// Store latest version number in *fvp unless NULL.
-int64_t Jidac::read_archive(int* fvp) {
+// Read archive up to -date into ht, dt, ver. Return place to append.
+int64_t Jidac::read_archive() {
   ht.resize(1);  // element 0 not used
+  ver.resize(1); // version 0
 
   // Open archive or archive.zpaq
   InputFile in;
@@ -1581,11 +1566,6 @@ int64_t Jidac::read_archive(int* fvp) {
       exit(1);
   }
   if (!quiet) printf("Reading archive %s\n", archive.c_str());
-  if (command=="-list") {
-    printf(
-    "Version    Date Time UTC Attrib     Size   Cmp File : Frag IDs\n"
-    "---- ---------- -------- ------ ----------- - ----------------\n");
-   }
 
   // Scan archive contents
   libzpaq::Decompresser d;
@@ -1595,14 +1575,12 @@ int64_t Jidac::read_archive(int* fvp) {
     lastfile=lastfile.substr(0, size(lastfile)-5); // drop .zpaq
   int64_t block_offset=0;  // start of last block of any type
   int64_t data_offset=0;   // start of last block of fragments
-  double memory;           // findBlock() output
-  int fversion=0;          // which transaction?
 
   // Detect archive format and read the filenames, fragment sizes,
   // and hashes. In JIDAC format, these are in the index blocks, allowing
   // data to be skipped. Otherwise the whole archive is scanned to get
   // this information from the segment headers and trailers.
-  while (d.findBlock(&memory)) {
+  while (d.findBlock()) {
     try {
       StringWriter filename, comment;
       int segs=0;
@@ -1664,9 +1642,8 @@ int64_t Jidac::read_archive(int* fvp) {
             data_offset=in.tell();
             bool isbreak=false;
             int64_t jmp=0;
-            if (++fversion>version) { // roll back archive to here
+            if (size(ver)>version) // roll back archive to here
               isbreak=true;
-            }
             else if (os.size()==8) {  // jump
               const char* s=os.c_str();
               jmp=btol(s);
@@ -1685,21 +1662,24 @@ int64_t Jidac::read_archive(int* fvp) {
               in.close();
               return block_offset;
             }
-            if (fvp) *fvp=fversion;
-            if (command=="-list")
-              printf("%4d %s %18.0f   : %u\n", fversion,
-                     datetostring(fdate).c_str(), double(jmp), num);
+            ver.push_back(VER());
+            ver.back().offset=block_offset;
+            ver.back().csize=jmp;
+            ver.back().date=fdate;
+            ver.back().firstFragment=num;
           }
 
           // Fragment table. Filename is jDCYYYYMMDDHHMMSSdNNNNNNNNNN
-          // Contents is csize[4] (sha1[20] usize[4])... for fragment N...
-          // where csize is the compressed block size.
+          // Contents is bsize[4] (sha1[20] usize[4])... for fragment N...
+          // where bsize is the compressed block size.
           // Store in ht[].{sha1,usize}. Set ht[].csize to block offset
           // assuming N in ascending order.
           else if (filename.s[17]=='h' && num>0) {
             const char* s=os.c_str();
             const unsigned bsize=btoi(s);
+            assert(size(ver)>0);
             const unsigned n=(os.size()-4)/24;
+            ver.back().fragments+=n;
             if (ht.size()!=num)
               fprintf(stderr,
                 "Unordered fragment tables: expected %d found %1.0f\n",
@@ -1708,7 +1688,7 @@ int64_t Jidac::read_archive(int* fvp) {
               while (ht.size()<=num+i) ht.push_back(HT());
               memcpy(ht[num+i].sha1, s, 20);
               s+=20;
-              ht[num+i].usize=btoi(s);
+              ver.back().fsize+=ht[num+i].usize=btoi(s);
               if (ht[num+i].csize==0)
                 ht[num+i].csize=i?-int(i):data_offset;
             }
@@ -1727,8 +1707,11 @@ int64_t Jidac::read_archive(int* fvp) {
               DT& dtr=dt[fp];
               dtr.dtv.push_back(DTV());
               DTV& dtv=dtr.dtv.back();
-              dtv.version=fversion;
+              dtv.version=size(ver)-1;
               dtv.date=btol(s);
+              assert(size(ver)>0);
+              if (dtv.date) ++ver.back().updates;
+              else ++ver.back().deletes;
               s+=strlen(fp)+1;  // skip filename
               if (dtv.date && s<=end-8) {
                 const unsigned na=btoi(s);
@@ -1739,10 +1722,10 @@ int64_t Jidac::read_archive(int* fvp) {
                   dtv.ptr.resize(ni);
                   for (unsigned i=0; i<ni && s<=end-4; ++i) {
                     dtv.ptr[i]=btoi(s);
-                    if (dtv.ptr[i]>0 && dtv.ptr[i]<ht.size() && dtv.size>=0)
-                      dtv.size+=ht[dtv.ptr[i]].usize;
-                    else
-                      dtv.size=-1;
+                    if (dtv.ptr[i]<1 || dtv.ptr[i]>=ht.size())
+                      error("bad fragment ID");
+                    dtv.size+=ht[dtv.ptr[i]].usize;
+                    ver.back().usize+=ht[dtv.ptr[i]].usize;
                   }
                 }
               }
@@ -1762,18 +1745,28 @@ int64_t Jidac::read_archive(int* fvp) {
           d.readSegmentEnd(sha1result);
           DT& dtr=dt[lastfile];
           if (filename.s.size()>0) {
-            if (!fversion) fversion=1;
-            if (size(dtr.dtv)>0 && dtr.dtv.back().version>=fversion) {
-              fversion=dtr.dtv.back().version+1;
-              if (fversion>version) {
+            if (size(dtr.dtv)>0 && dtr.dtv.back().version>=size(ver)-1) {
+              if (size(ver)>version) {
                 in.close();
                 return block_offset;
               }
-              if (fvp) *fvp=fversion;
+              ver.push_back(VER());
+              ver.back().offset=block_offset;
+              ver.back().date=-1;
             }
             dtr.dtv.push_back(DTV());
             dtr.dtv.back().date=fdate;
-            dtr.dtv.back().version=fversion;
+            dtr.dtv.back().version=size(ver)-1;
+            ver.back().csize=in.tell()-ver.back().offset;
+            if (usize>=0 && ver.back().fsize>=0) {
+              ver.back().usize+=usize;
+              ver.back().fsize+=usize;
+            }
+            else {
+              ver.back().usize=-1;
+              ver.back().fsize=-1;
+            }
+            ++ver.back().updates;
           }
           assert(dtr.dtv.size()>0);
           dtr.dtv.back().ptr.push_back(size(ht));
@@ -1792,21 +1785,24 @@ int64_t Jidac::read_archive(int* fvp) {
     }
   }
   in.close();
-  if (fvp) *fvp=fversion;
   return block_offset;
 }
 
-// Mark each file in dt according to args in -add, -extract, -list, -not
-// using written=0 for each match, or all if no args.
-// If force is false then scan external directories and add to dt.
-void Jidac::read_args(bool force) {
+// Mark each file in dt that matches the args to -add, -extract, -list
+// (in files[]) and not matched to -not (in notfiles[])
+// using written=0 for each match. Match all files in dt if no args
+// (files[] is empty). If all is true, then mark deleted files too.
+// If scan is true then recursively scan external directories in args,
+// add to dt, and mark them.
+void Jidac::read_args(bool scan, bool all) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
+  if (!quiet && scan && size(files)) printf("Scanning files\n");
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (size(files)==0) {
-      if (p->second.dtv.size() && p->second.dtv.back().date) {
-        if (force) p->second.written=0;
-        else scandir(rename(p->first).c_str());
+      if (p->second.dtv.size() && (all || p->second.dtv.back().date)) {
+        if (scan) scandir(rename(p->first).c_str());
+        else p->second.written=0;
       }
     }
     else {
@@ -1817,16 +1813,16 @@ void Jidac::read_args(bool force) {
       for (int i=0; matched && i<size(notfiles); ++i)
         if (ispath(notfiles[i].c_str(), p->first.c_str()))
           matched=false;
-      if (matched && p->second.dtv.size() && p->second.dtv.back().date)
+      if (matched &&
+          (all || (p->second.dtv.size() && p->second.dtv.back().date)))
         p->second.written=0;
     }
   }
 
   // Scan external files and directories
-  if (!force)
+  if (scan)
     for (int i=0; i<size(files); ++i)
       scandir(rename(files[i]).c_str());
-  if (!quiet) printf("\n");
 }
 
 // Insert filename into dt unless in notfiles. recurse=insert subdirectories.
@@ -2662,7 +2658,7 @@ void Jidac::add() {
 #endif
     if (!quiet)
       printf("Adding transaction dated %s (UT)\n",
-             datetostring(date).c_str());
+             dateToString(date).c_str());
     if (now==-1 || date<20120000000000LL || date>30000000000000LL)
       error("date is incorrect");
   }
@@ -2700,7 +2696,7 @@ void Jidac::add() {
       error("-method 1, 2, 3 not supported in -solid or -tiny mode");
 
     // Start block
-    read_args(false);
+    read_args(true);
     libzpaq::Compressor co;
     StringWriter pcomp_cmd;
     OutputFile out;
@@ -2739,7 +2735,7 @@ void Jidac::add() {
 
       // Compress
       co.startSegment(p->first.c_str(), mode==SOLID ?
-        (itos(sz)+" "+datetostring(p->second.edate)).c_str() : 0);
+        (itos(sz)+" "+dateToString(p->second.edate)).c_str() : 0);
       co.setInput(&in);
       while (co.compress(100000)) {
         if (!quiet)
@@ -2776,7 +2772,7 @@ void Jidac::add() {
   // First Read archive index list into ht, dt.
   assert(mode==JIDAC || mode==STREAMING);
   int64_t header_pos=read_archive();
-  read_args(false);
+  read_args(true);
 
   // Build htinv for fast lookups of sha1 in ht
   map<string, unsigned> htinv;     // htinv[ht[i].sha1] == i
@@ -2839,7 +2835,7 @@ void Jidac::add() {
       if (mode!=JIDAC) {
         assert(b.size()==0);
         const char* name=p->first.c_str();  // name to store in archive
-        string comment=" "+datetostring(p->second.edate);
+        string comment=" "+dateToString(p->second.edate);
         while (true) {
           int c=in.get();
           if (c==EOF || b.size()==16000000) {
@@ -3240,7 +3236,7 @@ void Jidac::extract() {
 
   // Read HT, DT
   read_archive();
-  read_args(force);
+  read_args(!force);
 
   // Map fragments to blocks
   ExtractJob job(*this);
@@ -3410,7 +3406,7 @@ void decompile(const string& hcomp, const string& pcomp) {
     printf("post 0 end\n");
 }
 
-// For counting files and sizes by -list -quiet
+// For counting files and sizes by -list -summary
 struct TOP {
   int64_t size;
   int count;
@@ -3505,11 +3501,26 @@ void Jidac::list() {
                     printf("%02x", *p++&255); // attr
                   if (p>end-4) break;
                   n=btoi(p);  // ni
+
+                  // print fragment pointers
                   vector<unsigned> ptr;
                   for (; n>0 && p<=end-4; --n)
                     ptr.push_back(btoi(p));
-                  printList(ptr);
+                  bool hyphen=false;
+                  for (int i=0; i<size(ptr); ++i) {
+                    if (i==0 || i==size(ptr)-1 || ptr[i]!=ptr[i-1]+1
+                     || ptr[i]!=ptr[i+1]-1) {
+                      if (!hyphen) printf(" ");
+                      hyphen=false;
+                      printf("%d", ptr[i]);
+                    }
+                    else {
+                      if (!hyphen) printf("-");
+                      hyphen=true;
+                    }
+                  }
                 }
+                printf("\n");
               }
             }
           }
@@ -3528,15 +3539,15 @@ void Jidac::list() {
     return;
   }
 
-  // Quick list. Show only the largest files and directories, sorted by size,
+  // Summary. Show only the largest files and directories, sorted by size,
   // and block and fragment usage statistics.
   if (summary) {
     const int64_t csize=read_archive();
-    read_args(true);
+    read_args(false);
 
-    // Report 100 biggest files and directores
-    printf("\nRank         Size     Files File or Directory\n"
-             "-- -------------- --------- -----------------\n");
+    // Report biggest files, directories, and extensions
+    printf("\nRank           Size     Files File, Directory/, or .Type\n"
+             "---- -------------- --------- --------------------------\n");
     map<string, TOP> top;  // filename or dir -> total size and count
     vector<int> frag(ht.size());  // frag ID -> reference count
     int unknown_ref=0;  // count fragments and references with unknown size
@@ -3546,10 +3557,18 @@ void Jidac::list() {
           && p->second.written==0) {
         top[""].inc(p->second.dtv.back().size);
         top[p->first].inc(p->second.dtv.back().size);
+        int ext=0;  // location of . in filename
         for (unsigned i=0; i<p->first.size(); ++i) {
-          if (p->first[i]=='/')
+          if (p->first[i]=='/') {
             top[p->first.substr(0, i+1)].inc(p->second.dtv.back().size);
+            ext=0;
+          }
+          else if (p->first[i]=='.') ext=i;
         }
+        if (ext)
+          top[lowercase(p->first.substr(ext))].inc(p->second.dtv.back().size);
+        else
+          top["."].inc(p->second.dtv.back().size);
         for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
           const unsigned j=p->second.dtv.back().ptr[i];
           if (j<frag.size()) {
@@ -3565,14 +3584,14 @@ void Jidac::list() {
       st[-p->second.size].push_back(p->first);
     int i=1;
     for (map<int64_t, vector<string> >::const_iterator p=st.begin();
-         p!=st.end() && i<100; ++p) {
-      for (unsigned j=0; i<100 && j<p->second.size(); ++i, ++j)
-        printf("%2d %14.0f %9d %s\n", i, double(-p->first),
+         p!=st.end() && i<=summary; ++p) {
+      for (unsigned j=0; i<=summary && j<p->second.size(); ++i, ++j)
+        printf("%4d %14.0f %9d %s\n", i, double(-p->first),
                top[p->second[j].c_str()].count, p->second[j].c_str());
     }
 
     // Report block and fragment usage statistics
-    printf("\nShares Fragments          Bytes\n"
+    printf("\nShares Fragments          Bytes (deduplication statistics)\n"
              "------ --------- --------------\n");
     map<unsigned, TOP> fr;
     for (unsigned i=1; i<frag.size(); ++i) {
@@ -3585,6 +3604,18 @@ void Jidac::list() {
       if (int(p->first)==-1) printf(" Total ");
       else printf("%6u ", p->first);
       printf("%9d %14.0f\n", p->second.count, double(p->second.size));
+    }
+
+    // Print versions
+    printf("\n"
+    "Version Date    Time (UT) +Files  -Deleted        Bytes   Compressed\n"
+    "---- ---------- -------- -------- -------- ------------ ------------\n");
+    for (int i=0; i<size(ver); ++i) {
+      if (ver[i].date)
+        printf("%4d %s %8d %8d %12.0f %12.0f\n",
+          i, dateToString(ver[i].date).c_str(), ver[i].updates,
+          ver[i].deletes, double(ver[i].usize),
+          double((i<size(ver)-1 ? ver[i+1].offset : csize)-ver[i].offset));
     }
 
     // Report fragments with unknown size
@@ -3612,19 +3643,49 @@ void Jidac::list() {
 
   // List history
   if (history) {
-    int ver=0;  // current version
-    read_archive(&ver);
-    printf("\nHistory through version %d\n", ver);
-    read_args(force);
-    for (int i=ver-history+1; i<=ver; ++i) {
+    const int64_t csize=read_archive();
+    printf("\nHistory through version %d\n\n", size(ver)-1);
+    read_args(false, true);
+    for (int i=size(ver)-history; i<size(ver); ++i) {
       if (i<0) i=0;
+      if (ver[i].date)
+        ver[i].print(i, i<size(ver)-1 ? ver[i+1].offset : csize);
       for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
         if (p->second.written==0)
           for (unsigned j=0; j<p->second.dtv.size(); ++j)
             if (p->second.dtv[j].version==i)
-              p->second.print(p->first.c_str(), j);
+              printf("%c %s %s %12.0f %s\n",
+                    p->second.dtv[j].date ? '+' : '-',
+                    dateToString(p->second.dtv[j].date).c_str(),
+                    attrToString(p->second.dtv[j].attr).c_str(),
+                    double(p->second.dtv[j].size),
+                    p->first.c_str());
       }
       printf("\n");
+    }
+    return;
+  }
+
+  // Compare. Show internal files with - and external with + if different.
+  if (compare) {
+    read_archive();
+    read_args(true);
+    for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
+      if (p->second.written==0 && (p->second.dtv.size()==0
+          || p->second.dtv.back().date!=p->second.edate)) {
+        if (p->second.dtv.size() && p->second.dtv.back().date)
+          printf("- %s %s %12.0f %s\n",
+                dateToString(p->second.dtv.back().date).c_str(),
+                attrToString(p->second.dtv.back().attr).c_str(),
+                double(p->second.dtv.back().size),
+                p->first.c_str());
+        if (p->second.edate)
+          printf("+ %s %s %12.0f %s\n",
+                 dateToString(p->second.edate).c_str(),
+                 attrToString(p->second.eattr).c_str(),
+                 double(p->second.esize),
+                 rename(p->first).c_str());
+      }
     }
     return;
   }
@@ -3632,24 +3693,22 @@ void Jidac::list() {
   // Ordinary list
   int64_t csize=read_archive();  // read into ht, dt
   int64_t usize=0;
-  int nfiles=0, versions=0, deletions=0;
-  read_args(force);
+  int nfiles=0;
+  read_args(false);
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (!p->second.dtv.size()) continue;
-    if (p->second.dtv.back().date) ++nfiles;
-    if (p->second.dtv.back().size>=0) usize+=p->second.dtv.back().size;
-    for (unsigned i=0; i<p->second.dtv.size(); ++i) {
-      if (p->second.dtv[i].date) ++versions;
-      else ++deletions;
+    if (p->second.written==0 && p->second.dtv.size()
+        && p->second.dtv.back().date) {
+      ++nfiles;
+      usize+=p->second.dtv.back().size;
+      printf("%s %s %12.0f %s\n",
+             dateToString(p->second.dtv.back().date).c_str(),
+             attrToString(p->second.dtv.back().attr).c_str(),
+             double(p->second.dtv.back().size),
+             p->first.c_str());
     }
-    if (files.size() && p->second.written==-1) continue;
-    for (unsigned i=0; i<p->second.dtv.size(); ++i)
-      p->second.print(p->first.c_str(), i);
   }
-  printf("%u versions of %u files and %u deletions in %u fragments\n"
-         "%1.0f -> %1.0f\n",
-         versions, nfiles, deletions, size(ht)-1,
-         double(usize), double(csize));
+  printf("%u files. %1.0f -> %1.0f\n",
+         nfiles, double(usize), double(csize));
 }
 
 ////////////////////////// step, stat ///////////////////////////
