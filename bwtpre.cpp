@@ -81,10 +81,6 @@ void encode(FILE* in, FILE* out) {
   if (!block || !ptr)
     fprintf(stderr, "out of memory\n"), exit(1);
   while (encodeBlock(in, out)) ;
-  putc(0, out);  // mark EOF
-  putc(0, out);
-  putc(0, out);
-  putc(0, out);
   free(ptr);
   free(block);
 }
@@ -95,7 +91,7 @@ int main(int argc, char** argv) {
 
   // check for args
   if (argc<4) {
-    printf("BWT preprocessor, ver. 1.1\n"
+    printf("BWT preprocessor, ver. 1.2\n"
       "(C) 2009, Matt Mahoney.  Free under GPL, http://www.gnu.org/licenses/gpl.txt\n"
       "\n"
       "To BWT encode a file: bbb size input output\n"
