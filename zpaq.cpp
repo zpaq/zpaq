@@ -1,4 +1,4 @@
-/* zpaq.cpp v3.01 - Archiver and compression development tool.
+/* zpaq.cpp v4 - Archiver and compression development tool.
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -23,8 +23,7 @@ It has 4 built in compression levels and also accepts algorithms
 described in configuration files and optional external
 preprocessors. It uses multithreaded compression and decompression
 for archives that have more than one ZPAQ block. It uses just-in-time
-(JIT) speed optimization with an external C++ compiler for non
-built-in compression levels if a C++ compiler is available.
+(JIT) speed optimization on x86-32 and x86-64 processors.
 It can run or trace ZPAQL code in configuration files as a
 tool for debugging them.
 
@@ -38,61 +37,29 @@ With Visual C++
 
   cl /O2 zpaq.cpp libzpaq.cpp divsufsort.c
 
-In Linux, also use options -lpthread -fopenmp
+In Linux, also use option -fopenmp
+In Windows you can use this too if you have pthreadGC2.dll in your PATH.
 Other optimization options may be appropriate.
 
-To enable JIT, The script zpaqopt (zpaqopt.bat in Windows) needs to be in
-your PATH and configured along with an external C++ compiler and this
-source code to enable acceleration. Otherwise, zpaq will still work but
-won't be as fast when compressing with config files or decompressing
-archives that were not compressed with one of the 4 built in levels.
-
-To configure for acceleration, code needs to be prepared in advance
-to link to the generated source code in a place where the script
-can find it, along with the header file libzpaq.h. To produce
-the two object files:
-
-  g++ -O3 -c -DOPT zpaq.cpp libzpaq.cpp
-
--DOPT is meaningful only to zpaq.cpp. It excludes unneeded code
-(like divsufsort) and leaves a "hole" in the program that will be
-filled in by the generated source. Then if you have the following
-files:
-
-  c:\zpaq\zpaq.o
-  c:\zpaq\libzpaq.o
-  c:\zpaq\libzpaq.h
-
-Then zpaqopt.bat should contain:
-
-  g++ -O3 %1.cpp c:\zpaq\zpaq.o c:\zpaq\libzpaq.o -Ic:\zpaq\libzpaq.h -o %1.exe
-
-A typical Linux configuration would look like this:
-
-  /usr/lib/zpaq/zpaq.o     (g++ -O3 -c -DOPT zpaq.cpp)
-  /usr/lib/zpaq/libzpaq.o  (g++ -O3 -c libzpaq.cpp)
-  /usr/include/libzpaq.h
-  /usr/bin/zpaq
-  /usr/bin/zpaqopt
-
-where zpaqopt contains:
-
-  g++ -O3 $1.cpp /usr/lib/zpaq/zpaq.o /usr/lib/zpaq/libzpaq.o -o $1.exe -lpthread
-
-The argument %1 or $1 is the base name of a source code file
-produced by zpaq in a temporary directory.
+To enable run time checks, compile with -DDEBUG
 
 */
+
+#define _FILE_OFFSET_BITS 64
 #include "libzpaq.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
-#include <assert.h>
 #include <string>
 #include <vector>
 #include <fcntl.h>
+
+#ifndef DEBUG
+#define NDEBUG 1
+#endif
+#include <assert.h>
 
 #ifdef unix
 #define PTHREAD 1
@@ -116,29 +83,23 @@ produced by zpaq in a temporary directory.
 #endif
 
 // Forward declarations
-#ifndef OPT
 #include "divsufsort.h"
-bool findModel(const std::string& models, const std::string& comp);
-void optimize(const std::string& models, int argc, char** argv);
 void compile_cmd(const char* cmd);
 void list(const char* filename);
 void block_append();
-#endif
 int numberOfProcessors();  // Default for -t
-extern const char* pcomp_cmd_string;
 
 void usage() {
   fprintf(stderr,
-  "zpaq v3.01 - ZPAQ archiver and compression algorithm development tool.\n"
+  "zpaq v4.00 - ZPAQ archiver and compression algorithm development tool.\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney. Compiled " __DATE__ ".\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
   "Usage: zpaq [-options] command [arguments...]\n"
   "Commands:\n"
   "  c|a archive files...     Compress|append to archive.zpaq\n"
-  "  e|x archive [files...]   Extract to files or as saved without|with paths\n"
+  "  x archive [files...]     Extract as saved or rename to files...\n"
   "  l archive                List contents\n"
-  "  b archive output [N[-N]...]  Append listed blocks to output.zpaq\n"
   "  r [input [output]]       Run config file F.cfg (specified by -m)\n"
   "  t [N...]                 Trace F.cfg with decimal/hex inputs\n"
   "Options:\n"
@@ -153,15 +114,17 @@ void usage() {
   "  -s   Ignore/don't save checksums\n"
   "  -i   Don't save comments\n"
   "  -h   Save locator tag. With r or t run HCOMP (default PCOMP)\n"
-  "  -j0 ... -j3  No JIT, JIT, keep source, exe (default -j1)\n"
   "  -q   Don't test F.cfg postprocessor during compression\n",
   numberOfProcessors());
 #ifdef unix
   if (sizeof(off_t)!=8)
     fprintf(stderr, "Does not work with files larger than 2 GB\n");
 #endif
+#ifdef NOJIT
+  fprintf(stderr, "x86 JIT disabled (compiled with -DNOJIT)\n");
+#endif
 #ifndef NDEBUG
-  fprintf(stderr, "Debug (slow) version, not compiled with -DNDEBUG\n");
+  fprintf(stderr, "Debug (slow) version (compiled with -DDEBUG)\n");
 #endif
   exit(1);
 }
@@ -187,7 +150,6 @@ bool popt=false;       // -p no paths or run/trace PCOMP
 bool iopt=false;       // -i no comments
 bool sopt=false;       // -s no checksums
 bool hopt=false;       // -h no header locator tags, or rh, th commands
-int jopt=1;            // -j0..-j3 = no JIT, JIT, save source, save exe
 bool qopt=false;       // -q don't test postprocessor
 int topt=1;            // -t number of threads
 const char* config=0;  // config file name from -m, r, t
@@ -195,11 +157,8 @@ int args[9]={0};       // config file arguments
 std::string archive;   // archive file name
 const char* hcomp=0;   // COMP+HCOMP selected by -m, length in first 2 bytes
 const char* pcomp=0;   // PCOMP with empty COMP header, selected by -m
-extern const char* pcomp_cmd;  // preprocessor command set by OPT
 bool iserror=false;    // return code, set true by error()
-#ifndef OPT
 const char* pcomp_cmd=0;  // preprocessor command from config file from -m
-#endif
 
 // State: Possible job states. A thread is initialized as READY. When main()
 // is ready to start the thread it is set to RUNNING and runs  it. When
@@ -581,7 +540,7 @@ private:
 // Initialize by opening filename for reading n bytes from start
 // or to EOF if n < 0. id should be unique among threads.
 // If mopt is 1 or 2 then compute the BWTRLE or BWT transform and
-// read from that instead. If mopt is 0 and pcomp_cmd or pcomp_cmd_string
+// read from that instead. If mopt is 0 and pcomp_cmd
 // is not empty then preprocess the input to a temporary file and read
 // from that file instead. This may require a second temporary if the
 // input is not a complete file (start is 0 and either bopt is 0 or
@@ -592,7 +551,6 @@ FileToCompress::FileToCompress(const char* filename, int64_t start,
                                int64_t n, int id) {
 
   // Initialize BWT buffer
-#ifndef OPT
   if (mopt==1 || mopt==2) {
     assert(bopt>0);
     assert(n>=0);
@@ -602,7 +560,6 @@ FileToCompress::FileToCompress(const char* filename, int64_t start,
     rle=0;
     buf.resize(len+5);
   }
-#endif
 
   // Open input
   remaining=n;
@@ -625,12 +582,10 @@ FileToCompress::FileToCompress(const char* filename, int64_t start,
   int c;
   for (int64_t i=0; i!=n && (c=getc(in))!=EOF; ++i) {
     sha1.put(c);
-#ifndef OPT
     if (mopt==1 || mopt==2) {
       assert(i>=0 && i<int64_t(buf.size()-5));
       buf[i]=c;
     }
-#endif
   }
   inputsize=sha1.size();
   memcpy(sha1result, sha1.result(), 20);
@@ -638,18 +593,16 @@ FileToCompress::FileToCompress(const char* filename, int64_t start,
     error("fseek64 failed");
 
   // For modes -m1 and -m2, close input and compute BWT in buf
-#ifndef OPT
   if (mopt==1 || mopt==2) {
     fclose(in);
     in=0;
     int len=n;
-    libzpaq::Array<int> w(len);
+    libzpaq::Array<int> w(len+(len==0));
     int idx=divbwt(&buf[0], &buf[0], &w[0], len);
     if (len>idx) memmove(&buf[idx+1], &buf[idx], len-idx);
     buf[idx]=255;
     for (int j=0; j<4; ++j) buf[len+j+1]=idx>>(j*8);
   }
-#endif
 
   // Preprocess with pcomp_cmd if any
   if (pcomp_cmd) {
@@ -1030,10 +983,8 @@ void run() {
 
   // Run the program
   if (**cmd=='t') {  // trace with numeric args
-#ifndef OPT
     for (int i=1; i<ncmd; ++i) 
       z.step(ntoi(cmd[i]), tolower(cmd[i][0])=='x');
-#endif
   }
   else if (**cmd=='r') {  // run F.cfg input output
     FILE *in=stdin;
@@ -1092,9 +1043,70 @@ thread(void *arg) {
 // Put n'th model into p and return its length (including length code).
 // If there is no n'th model, set p=0 and return 0.
 int getmodel(int n, const char* &p) {
+
+  static const char builtin_models[]={
+
+  // Model 1 fast
+  26,0,1,2,0,0,2,3,16,8,19,0,0,96,4,28,
+  59,10,59,112,25,10,59,10,59,112,56,0,
+
+  // Model 2 bwtrle1 -1
+  21,0,1,0,27,27,1,3,7,0,-38,80,47,3,9,63,
+  1,12,65,52,60,56,0,
+
+  // Model 3 bwtrle1 post -1
+  -101,0,1,0,27,27,0,0,-17,-1,39,48,80,67,-33,0,
+  47,6,90,25,98,9,63,34,67,2,-17,-1,39,16,-38,47,
+  7,-121,-1,1,1,88,63,2,90,25,98,9,63,12,26,66,
+  -17,0,47,5,99,9,18,63,-10,28,63,95,10,68,10,-49,
+  8,-124,10,-49,8,-124,10,-49,8,-124,80,55,1,65,55,2,
+  65,-17,0,47,10,10,68,1,-81,-1,88,27,49,63,-15,28,
+  27,119,1,4,-122,112,26,24,3,-17,-1,3,24,47,-11,12,
+  66,-23,47,9,92,27,49,94,26,113,9,63,-13,74,9,23,
+  2,66,-23,47,9,92,27,49,94,26,113,9,63,-13,31,1,
+  67,-33,0,39,6,94,75,68,57,63,-11,56,0,
+
+  // Model 4 bwt2 -2
+  17,0,1,0,27,27,2,3,5,8,12,0,0,95,1,52,
+  60,56,0,
+
+  // Model 5 bwt2 post -2
+  111,0,1,0,27,27,0,0,-17,-1,39,4,96,9,63,95,
+  10,68,10,-49,8,-124,10,-49,8,-124,10,-49,8,-124,80,55,
+  1,65,55,2,65,-17,0,47,10,10,68,1,-81,-1,88,27,
+  49,63,-15,28,27,119,1,4,-122,112,26,24,3,-17,-1,3,
+  24,47,-11,12,66,-23,47,9,92,27,49,94,26,113,9,63,
+  -13,74,9,23,2,66,-23,47,9,92,27,49,94,26,113,9,
+  63,-13,31,1,67,-33,0,39,6,94,75,68,57,63,-11,56,
+  0,
+
+  // Model 6 mid -3
+  69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
+  18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
+  -1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
+  59,112,10,25,59,112,10,25,59,112,10,25,59,10,59,112,
+  25,69,-49,8,112,56,0,
+
+  // Model 7 max -4
+  -60,0,5,9,0,0,22,1,-96,3,5,8,13,1,8,16,
+  2,8,18,3,8,19,4,8,19,5,8,20,6,4,22,24,
+  3,17,8,19,9,3,13,3,13,3,13,3,14,7,16,0,
+  15,24,-1,7,8,0,16,10,-1,6,0,15,16,24,0,9,
+  8,17,32,-1,6,8,17,18,16,-1,9,16,19,32,-1,6,
+  0,19,20,16,0,0,17,104,74,4,95,2,59,112,10,25,
+  59,112,10,25,59,112,10,25,59,112,10,25,59,112,10,25,
+  59,10,59,112,10,25,59,112,10,25,69,-73,32,-17,64,47,
+  14,-25,91,47,10,25,60,26,48,-122,-105,20,112,63,9,70,
+  -33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
+  10,4,59,112,25,10,4,59,112,25,65,-113,-44,72,4,59,
+  112,8,-113,-40,8,68,-81,60,60,25,69,-49,9,112,25,25,
+  25,25,25,112,56,0,
+
+  0,0};
+
   if (n<1) return p=0,0;
   int len=0;
-  for (p=libzpaq::models; (len=get2(p)) && n>1; --n, p+=len+2);
+  for (p=builtin_models; (len=get2(p)) && n>1; --n, p+=len+2);
   return len ? len+2 : (p=0,0);
 }
 
@@ -1125,7 +1137,6 @@ int main(int argc, char** argv) {
       case 'i': iopt=true; break;
       case 's': sopt=true; break;
       case 'h': hopt=true; break;
-      case 'j': jopt=atoi(cmd[0]+2); break;
       case 'q': qopt=true; break;
       case 't': topt=atoi(cmd[0]+2); break;
       default: usage(); break;
@@ -1137,13 +1148,10 @@ int main(int argc, char** argv) {
   // Process command
   if (ncmd<1 || !cmd || !*cmd) usage();
   switch(cmd[0][0]) {
-    case 'b':
-      if (ncmd<4) usage();
     case 'c':
     case 'a':
       if (ncmd<3) usage();
     case 'x':
-    case 'e':
     case 'l':
       if (ncmd<2) usage();
     case 'r':
@@ -1174,10 +1182,8 @@ int main(int argc, char** argv) {
       bopt=max_bopt;
     }
   }
-  if (**cmd=='e') popt=true;  // ignore paths
   if (**cmd=='c') fopt=true;  // force overwrite
-  if ((**cmd=='e' || **cmd=='x') && ncmd>2) fopt=true;
-  if (**cmd=='t') jopt=0;
+  if (**cmd=='x' && ncmd>2) fopt=true;
 
   // Get archive name. Append .zpaq if not already.
   if (ncmd>1) {
@@ -1191,22 +1197,12 @@ int main(int argc, char** argv) {
 
   // Initialize hcomp, pcomp, pcomp_cmd for commands a, c, t, r
   if (strchr("actr", **cmd)) {
-#ifdef OPT
-    getmodel(1, hcomp);
-    getmodel(2, pcomp);
-#else
 
     // Compile config file. Put result in hcomp, pcomp, pcomp_cmd
     if (config) {
       assert(mopt==0);
       try {
         compile_cmd(config);
-        std::string model_list(hcomp, hcomp+get2(hcomp)+2);
-        if (pcomp) model_list+=std::string(pcomp, pcomp+get2(pcomp)+2);
-        model_list+=char(0);
-        model_list+=char(0);
-        if (jopt>0)
-          optimize(model_list, argc, argv);
       }
       catch(const char* msg) {
         fprintf(stderr, "Error in %s\n", config);
@@ -1220,29 +1216,25 @@ int main(int argc, char** argv) {
       getmodel(mopt*2-(mopt==4), hcomp);  // 2, 4, 6, 7
       if (mopt<=2) getmodel(mopt*2+1, pcomp);  // 3, 5
     }
-#endif
   }
 
   // Run
   if (**cmd=='r' || **cmd=='t') {
-    run();
+    try {
+      run();
+    }
+    catch(const char* msg) {
+      fprintf(stderr, "Run error: %s\n", msg);
+      exit(1);
+    }
     return 0;
   }
 
-#ifndef OPT
   // List
   if (**cmd=='l') {
     list(archive.c_str());
     return 0;
   }
-
-  // Extract blocks: b archive output [N-[N]]...
-  // Append blocks in list from archive to output
-  if (**cmd=='b') {
-    block_append();
-    return 0;
-  }
-#endif
 
   // Schedule compression
   if (**cmd=='a' || **cmd=='c') {
@@ -1288,12 +1280,8 @@ int main(int argc, char** argv) {
   }
 
   // Schedule decompression
-  if (**cmd=='x' || **cmd=='e') {
+  if (**cmd=='x') {
     fprintf(stderr, "Extracting from %s\n", archive.c_str());
-#ifndef OPT
-    std::string model_list;
-    bool non_default=false;
-#endif
     try {
       int64_t offset=0; // current location in archive
       int filecount=0;  // how many files in archive?
@@ -1312,13 +1300,6 @@ int main(int argc, char** argv) {
         Job job;
         job.start=offset;
         job.nfile=filecount;
-#ifndef OPT
-        StringWriter hcomp, pcomp;
-        d.hcomp(&hcomp);
-        if (!findModel(model_list, hcomp.s))
-          model_list+=hcomp.s;
-        if (d.getModel()<1) non_default=true;
-#endif
 
         // Scan segments and count nonempty filenames
         bool first_segment=true;
@@ -1343,19 +1324,6 @@ int main(int argc, char** argv) {
             }
           }
 
-#ifndef OPT
-          // Get postprocessor model
-          if (first_segment) {
-            d.decompress(0);
-            if (d.pcomp(&pcomp)) {
-              if (d.getPostModel()<1)
-                non_default=true;
-              fix_pcomp(hcomp.s, pcomp.s);
-              if (!findModel(model_list, pcomp.s))
-                model_list+=pcomp.s;
-            }
-          }
-#endif
           d.readSegmentEnd();
           offset=in.count+1;  // start of next block after EOB
           job.size=offset-job.start;
@@ -1373,13 +1341,6 @@ int main(int argc, char** argv) {
       fprintf(stderr, "%s extraction failed\n", archive.c_str());
       return 1;
     }
-#ifndef OPT
-    if (non_default && jopt>0) {
-      model_list+=char(0);
-      model_list+=char(0);
-      optimize(model_list, argc, argv);
-    }
-#endif
   }  // end if *cmd=='x'
 
   // Assign job ids and print list of jobs
@@ -1516,9 +1477,6 @@ int main(int argc, char** argv) {
 }
 
 //////////////////////////////// compile ///////////////////////////
-
-// The rest of this program is not needed in JIT optimized ZPAQ
-#ifndef OPT
 
 // This code is to read configuration files containing custom
 // compression algorithms written in ZPAQL.
@@ -2166,2024 +2124,3 @@ void list(const char* filename) {
   }
   catch (const char* msg) {}
 }
-
-/////////////////////////// block_append //////////////////
-
-
-// Extract blocks: cmd = b archive output [N-[N]]...
-// Append blocks in list from archive to output
-void block_append() {
-
-  // Open archive
-  FileCount in(fopen(archive.c_str(), "rb"));
-  if (!in.f) {
-    perror(archive.c_str());
-    exit(1);
-  }
-  libzpaq::Decompresser d;
-  d.setInput(&in);
-
-  // Make a list of blocks and their offsets
-  std::vector<int64_t> bl;  // block list
-  bl.push_back(0);  // start of first block
-  while (d.findBlock()) {
-    bl.push_back(0);
-    while (d.findFilename()) {
-      d.readComment();
-      d.readSegmentEnd();
-      bl.back()=in.count+1;
-    }
-  }
-  if (verbose) {
-    for (int i=1; i<size(bl); ++i)
-      fprintf(stderr, "[%d] %1.0f to %1.0f\n",
-          i, double(bl[i-1]), double(bl[i]));
-  }
-
-  // Open output
-  std::string output=cmd[2];
-  if (size(output)<=5 || output.substr(size(output)-5)!=".zpaq")
-    output+=".zpaq";
-  FILE* out=fopen(output.c_str(), "ab");
-  if (!out) {
-    perror(output.c_str());
-    exit(1);
-  }
-  fprintf(stderr, "Appending blocks from %s[1-%d] to %s\n",
-      archive.c_str(), size(bl)-1, output.c_str());
-
-  // Append blocks
-  in.count=0;
-  for (int i=3; i<ncmd; ++i) {
-    int first=atoi(cmd[i]);
-    int last=first;
-    for (int j=0; cmd[i][j]; ++j)
-      if (cmd[i][j]=='-')
-        last=atoi(cmd[i]+j+1);
-    if (last<=0 || last>=size(bl)) last=size(bl)-1;
-    if (first<1) first=1;
-    if (last>=first) {
-      fprintf(stderr, "Appending blocks %d-%d (offset %1.0f-%1.0f)\n",
-        first, last, double(bl[first-1]), double(bl[last]));
-      fseek64(in.f, bl[first-1]);
-      for (int64_t j=bl[first-1]; j<bl[last]; ++j)
-        putc(in.get(), out);
-    }
-  }
-  fprintf(stderr, "%1.0f bytes appended\n", double(in.count));
-  fclose(out);
-}
-
-/////////////////////////// optimize ///////////////////////
-
-// This code is to convert ZPAQL to C++.
-
-// Read little-endian 2 byte number at models[p..p+1]
-int get2(const std::string& models, int p) {
-  assert(p+1<size(models));
-  return (models[p]&255)+256*(models[p+1]&255);
-}
-
-// Generate one case of predict()
-void opt_predict(FILE *out, const std::string& models, int p, int select) {
-  assert(size(models)>6);
-  int n=models[p+6]&255;
-  fprintf(out,
-    "    case %d: {\n"
-    "      // %d components\n", select, n);
-
-  // Code each component
-  p+=7;
-  for (int i=0; i<n; ++i) {
-    int cp[10]={0};
-    for (int j=0; j<10 && p+j<size(models); ++j)
-      cp[j]=models[p+j]&255;
-    switch(cp[0]) {
-      case CONS:  // c
-        fprintf(out, "\n      // %d CONST %d\n", i, cp[1]);
-        break;
-      case CM:  // sizebits limit
-        fprintf(out, "\n      // %d CM %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      comp[%d].cxt=z.H(%d)^hmap4;\n"
-          "      p[%d]=stretch(comp[%d].cm(comp[%d].cxt)>>17);\n",
-          i, i, i, i, i);
-        break;
-      case ICM: // sizebits
-        fprintf(out, "\n      // %d ICM %d\n", i, cp[1]);
-        fprintf(out,
-          "      if (c8==1 || (c8&0xf0)==16)\n"
-          "        comp[%d].c=find(comp[%d].ht, %d+2, z.H(%d)+16*c8);\n"
-          "      comp[%d].cxt=comp[%d].ht[comp[%d].c+(hmap4&15)];\n"
-          "      p[%d]=stretch(comp[%d].cm(comp[%d].cxt)>>8);\n",
-          i, i, cp[1], i, i, i, i, i, i, i);
-        break;
-      case MATCH: // sizebits bufbits: a=len, b=offset, c=bit, cxt=256/len,
-                  //                   ht=buf, limit=8*pos+bp
-        fprintf(out, "\n      // %d MATCH %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      if (comp[%d].a==0) p[%d]=0;\n"
-          "      else {\n"
-          "        comp[%d].c=comp[%d].ht((comp[%d].limit>>3)\n"
-          "           -comp[%d].b)>>(7-(comp[%d].limit&7))&1;\n"
-          "        p[%d]=stretch(comp[%d].cxt*(comp[%d].c*-2+1)&32767);\n"
-          "      }\n",
-          i, i, i, i, i, i, i, i, i, i);
-        break;
-      case AVG: // j k wt
-          fprintf(out, "\n      // %d AVG %d %d %d\n", i, cp[1], cp[2], cp[3]);
-          fprintf(out,
-          "      p[%d]=(p[%d]*%d+p[%d]*(256-%d))>>8;\n",
-          i, cp[1], cp[3], cp[2], cp[3]);
-        break;
-      case MIX2:   // sizebits j k rate mask
-                   // c=size cm=wt[size][m] cxt=input
-        fprintf(out, "\n      // %d MIX2 %d %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
-        fprintf(out,
-          "      {\n"
-          "        comp[%d].cxt=((z.H(%d)+(c8&%d))&(comp[%d].c-1));\n"
-          "        int w=comp[%d].a16[comp[%d].cxt];\n"
-          "        p[%d]=(w*p[%d]+(65536-w)*p[%d])>>16;\n"
-          "      }\n",
-          i, i, cp[5], i, i, i, i, cp[2], cp[3]);
-
-        break;
-      case MIX:    // sizebits j m rate mask
-                   // c=size cm=wt[size][m] cxt=index of wt in cm
-        fprintf(out, "\n      // %d MIX %d %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
-        fprintf(out,
-          "      {\n"
-          "        comp[%d].cxt=z.H(%d)+(c8&%d);\n"
-          "        comp[%d].cxt=(comp[%d].cxt&(comp[%d].c-1))*%d;\n"
-          "        int* wt=(int*)&comp[%d].cm[comp[%d].cxt];\n",
-          i, i, cp[5], i, i, i, cp[3], i, i);
-          for (int j=0; j<cp[3]; ++j)  // unrolled for-loop
-            fprintf(out, 
-              "        p[%d]%s=(wt[%d]>>8)*p[%d];\n", 
-              i, j?"+":"", j, cp[2]+j);
-        fprintf(out,
-          "        p[%d]=clamp2k(p[%d]>>8);\n"
-          "      }\n",
-          i, i);
-        break;
-      case ISSE:   // sizebits j -- c=hi, cxt=bh
-        fprintf(out, "\n      // %d ISSE %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      {\n"
-          "        if (c8==1 || (c8&0xf0)==16)\n"
-          "          comp[%d].c=find(comp[%d].ht, %d, z.H(%d)+16*c8);\n"
-          "        comp[%d].cxt=comp[%d].ht[comp[%d].c+(hmap4&15)];\n"
-          "        int *wt=(int*)&comp[%d].cm[comp[%d].cxt*2];\n"
-          "        p[%d]=clamp2k((wt[0]*p[%d]+wt[1]*64)>>16);\n"
-          "      }\n",
-          i, i, cp[1]+2, i, i, i, i, i, i, i, cp[2]);
-        break;
-      case SSE:   // sizebits j start limit
-        fprintf(out, "\n      // %d SSE %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4]);
-        fprintf(out,
-          "      {\n"
-          "        comp[%d].cxt=(z.H(%d)+c8)*32;\n"
-          "        int pq=p[%d]+992;\n"
-          "        if (pq<0) pq=0;\n"
-          "        if (pq>1983) pq=1983;\n"
-          "        int wt=pq&63;\n"
-          "        pq>>=6;\n"
-          "        comp[%d].cxt+=pq;\n"
-          "        p[%d]=stretch(((comp[%d].cm(comp[%d].cxt)>>10)*(64-wt)\n"
-          "           +(comp[%d].cm(comp[%d].cxt+1)>>10)*wt)>>13);\n"
-          "        comp[%d].cxt+=wt>>5;\n"
-          "      }\n",
-          i, i, cp[2], i, i, i, i, i, i, i);
-        break;
-      default:
-        fprintf(stderr, "unknown component type %d\n", cp[0]);
-        exit(1);
-    }
-    assert(libzpaq::compsize[cp[0]]>0);
-    p+=libzpaq::compsize[cp[0]];
-    assert(p<size(models));
-  }
-  assert(models[p]==NONE);
-  if (n<1)
-    fprintf(out,
-      "      return predict0();\n"
-      "    }\n");
-  else
-    fprintf(out,
-      "      return squash(p[%d]);\n"
-      "    }\n", n-1);
-}
-
-void opt_update(FILE *out, const std::string& models, int p, int select) {
-  assert(size(models)>p+7);
-  int n=models[p+6]&255;
-  fprintf(out,
-    "    case %d: {\n"
-    "      // %d components\n", select, n);
-
-  // Code each component
-  p+=7;
-  for (int i=0; i<n; ++i) {
-    int cp[10]={0};
-    for (int j=0; j<10 && p+j<size(models); ++j)
-      cp[j]=models[p+j]&255;
-    switch(cp[0]) {
-      case CONS:  // c
-        fprintf(out, "\n      // %d CONST %d\n", i, cp[1]);
-        break;
-      case CM:  // sizebits limit
-        fprintf(out, "\n      // %d CM %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      train(comp[%d], y);\n",
-          i);
-        break;
-      case ICM:   // sizebits: cxt=ht[b]=bh, ht[c][0..15]=bh row, cxt=bh
-        fprintf(out, "\n      // %d ICM %d\n", i, cp[1]);
-        fprintf(out,
-          "      {\n"
-          "        comp[%d].ht[comp[%d].c+(hmap4&15)]=\n"
-          "            st.next(comp[%d].ht[comp[%d].c+(hmap4&15)], y);\n"
-          "        U32& pn=comp[%d].cm(comp[%d].cxt);\n"
-          "        pn+=int(y*32767-(pn>>8))>>2;\n"
-          "      }\n",
-          i, i, i, i, i, i);
-        break;
-      case MATCH: // sizebits bufbits:
-                  //   a=len, b=offset, c=bit, cm=index, cxt=256/len
-                  //   ht=buf, limit=8*pos+bp
-        fprintf(out, "\n      // %d MATCH %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      {\n"
-          "        if (comp[%d].c!=y) comp[%d].a=0;\n"
-          "        comp[%d].ht(comp[%d].limit>>3)+=comp[%d].ht(comp[%d].limit>>3)+y;\n"
-          "        if ((++comp[%d].limit&7)==0) {\n"
-          "          int pos=comp[%d].limit>>3;\n"
-          "          if (comp[%d].a==0) {\n"
-          "            comp[%d].b=pos-comp[%d].cm(z.H(%d));\n"
-          "            if (comp[%d].b&(comp[%d].ht.size()-1))\n"
-          "              while (comp[%d].a<255 && comp[%d].ht(pos-comp[%d].a-1)\n"
-          "                     ==comp[%d].ht(pos-comp[%d].a-comp[%d].b-1))\n"
-          "                ++comp[%d].a;\n"
-          "          }\n"
-          "          else comp[%d].a+=comp[%d].a<255;\n"
-          "          comp[%d].cm(z.H(%d))=pos;\n"
-          "          if (comp[%d].a>0) comp[%d].cxt=2048/comp[%d].a;\n"
-          "        }\n"
-          "      }\n",
-          i, i, i, i, i, i, i, i, i, i, i, i, i, i,
-          i, i, i, i, i, i, i, i, i, i, i, i, i, i);
-        break;
-      case AVG:  // j k wt
-        fprintf(out, "\n      // %d AVG %d %d %d\n", i, cp[1], cp[2], cp[3]);
-        break;
-      case MIX2:   // sizebits j k rate mask
-                   // cm=input[2],wt[size][2], cxt=weight row
-        fprintf(out, "\n      // %d MIX2 %d %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
-        fprintf(out,
-          "      {\n"
-          "        int err=(y*32767-squash(p[%d]))*%d>>5;\n"
-          "        int w=comp[%d].a16[comp[%d].cxt];\n"
-          "        w+=(err*(p[%d]-p[%d])+(1<<12))>>13;\n"
-          "        if (w<0) w=0;\n"
-          "        if (w>65535) w=65535;\n"
-          "        comp[%d].a16[comp[%d].cxt]=w;\n"
-          "      }\n",
-          i, cp[4], i, i, cp[2], cp[3], i, i);
-        break;
-      case MIX:     // sizebits j m rate mask
-                    // cm=wt[size][m], cxt=input
-        fprintf(out, "\n      // %d MIX %d %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
-        fprintf(out,
-          "      {\n"
-          "        int err=(y*32767-squash(p[%d]))*%d>>4;\n"
-          "        int* wt=(int*)&comp[%d].cm[comp[%d].cxt];\n",
-          i, cp[4], i, i);
-        for (int j=0; j<cp[3]; ++j) // unrolled
-          fprintf(out,
-            "          wt[%d]=clamp512k(wt[%d]+((err*p[%d]+(1<<12))>>13));\n",
-            j, j, cp[2]+j);
-        fprintf(out,
-          "      }\n");
-        break;
-      case ISSE:   // sizebits j  -- c=hi, cxt=bh
-        fprintf(out, "\n      // %d ISSE %d %d\n", i, cp[1], cp[2]);
-        fprintf(out,
-          "      {\n"
-          "        int err=y*32767-squash(p[%d]);\n"
-          "        int *wt=(int*)&comp[%d].cm[comp[%d].cxt*2];\n"
-          "        wt[0]=clamp512k(wt[0]+((err*p[%d]+(1<<12))>>13));\n"
-          "        wt[1]=clamp512k(wt[1]+((err+16)>>5));\n"
-          "        comp[%d].ht[comp[%d].c+(hmap4&15)]=st.next(comp[%d].cxt, y);\n"
-          "      }\n",
-          i, i, i, cp[2], i, i, i);
-        break;
-      case SSE:  // sizebits j start limit
-        fprintf(out, "\n      // %d SSE %d %d %d %d\n", 
-                     i, cp[1], cp[2], cp[3], cp[4]);
-        fprintf(out,
-          "      train(comp[%d], y);\n",
-          i);
-        break;
-      default:
-        fprintf(stderr, "unknown component type %d\n", cp[0]);
-        exit(1);
-    }
-    assert(libzpaq::compsize[cp[0]]>0);
-    p+=libzpaq::compsize[cp[0]];
-    assert(p<size(models));
-  }
-  assert(models[p]==NONE);
-  fprintf(out,
-    "      break;\n"
-    "    }\n");
-}
-
-// Generate optimization code for the HCOMP section of models[p...]
-void opt_hcomp(FILE *out, const std::string& models, int p, int select) {
-
-  // Instruction translation table
-  static const char* inst[256]={
-    "err();",                  // 0  ERROR
-    "++a;",                    // 1  A++
-    "--a;",                    // 2  A--
-    "a = ~a;",                 // 3  A!
-    "a = 0;",                  // 4  A=0
-    "err();",
-    "err();",
-    "a = r[%d];",              // 7  A=R N
-    "swap(b);",                // 8  B<>A
-    "++b;",                    // 9  B++
-    "--b;",                    // 10  B--
-    "b = ~b;",                 // 11  B!
-    "b = 0;",                  // 12  B=0
-    "err();",
-    "err();",
-    "b = r[%d];",              // 15  B=R N
-    "swap(c);",                // 16  C<>A
-    "++c;",                    // 17  C++
-    "--c;",                    // 18  C--
-    "c = ~c;",                 // 19  C!
-    "c = 0;",                  // 20  C=0
-    "err();",
-    "err();",
-    "c = r[%d];",              // 23  C=R N
-    "swap(d);",                // 24  D<>A
-    "++d;",                    // 25  D++
-    "--d;",                    // 26  D--
-    "d = ~d;",                 // 27  D!
-    "d = 0;",                  // 28  D=0
-    "err();",
-    "err();",
-    "d = r[%d];",              // 31  D=R N
-    "swap(m(b));",             // 32  *B<>A
-    "++m(b);",                 // 33  *B++
-    "--m(b);",                 // 34  *B--
-    "m(b) = ~m(b);",           // 35  *B!
-    "m(b) = 0;",               // 36  *B=0
-    "err();",
-    "err();",
-    "if (f) goto L%d;",        // 39  JT N
-    "swap(m(c));",             // 40  *C<>A
-    "++m(c);",                 // 41  *C++
-    "--m(c);",                 // 42  *C--
-    "m(c) = ~m(c);",           // 43  *C!
-    "m(c) = 0;",               // 44  *C=0
-    "err();",
-    "err();",
-    "if (!f) goto L%d;",       // 47  JF N
-    "swap(h(d));",             // 48  *D<>A
-    "++h(d);",                 // 49  *D++
-    "--h(d);",                 // 50  *D--
-    "h(d) = ~h(d);",           // 51  *D!
-    "h(d) = 0;",               // 52  *D=0
-    "err();",
-    "err();",
-    "r[%d] = a;",              // 55  R=A N
-    "return;",                 // 56  HALT
-    "if (output) output->put(a); if (sha1) sha1->put(a);", // 57  OUT
-    "err();",
-    "a = (a+m(b)+512)*773;",   // 59  HASH
-    "h(d) = (h(d)+a+512)*773;",// 60  HASHD
-    "err();",
-    "err();",
-    "goto L%d;",               // 63  JMP N
-    "a = a;",                  // 64  A=A
-    "a = b;",                  // 65  A=B
-    "a = c;",                  // 66  A=C
-    "a = d;",                  // 67  A=D
-    "a = m(b);",               // 68  A=*B
-    "a = m(c);",               // 69  A=*C
-    "a = h(d);",               // 70  A=*D
-    "a = %d;",                 // 71  A= N
-    "b = a;",                  // 72  B=A
-    "b = b;",                  // 73  B=B
-    "b = c;",                  // 74  B=C
-    "b = d;",                  // 75  B=D
-    "b = m(b);",               // 76  B=*B
-    "b = m(c);",               // 77  B=*C
-    "b = h(d);",               // 78  B=*D
-    "b = %d;",                 // 79  B= N
-    "c = a;",                  // 80  C=A
-    "c = b;",                  // 81  C=B
-    "c = c;",                  // 82  C=C
-    "c = d;",                  // 83  C=D
-    "c = m(b);",               // 84  C=*B
-    "c = m(c);",               // 85  C=*C
-    "c = h(d);",               // 86  C=*D
-    "c = %d;",                 // 87  C= N
-    "d = a;",                  // 88  D=A
-    "d = b;",                  // 89  D=B
-    "d = c;",                  // 90  D=C
-    "d = d;",                  // 91  D=D
-    "d = m(b);",               // 92  D=*B
-    "d = m(c);",               // 93  D=*C
-    "d = h(d);",               // 94  D=*D
-    "d = %d;",                 // 95  D= N
-    "m(b) = a;",               // 96  *B=A
-    "m(b) = b;",               // 97  *B=B
-    "m(b) = c;",               // 98  *B=C
-    "m(b) = d;",               // 99  *B=D
-    "m(b) = m(b);",            // 100  *B=*B
-    "m(b) = m(c);",            // 101  *B=*C
-    "m(b) = h(d);",            // 102  *B=*D
-    "m(b) = %d;",              // 103  *B= N
-    "m(c) = a;",               // 104  *C=A
-    "m(c) = b;",               // 105  *C=B
-    "m(c) = c;",               // 106  *C=C
-    "m(c) = d;",               // 107  *C=D
-    "m(c) = m(b);",            // 108  *C=*B
-    "m(c) = m(c);",            // 109  *C=*C
-    "m(c) = h(d);",            // 110  *C=*D
-    "m(c) = %d;",              // 111  *C= N
-    "h(d) = a;",               // 112  *D=A
-    "h(d) = b;",               // 113  *D=B
-    "h(d) = c;",               // 114  *D=C
-    "h(d) = d;",               // 115  *D=D
-    "h(d) = m(b);",            // 116  *D=*B
-    "h(d) = m(c);",            // 117  *D=*C
-    "h(d) = h(d);",            // 118  *D=*D
-    "h(d) = %d;",              // 119  *D= N
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "a += a;",                 // 128  A+=A
-    "a += b;",                 // 129  A+=B
-    "a += c;",                 // 130  A+=C
-    "a += d;",                 // 131  A+=D
-    "a += m(b);",              // 132  A+=*B
-    "a += m(c);",              // 133  A+=*C
-    "a += h(d);",              // 134  A+=*D
-    "a += %d;",                // 135  A+= N
-    "a -= a;",                 // 136  A-=A
-    "a -= b;",                 // 137  A-=B
-    "a -= c;",                 // 138  A-=C
-    "a -= d;",                 // 139  A-=D
-    "a -= m(b);",              // 140  A-=*B
-    "a -= m(c);",              // 141  A-=*C
-    "a -= h(d);",              // 142  A-=*D
-    "a -= %d;",                // 143  A-= N
-    "a *= a;",                 // 144  A*=A
-    "a *= b;",                 // 145  A*=B
-    "a *= c;",                 // 146  A*=C
-    "a *= d;",                 // 147  A*=D
-    "a *= m(b);",              // 148  A*=*B
-    "a *= m(c);",              // 149  A*=*C
-    "a *= h(d);",              // 150  A*=*D
-    "a *= %d;",                // 151  A*= N
-    "div(a);",                 // 152  A/=A
-    "div(b);",                 // 153  A/=B
-    "div(c);",                 // 154  A/=C
-    "div(d);",                 // 155  A/=D
-    "div(m(b));",              // 156  A/=*B
-    "div(m(c));",              // 157  A/=*C
-    "div(h(d));",              // 158  A/=*D
-    "div(%d);",                // 159  A/= N
-    "mod(a);",                 // 160  A=A
-    "mod(b);",                 // 161  A=B
-    "mod(c);",                 // 162  A=C
-    "mod(d);",                 // 163  A=D
-    "mod(m(b));",              // 164  A=*B
-    "mod(m(c));",              // 165  A=*C
-    "mod(h(d));",              // 166  A=*D
-    "mod(%d);",                // 167  A= N
-    "a &= a;",                 // 168  A&=A
-    "a &= b;",                 // 169  A&=B
-    "a &= c;",                 // 170  A&=C
-    "a &= d;",                 // 171  A&=D
-    "a &= m(b);",              // 172  A&=*B
-    "a &= m(c);",              // 173  A&=*C
-    "a &= h(d);",              // 174  A&=*D
-    "a &= %d;",                // 175  A&= N
-    "a &= ~ a;",               // 176  A&~A
-    "a &= ~ b;",               // 177  A&~B
-    "a &= ~ c;",               // 178  A&~C
-    "a &= ~ d;",               // 179  A&~D
-    "a &= ~ m(b);",            // 180  A&~*B
-    "a &= ~ m(c);",            // 181  A&~*C
-    "a &= ~ h(d);",            // 182  A&~*D
-    "a &= ~ %d;",              // 183  A&~ N
-    "a |= a;",                 // 184  A|=A
-    "a |= b;",                 // 185  A|=B
-    "a |= c;",                 // 186  A|=C
-    "a |= d;",                 // 187  A|=D
-    "a |= m(b);",              // 188  A|=*B
-    "a |= m(c);",              // 189  A|=*C
-    "a |= h(d);",              // 190  A|=*D
-    "a |= %d;",                // 191  A|= N
-    "a ^= a;",                 // 192  A^=A
-    "a ^= b;",                 // 193  A^=B
-    "a ^= c;",                 // 194  A^=C
-    "a ^= d;",                 // 195  A^=D
-    "a ^= m(b);",              // 196  A^=*B
-    "a ^= m(c);",              // 197  A^=*C
-    "a ^= h(d);",              // 198  A^=*D
-    "a ^= %d;",                // 199  A^= N
-    "a <<= (a&31);",           // 200  A<<=A
-    "a <<= (b&31);",           // 201  A<<=B
-    "a <<= (c&31);",           // 202  A<<=C
-    "a <<= (d&31);",           // 203  A<<=D
-    "a <<= (m(b)&31);",        // 204  A<<=*B
-    "a <<= (m(c)&31);",        // 205  A<<=*C
-    "a <<= (h(d)&31);",        // 206  A<<=*D
-    "a <<= (%d&31);",          // 207  A<<= N
-    "a >>= (a&31);",           // 208  A>>=A
-    "a >>= (b&31);",           // 209  A>>=B
-    "a >>= (c&31);",           // 210  A>>=C
-    "a >>= (d&31);",           // 211  A>>=D
-    "a >>= (m(b)&31);",        // 212  A>>=*B
-    "a >>= (m(c)&31);",        // 213  A>>=*C
-    "a >>= (h(d)&31);",        // 214  A>>=*D
-    "a >>= (%d&31);",          // 215  A>>= N    
-    "f = (a == a);",           // 216  A==A
-    "f = (a == b);",           // 217  A==B
-    "f = (a == c);",           // 218  A==C
-    "f = (a == d);",           // 219  A==D
-    "f = (a == U32(m(b)));",   // 220  A==*B
-    "f = (a == U32(m(c)));",   // 221  A==*C
-    "f = (a == h(d));",        // 222  A==*D
-    "f = (a == U32(%d));",     // 223  A== N
-    "f = (a < a);",            // 224  A<A
-    "f = (a < b);",            // 225  A<B
-    "f = (a < c);",            // 226  A<C
-    "f = (a < d);",            // 227  A<D
-    "f = (a < U32(m(b)));",    // 228  A<*B
-    "f = (a < U32(m(c)));",    // 229  A<*C
-    "f = (a < h(d));",         // 230  A<*D
-    "f = (a < U32(%d));",      // 231  A< N
-    "f = (a > a);",            // 232  A>A
-    "f = (a > b);",            // 233  A>B
-    "f = (a > c);",            // 234  A>C
-    "f = (a > d);",            // 235  A>D
-    "f = (a > U32(m(b)));",    // 236  A>*B
-    "f = (a > U32(m(c)));",    // 237  A>*C
-    "f = (a > h(d));",         // 238  A>*D
-    "f = (a > U32(%d));",      // 239  A> N
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "err();",
-    "goto L%d;"};              // 255 LJ NN
-
-  // Find start and end of code
-  assert(size(models)>p+8);
-  const int end=p+get2(models, p)+2;
-  assert(size(models)>=end+2);
-  int n=models[p+6]&255;
-  p+=7;
-  for (int i=0; i<n; ++i) {
-    assert((models[p]&255)>0 && libzpaq::compsize[models[p]&255]>0);
-    p+=libzpaq::compsize[models[p]&255];
-    assert(p<size(models)-1 && p<end);
-  }
-  assert(models[p]==0);
-  ++p;
-  assert(p<=end);
-
-  // Generate a map of jump targets
-  if (p==end) return;
-  libzpaq::Array<char> targets(0x10000);
-  for (int i=p; i<end-1; ++i) {
-    int op=models[i]&255;
-    if (op==LJ && p<end-2)
-      targets[get2(models, i+1)]=1, ++i;
-    if (op==JT || op==JF || op==JMP) {
-      int addr=i+2+((models[i+1]&255)<<24>>24)-p;
-      if (addr>=0 && addr<0x10000) targets[addr]=1;
-      else fprintf(stderr, "goto target %d out of range\n", addr);
-    }
-    if (op%8==7) ++i;  // 2 byte instruction (LJ is 3)
-  }
-
-  // Generate instructions. The output code will not compile
-  // if any ZPAQL instructions jump to the middle of a 2 or 3
-  // byte instruction (legal) or out of range (legal if not executed).
-  fprintf(out, "      a = input;\n");
-  for (int i=p; i<end-1; ++i) {
-    int op=models[i]&255;
-    assert(i-p<0x10000);
-    if (targets[i-p]) {
-      fprintf(out, "L%d:\n", select*100000+(i-p)); // goto label
-      targets[i-p]=0;
-    }
-    int operand=0;
-    operand=models[i+1]&255;  // numeric operand
-    if (op==JT || op==JF || op==JMP)  // label
-      operand=select*100000+i+2+(operand<<24>>24)-p;
-    if (op==LJ) {
-      if (i<end-2)
-        operand=select*100000+get2(models, i+1);  // label
-      ++i;
-    }
-    if (op%8==7) ++i; // 2 byte instruction
-    fprintf(out, "      ");
-    fprintf(out, inst[op], operand);
-    fprintf(out, "\n");
-  }
-}
-
-// Search list of models for comp, return true if a match is found
-bool findModel(const std::string& models, const std::string& comp) {
-  if (size(comp)<8) return false;
-  for (int p=0; p<size(models)-1; p+=get2(models, p)+2) {
-    bool mismatch=false;
-    for (int i=0; !mismatch && i<size(comp); ++i)
-      mismatch=i+p>=size(models) || models[i+p]!=comp[i];
-    if (!mismatch) return true;
-  }
-  return false;
-}
-
-// Print models[p..] for model i
-void dump(FILE* out, const std::string& models, int p, int n) {
-  assert(size(models)>p+1);
-  const int len=get2(models, p)+2;
-  assert(size(models)>=p+len);
-  fprintf(out,
-  "\n"
-  "  // Model %d\n  ", n);
-  for (int i=0; i<len; ++i) {
-    fprintf(out, "%d,", char(models[p+i]));
-    if (i%16==15) fprintf(out, "\n  ");
-  }
-  fprintf(out, "\n");
-}
-
-// Generate C++ source code from a list of models
-// Then compile and run it with argc, argv
-// jopt=0..3: don't optimize, optimize, keep .cpp, keep .exe
-void optimize(const std::string& models, int argc, char** argv) {
-  if (jopt<1) return;
-
-  // Get file name
-  std::string basename=tempname(0);
-  std::string sourcefile=basename+".cpp";
-  std::string exefile=basename+".exe";
-
-  // Open output file
-  FILE* out=fopen(sourcefile.c_str(), "w");
-  if (!out) perror(sourcefile.c_str()), exit(1);
-  
-  // Print models[]
-  fprintf(out,
-  "// Generated by zpaq\n"
-  "\n"
-  "#include \"libzpaq.h\"\n"
-  "namespace libzpaq {\n"
-  "\n"
-  "const char models[]={\n");
-  int p, i;
-  for (p=0, i=1; p<size(models)-2; p+=get2(models, p)+2, ++i)
-    dump(out, models, p, i);
-  assert(p==size(models)-2);
-  assert(models[p]==0 && models[p+1]==0);
-  fprintf(out, "\n  0,0};\n");  // end of list
-
-  // Print predict()
-  // Write Predictor::predict()
-  fprintf(out,
-    "\n"
-    "int Predictor::predict() {\n"
-    "  switch(z.select) {\n");
-  for (p=0, i=1; p<size(models)-2; p+=get2(models, p)+2, ++i)
-    opt_predict(out, models, p, i);
-  fprintf(out,
-    "    default: return predict0();\n"
-    "  }\n"
-    "}\n"
-    "\n");
-
-  // Write Predictor::update()
-  fprintf(out,
-    "void Predictor::update(int y) {\n"
-    "  switch(z.select) {\n");
-  for (p=0, i=1; p<size(models)-2; p+=get2(models, p)+2, ++i)
-    opt_update(out, models, p, i);
-  fprintf(out,
-    "    default: return update0(y);\n"
-    "  }\n"
-    "  c8+=c8+y;\n"
-    "  if (c8>=256) {\n"
-    "    z.run(c8-256);\n"
-    "    hmap4=1;\n"
-    "    c8=1;\n"
-    "  }\n"
-    "  else if (c8>=16 && c8<32)\n"
-    "    hmap4=(hmap4&0xf)<<5|y<<4|1;\n"
-    "  else\n"
-    "    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);\n"
-    "}\n"
-    "\n");
-
-  // Write ZPAQL::run()
-  fprintf(out,
-    "void ZPAQL::run(U32 input) {\n"
-    "  switch(select) {\n");
-  for (p=0, i=1; p<size(models)-2; p+=get2(models, p)+2, ++i) {
-    fprintf(out, "    case %d: {\n", i);
-    opt_hcomp(out, models, p, i);
-    fprintf(out,
-      "      break;\n"
-      "    }\n");
-  }
-  fprintf(out,
-    "    default: run0(input);\n"
-    "  }\n"
-    "}\n"
-    "}\n"
-    "\n");
-
-  // Print pcomp_cmd
-  if (pcomp_cmd)
-    fprintf(out,
-    "const char* pcomp_cmd=\"%s\";\n", pcomp_cmd);
-  else
-    fprintf(out,
-    "const char* pcomp_cmd=0;\n");
-
-  // Close output and make sure it exists
-  fclose(out);
-  if (verbose)
-    fprintf(stderr, "Created %s\n", sourcefile.c_str());
-
-  // Compile
-  std::string command="zpaqopt "+basename;
-  delete_file(exefile.c_str());
-  run_cmd(command.c_str());
-
-  // If compile failed, then run unoptimized
-  if (!exists(exefile.c_str())) {
-    if (verbose) fprintf(stderr, "Compile failed, skipping...\n");
-    return;
-  }
-
-  // Run it
-  command=exefile;
-  for (int i=1; i<argc; ++i) {
-    command+=" ";
-    command+=argv[i];
-  }
-  run_cmd(command);
-
-  // Clean up
-  if (jopt<3) delete_file((basename+".obj").c_str());
-  if (jopt<3) delete_file(exefile.c_str());
-  if (jopt<2) delete_file(sourcefile.c_str());
-  exit(0);
-}
-
-/////////////////////////// Optimized models ////////////////////////
-
-// Optimized code generated by zpaq for fast.cfg and -m1...-m4
-namespace libzpaq {
-
-const char models[]={
-
-  // Model 1 fast
-  26,0,1,2,0,0,2,3,16,8,19,0,0,96,4,28,
-  59,10,59,112,25,10,59,10,59,112,56,0,
-
-  // Model 2 bwtrle1 -1
-  21,0,1,0,27,27,1,3,7,0,-38,80,47,3,9,63,
-  1,12,65,52,60,56,0,
-
-  // Model 3 bwtrle1 post -1
-  -101,0,1,0,27,27,0,0,-17,-1,39,48,80,67,-33,0,
-  47,6,90,25,98,9,63,34,67,2,-17,-1,39,16,-38,47,
-  7,-121,-1,1,1,88,63,2,90,25,98,9,63,12,26,66,
-  -17,0,47,5,99,9,18,63,-10,28,63,95,10,68,10,-49,
-  8,-124,10,-49,8,-124,10,-49,8,-124,80,55,1,65,55,2,
-  65,-17,0,47,10,10,68,1,-81,-1,88,27,49,63,-15,28,
-  27,119,1,4,-122,112,26,24,3,-17,-1,3,24,47,-11,12,
-  66,-23,47,9,92,27,49,94,26,113,9,63,-13,74,9,23,
-  2,66,-23,47,9,92,27,49,94,26,113,9,63,-13,31,1,
-  67,-33,0,39,6,94,75,68,57,63,-11,56,0,
-
-  // Model 4 bwt2 -2
-  17,0,1,0,27,27,2,3,5,8,12,0,0,95,1,52,
-  60,56,0,
-
-  // Model 5 bwt2 post -2
-  111,0,1,0,27,27,0,0,-17,-1,39,4,96,9,63,95,
-  10,68,10,-49,8,-124,10,-49,8,-124,10,-49,8,-124,80,55,
-  1,65,55,2,65,-17,0,47,10,10,68,1,-81,-1,88,27,
-  49,63,-15,28,27,119,1,4,-122,112,26,24,3,-17,-1,3,
-  24,47,-11,12,66,-23,47,9,92,27,49,94,26,113,9,63,
-  -13,74,9,23,2,66,-23,47,9,92,27,49,94,26,113,9,
-  63,-13,31,1,67,-33,0,39,6,94,75,68,57,63,-11,56,
-  0,
-
-  // Model 6 mid -3
-  69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
-  18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
-  -1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
-  59,112,10,25,59,112,10,25,59,112,10,25,59,10,59,112,
-  25,69,-49,8,112,56,0,
-
-  // Model 7 max -4
-  -60,0,5,9,0,0,22,1,-96,3,5,8,13,1,8,16,
-  2,8,18,3,8,19,4,8,19,5,8,20,6,4,22,24,
-  3,17,8,19,9,3,13,3,13,3,13,3,14,7,16,0,
-  15,24,-1,7,8,0,16,10,-1,6,0,15,16,24,0,9,
-  8,17,32,-1,6,8,17,18,16,-1,9,16,19,32,-1,6,
-  0,19,20,16,0,0,17,104,74,4,95,2,59,112,10,25,
-  59,112,10,25,59,112,10,25,59,112,10,25,59,112,10,25,
-  59,10,59,112,10,25,59,112,10,25,69,-73,32,-17,64,47,
-  14,-25,91,47,10,25,60,26,48,-122,-105,20,112,63,9,70,
-  -33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
-  10,4,59,112,25,10,4,59,112,25,65,-113,-44,72,4,59,
-  112,8,-113,-40,8,68,-81,60,60,25,69,-49,9,112,25,25,
-  25,25,25,112,56,0,
-
-  0,0};
-
-int Predictor::predict() {
-  switch(z.select) {
-    case 1: {
-      // 2 components
-
-      // 0 ICM 16
-      if (c8==1 || (c8&0xf0)==16)
-        comp[0].c=find(comp[0].ht, 16+2, z.H(0)+16*c8);
-      comp[0].cxt=comp[0].ht[comp[0].c+(hmap4&15)];
-      p[0]=stretch(comp[0].cm(comp[0].cxt)>>8);
-
-      // 1 ISSE 19 0
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[1].c=find(comp[1].ht, 21, z.H(1)+16*c8);
-        comp[1].cxt=comp[1].ht[comp[1].c+(hmap4&15)];
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        p[1]=clamp2k((wt[0]*p[0]+wt[1]*64)>>16);
-      }
-      return squash(p[1]);
-    }
-    case 2: {
-      // 1 components
-
-      // 0 ICM 7
-      if (c8==1 || (c8&0xf0)==16)
-        comp[0].c=find(comp[0].ht, 7+2, z.H(0)+16*c8);
-      comp[0].cxt=comp[0].ht[comp[0].c+(hmap4&15)];
-      p[0]=stretch(comp[0].cm(comp[0].cxt)>>8);
-      return squash(p[0]);
-    }
-    case 3: {
-      // 0 components
-      return predict0();
-    }
-    case 4: {
-      // 2 components
-
-      // 0 ICM 5
-      if (c8==1 || (c8&0xf0)==16)
-        comp[0].c=find(comp[0].ht, 5+2, z.H(0)+16*c8);
-      comp[0].cxt=comp[0].ht[comp[0].c+(hmap4&15)];
-      p[0]=stretch(comp[0].cm(comp[0].cxt)>>8);
-
-      // 1 ISSE 12 0
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[1].c=find(comp[1].ht, 14, z.H(1)+16*c8);
-        comp[1].cxt=comp[1].ht[comp[1].c+(hmap4&15)];
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        p[1]=clamp2k((wt[0]*p[0]+wt[1]*64)>>16);
-      }
-      return squash(p[1]);
-    }
-    case 5: {
-      // 0 components
-      return predict0();
-    }
-    case 6: {
-      // 8 components
-
-      // 0 ICM 5
-      if (c8==1 || (c8&0xf0)==16)
-        comp[0].c=find(comp[0].ht, 5+2, z.H(0)+16*c8);
-      comp[0].cxt=comp[0].ht[comp[0].c+(hmap4&15)];
-      p[0]=stretch(comp[0].cm(comp[0].cxt)>>8);
-
-      // 1 ISSE 13 0
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[1].c=find(comp[1].ht, 15, z.H(1)+16*c8);
-        comp[1].cxt=comp[1].ht[comp[1].c+(hmap4&15)];
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        p[1]=clamp2k((wt[0]*p[0]+wt[1]*64)>>16);
-      }
-
-      // 2 ISSE 17 1
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[2].c=find(comp[2].ht, 19, z.H(2)+16*c8);
-        comp[2].cxt=comp[2].ht[comp[2].c+(hmap4&15)];
-        int *wt=(int*)&comp[2].cm[comp[2].cxt*2];
-        p[2]=clamp2k((wt[0]*p[1]+wt[1]*64)>>16);
-      }
-
-      // 3 ISSE 18 2
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[3].c=find(comp[3].ht, 20, z.H(3)+16*c8);
-        comp[3].cxt=comp[3].ht[comp[3].c+(hmap4&15)];
-        int *wt=(int*)&comp[3].cm[comp[3].cxt*2];
-        p[3]=clamp2k((wt[0]*p[2]+wt[1]*64)>>16);
-      }
-
-      // 4 ISSE 18 3
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[4].c=find(comp[4].ht, 20, z.H(4)+16*c8);
-        comp[4].cxt=comp[4].ht[comp[4].c+(hmap4&15)];
-        int *wt=(int*)&comp[4].cm[comp[4].cxt*2];
-        p[4]=clamp2k((wt[0]*p[3]+wt[1]*64)>>16);
-      }
-
-      // 5 ISSE 19 4
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[5].c=find(comp[5].ht, 21, z.H(5)+16*c8);
-        comp[5].cxt=comp[5].ht[comp[5].c+(hmap4&15)];
-        int *wt=(int*)&comp[5].cm[comp[5].cxt*2];
-        p[5]=clamp2k((wt[0]*p[4]+wt[1]*64)>>16);
-      }
-
-      // 6 MATCH 22 24
-      if (comp[6].a==0) p[6]=0;
-      else {
-        comp[6].c=comp[6].ht((comp[6].limit>>3)
-           -comp[6].b)>>(7-(comp[6].limit&7))&1;
-        p[6]=stretch(comp[6].cxt*(comp[6].c*-2+1)&32767);
-      }
-
-      // 7 MIX 16 0 7 24 255
-      {
-        comp[7].cxt=z.H(7)+(c8&255);
-        comp[7].cxt=(comp[7].cxt&(comp[7].c-1))*7;
-        int* wt=(int*)&comp[7].cm[comp[7].cxt];
-        p[7]=(wt[0]>>8)*p[0];
-        p[7]+=(wt[1]>>8)*p[1];
-        p[7]+=(wt[2]>>8)*p[2];
-        p[7]+=(wt[3]>>8)*p[3];
-        p[7]+=(wt[4]>>8)*p[4];
-        p[7]+=(wt[5]>>8)*p[5];
-        p[7]+=(wt[6]>>8)*p[6];
-        p[7]=clamp2k(p[7]>>8);
-      }
-      return squash(p[7]);
-    }
-    case 7: {
-      // 22 components
-
-      // 0 CONST 160
-
-      // 1 ICM 5
-      if (c8==1 || (c8&0xf0)==16)
-        comp[1].c=find(comp[1].ht, 5+2, z.H(1)+16*c8);
-      comp[1].cxt=comp[1].ht[comp[1].c+(hmap4&15)];
-      p[1]=stretch(comp[1].cm(comp[1].cxt)>>8);
-
-      // 2 ISSE 13 1
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[2].c=find(comp[2].ht, 15, z.H(2)+16*c8);
-        comp[2].cxt=comp[2].ht[comp[2].c+(hmap4&15)];
-        int *wt=(int*)&comp[2].cm[comp[2].cxt*2];
-        p[2]=clamp2k((wt[0]*p[1]+wt[1]*64)>>16);
-      }
-
-      // 3 ISSE 16 2
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[3].c=find(comp[3].ht, 18, z.H(3)+16*c8);
-        comp[3].cxt=comp[3].ht[comp[3].c+(hmap4&15)];
-        int *wt=(int*)&comp[3].cm[comp[3].cxt*2];
-        p[3]=clamp2k((wt[0]*p[2]+wt[1]*64)>>16);
-      }
-
-      // 4 ISSE 18 3
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[4].c=find(comp[4].ht, 20, z.H(4)+16*c8);
-        comp[4].cxt=comp[4].ht[comp[4].c+(hmap4&15)];
-        int *wt=(int*)&comp[4].cm[comp[4].cxt*2];
-        p[4]=clamp2k((wt[0]*p[3]+wt[1]*64)>>16);
-      }
-
-      // 5 ISSE 19 4
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[5].c=find(comp[5].ht, 21, z.H(5)+16*c8);
-        comp[5].cxt=comp[5].ht[comp[5].c+(hmap4&15)];
-        int *wt=(int*)&comp[5].cm[comp[5].cxt*2];
-        p[5]=clamp2k((wt[0]*p[4]+wt[1]*64)>>16);
-      }
-
-      // 6 ISSE 19 5
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[6].c=find(comp[6].ht, 21, z.H(6)+16*c8);
-        comp[6].cxt=comp[6].ht[comp[6].c+(hmap4&15)];
-        int *wt=(int*)&comp[6].cm[comp[6].cxt*2];
-        p[6]=clamp2k((wt[0]*p[5]+wt[1]*64)>>16);
-      }
-
-      // 7 ISSE 20 6
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[7].c=find(comp[7].ht, 22, z.H(7)+16*c8);
-        comp[7].cxt=comp[7].ht[comp[7].c+(hmap4&15)];
-        int *wt=(int*)&comp[7].cm[comp[7].cxt*2];
-        p[7]=clamp2k((wt[0]*p[6]+wt[1]*64)>>16);
-      }
-
-      // 8 MATCH 22 24
-      if (comp[8].a==0) p[8]=0;
-      else {
-        comp[8].c=comp[8].ht((comp[8].limit>>3)
-           -comp[8].b)>>(7-(comp[8].limit&7))&1;
-        p[8]=stretch(comp[8].cxt*(comp[8].c*-2+1)&32767);
-      }
-
-      // 9 ICM 17
-      if (c8==1 || (c8&0xf0)==16)
-        comp[9].c=find(comp[9].ht, 17+2, z.H(9)+16*c8);
-      comp[9].cxt=comp[9].ht[comp[9].c+(hmap4&15)];
-      p[9]=stretch(comp[9].cm(comp[9].cxt)>>8);
-
-      // 10 ISSE 19 9
-      {
-        if (c8==1 || (c8&0xf0)==16)
-          comp[10].c=find(comp[10].ht, 21, z.H(10)+16*c8);
-        comp[10].cxt=comp[10].ht[comp[10].c+(hmap4&15)];
-        int *wt=(int*)&comp[10].cm[comp[10].cxt*2];
-        p[10]=clamp2k((wt[0]*p[9]+wt[1]*64)>>16);
-      }
-
-      // 11 ICM 13
-      if (c8==1 || (c8&0xf0)==16)
-        comp[11].c=find(comp[11].ht, 13+2, z.H(11)+16*c8);
-      comp[11].cxt=comp[11].ht[comp[11].c+(hmap4&15)];
-      p[11]=stretch(comp[11].cm(comp[11].cxt)>>8);
-
-      // 12 ICM 13
-      if (c8==1 || (c8&0xf0)==16)
-        comp[12].c=find(comp[12].ht, 13+2, z.H(12)+16*c8);
-      comp[12].cxt=comp[12].ht[comp[12].c+(hmap4&15)];
-      p[12]=stretch(comp[12].cm(comp[12].cxt)>>8);
-
-      // 13 ICM 13
-      if (c8==1 || (c8&0xf0)==16)
-        comp[13].c=find(comp[13].ht, 13+2, z.H(13)+16*c8);
-      comp[13].cxt=comp[13].ht[comp[13].c+(hmap4&15)];
-      p[13]=stretch(comp[13].cm(comp[13].cxt)>>8);
-
-      // 14 ICM 14
-      if (c8==1 || (c8&0xf0)==16)
-        comp[14].c=find(comp[14].ht, 14+2, z.H(14)+16*c8);
-      comp[14].cxt=comp[14].ht[comp[14].c+(hmap4&15)];
-      p[14]=stretch(comp[14].cm(comp[14].cxt)>>8);
-
-      // 15 MIX 16 0 15 24 255
-      {
-        comp[15].cxt=z.H(15)+(c8&255);
-        comp[15].cxt=(comp[15].cxt&(comp[15].c-1))*15;
-        int* wt=(int*)&comp[15].cm[comp[15].cxt];
-        p[15]=(wt[0]>>8)*p[0];
-        p[15]+=(wt[1]>>8)*p[1];
-        p[15]+=(wt[2]>>8)*p[2];
-        p[15]+=(wt[3]>>8)*p[3];
-        p[15]+=(wt[4]>>8)*p[4];
-        p[15]+=(wt[5]>>8)*p[5];
-        p[15]+=(wt[6]>>8)*p[6];
-        p[15]+=(wt[7]>>8)*p[7];
-        p[15]+=(wt[8]>>8)*p[8];
-        p[15]+=(wt[9]>>8)*p[9];
-        p[15]+=(wt[10]>>8)*p[10];
-        p[15]+=(wt[11]>>8)*p[11];
-        p[15]+=(wt[12]>>8)*p[12];
-        p[15]+=(wt[13]>>8)*p[13];
-        p[15]+=(wt[14]>>8)*p[14];
-        p[15]=clamp2k(p[15]>>8);
-      }
-
-      // 16 MIX 8 0 16 10 255
-      {
-        comp[16].cxt=z.H(16)+(c8&255);
-        comp[16].cxt=(comp[16].cxt&(comp[16].c-1))*16;
-        int* wt=(int*)&comp[16].cm[comp[16].cxt];
-        p[16]=(wt[0]>>8)*p[0];
-        p[16]+=(wt[1]>>8)*p[1];
-        p[16]+=(wt[2]>>8)*p[2];
-        p[16]+=(wt[3]>>8)*p[3];
-        p[16]+=(wt[4]>>8)*p[4];
-        p[16]+=(wt[5]>>8)*p[5];
-        p[16]+=(wt[6]>>8)*p[6];
-        p[16]+=(wt[7]>>8)*p[7];
-        p[16]+=(wt[8]>>8)*p[8];
-        p[16]+=(wt[9]>>8)*p[9];
-        p[16]+=(wt[10]>>8)*p[10];
-        p[16]+=(wt[11]>>8)*p[11];
-        p[16]+=(wt[12]>>8)*p[12];
-        p[16]+=(wt[13]>>8)*p[13];
-        p[16]+=(wt[14]>>8)*p[14];
-        p[16]+=(wt[15]>>8)*p[15];
-        p[16]=clamp2k(p[16]>>8);
-      }
-
-      // 17 MIX2 0 15 16 24 0
-      {
-        comp[17].cxt=((z.H(17)+(c8&0))&(comp[17].c-1));
-        int w=comp[17].a16[comp[17].cxt];
-        p[17]=(w*p[15]+(65536-w)*p[16])>>16;
-      }
-
-      // 18 SSE 8 17 32 255
-      {
-        comp[18].cxt=(z.H(18)+c8)*32;
-        int pq=p[17]+992;
-        if (pq<0) pq=0;
-        if (pq>1983) pq=1983;
-        int wt=pq&63;
-        pq>>=6;
-        comp[18].cxt+=pq;
-        p[18]=stretch(((comp[18].cm(comp[18].cxt)>>10)*(64-wt)
-           +(comp[18].cm(comp[18].cxt+1)>>10)*wt)>>13);
-        comp[18].cxt+=wt>>5;
-      }
-
-      // 19 MIX2 8 17 18 16 255
-      {
-        comp[19].cxt=((z.H(19)+(c8&255))&(comp[19].c-1));
-        int w=comp[19].a16[comp[19].cxt];
-        p[19]=(w*p[17]+(65536-w)*p[18])>>16;
-      }
-
-      // 20 SSE 16 19 32 255
-      {
-        comp[20].cxt=(z.H(20)+c8)*32;
-        int pq=p[19]+992;
-        if (pq<0) pq=0;
-        if (pq>1983) pq=1983;
-        int wt=pq&63;
-        pq>>=6;
-        comp[20].cxt+=pq;
-        p[20]=stretch(((comp[20].cm(comp[20].cxt)>>10)*(64-wt)
-           +(comp[20].cm(comp[20].cxt+1)>>10)*wt)>>13);
-        comp[20].cxt+=wt>>5;
-      }
-
-      // 21 MIX2 0 19 20 16 0
-      {
-        comp[21].cxt=((z.H(21)+(c8&0))&(comp[21].c-1));
-        int w=comp[21].a16[comp[21].cxt];
-        p[21]=(w*p[19]+(65536-w)*p[20])>>16;
-      }
-      return squash(p[21]);
-    }
-    default: return predict0();
-  }
-}
-
-void Predictor::update(int y) {
-  switch(z.select) {
-    case 1: {
-      // 2 components
-
-      // 0 ICM 16
-      {
-        comp[0].ht[comp[0].c+(hmap4&15)]=
-            st.next(comp[0].ht[comp[0].c+(hmap4&15)], y);
-        U32& pn=comp[0].cm(comp[0].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 1 ISSE 19 0
-      {
-        int err=y*32767-squash(p[1]);
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[1].ht[comp[1].c+(hmap4&15)]=st.next(comp[1].cxt, y);
-      }
-      break;
-    }
-    case 2: {
-      // 1 components
-
-      // 0 ICM 7
-      {
-        comp[0].ht[comp[0].c+(hmap4&15)]=
-            st.next(comp[0].ht[comp[0].c+(hmap4&15)], y);
-        U32& pn=comp[0].cm(comp[0].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-      break;
-    }
-    case 3: {
-      // 0 components
-      break;
-    }
-    case 4: {
-      // 2 components
-
-      // 0 ICM 5
-      {
-        comp[0].ht[comp[0].c+(hmap4&15)]=
-            st.next(comp[0].ht[comp[0].c+(hmap4&15)], y);
-        U32& pn=comp[0].cm(comp[0].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 1 ISSE 12 0
-      {
-        int err=y*32767-squash(p[1]);
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[1].ht[comp[1].c+(hmap4&15)]=st.next(comp[1].cxt, y);
-      }
-      break;
-    }
-    case 5: {
-      // 0 components
-      break;
-    }
-    case 6: {
-      // 8 components
-
-      // 0 ICM 5
-      {
-        comp[0].ht[comp[0].c+(hmap4&15)]=
-            st.next(comp[0].ht[comp[0].c+(hmap4&15)], y);
-        U32& pn=comp[0].cm(comp[0].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 1 ISSE 13 0
-      {
-        int err=y*32767-squash(p[1]);
-        int *wt=(int*)&comp[1].cm[comp[1].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[1].ht[comp[1].c+(hmap4&15)]=st.next(comp[1].cxt, y);
-      }
-
-      // 2 ISSE 17 1
-      {
-        int err=y*32767-squash(p[2]);
-        int *wt=(int*)&comp[2].cm[comp[2].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[1]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[2].ht[comp[2].c+(hmap4&15)]=st.next(comp[2].cxt, y);
-      }
-
-      // 3 ISSE 18 2
-      {
-        int err=y*32767-squash(p[3]);
-        int *wt=(int*)&comp[3].cm[comp[3].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[2]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[3].ht[comp[3].c+(hmap4&15)]=st.next(comp[3].cxt, y);
-      }
-
-      // 4 ISSE 18 3
-      {
-        int err=y*32767-squash(p[4]);
-        int *wt=(int*)&comp[4].cm[comp[4].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[3]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[4].ht[comp[4].c+(hmap4&15)]=st.next(comp[4].cxt, y);
-      }
-
-      // 5 ISSE 19 4
-      {
-        int err=y*32767-squash(p[5]);
-        int *wt=(int*)&comp[5].cm[comp[5].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[4]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[5].ht[comp[5].c+(hmap4&15)]=st.next(comp[5].cxt, y);
-      }
-
-      // 6 MATCH 22 24
-      {
-        if (int(comp[6].c)!=y) comp[6].a=0;
-        comp[6].ht(comp[6].limit>>3)+=comp[6].ht(comp[6].limit>>3)+y;
-        if ((++comp[6].limit&7)==0) {
-          int pos=comp[6].limit>>3;
-          if (comp[6].a==0) {
-            comp[6].b=pos-comp[6].cm(z.H(6));
-            if (comp[6].b&(comp[6].ht.size()-1))
-              while (comp[6].a<255 && comp[6].ht(pos-comp[6].a-1)
-                     ==comp[6].ht(pos-comp[6].a-comp[6].b-1))
-                ++comp[6].a;
-          }
-          else comp[6].a+=comp[6].a<255;
-          comp[6].cm(z.H(6))=pos;
-          if (comp[6].a>0) comp[6].cxt=2048/comp[6].a;
-        }
-      }
-
-      // 7 MIX 16 0 7 24 255
-      {
-        int err=(y*32767-squash(p[7]))*24>>4;
-        int* wt=(int*)&comp[7].cm[comp[7].cxt];
-          wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-          wt[1]=clamp512k(wt[1]+((err*p[1]+(1<<12))>>13));
-          wt[2]=clamp512k(wt[2]+((err*p[2]+(1<<12))>>13));
-          wt[3]=clamp512k(wt[3]+((err*p[3]+(1<<12))>>13));
-          wt[4]=clamp512k(wt[4]+((err*p[4]+(1<<12))>>13));
-          wt[5]=clamp512k(wt[5]+((err*p[5]+(1<<12))>>13));
-          wt[6]=clamp512k(wt[6]+((err*p[6]+(1<<12))>>13));
-      }
-      break;
-    }
-    case 7: {
-      // 22 components
-
-      // 0 CONST 160
-
-      // 1 ICM 5
-      {
-        comp[1].ht[comp[1].c+(hmap4&15)]=
-            st.next(comp[1].ht[comp[1].c+(hmap4&15)], y);
-        U32& pn=comp[1].cm(comp[1].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 2 ISSE 13 1
-      {
-        int err=y*32767-squash(p[2]);
-        int *wt=(int*)&comp[2].cm[comp[2].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[1]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[2].ht[comp[2].c+(hmap4&15)]=st.next(comp[2].cxt, y);
-      }
-
-      // 3 ISSE 16 2
-      {
-        int err=y*32767-squash(p[3]);
-        int *wt=(int*)&comp[3].cm[comp[3].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[2]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[3].ht[comp[3].c+(hmap4&15)]=st.next(comp[3].cxt, y);
-      }
-
-      // 4 ISSE 18 3
-      {
-        int err=y*32767-squash(p[4]);
-        int *wt=(int*)&comp[4].cm[comp[4].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[3]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[4].ht[comp[4].c+(hmap4&15)]=st.next(comp[4].cxt, y);
-      }
-
-      // 5 ISSE 19 4
-      {
-        int err=y*32767-squash(p[5]);
-        int *wt=(int*)&comp[5].cm[comp[5].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[4]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[5].ht[comp[5].c+(hmap4&15)]=st.next(comp[5].cxt, y);
-      }
-
-      // 6 ISSE 19 5
-      {
-        int err=y*32767-squash(p[6]);
-        int *wt=(int*)&comp[6].cm[comp[6].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[5]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[6].ht[comp[6].c+(hmap4&15)]=st.next(comp[6].cxt, y);
-      }
-
-      // 7 ISSE 20 6
-      {
-        int err=y*32767-squash(p[7]);
-        int *wt=(int*)&comp[7].cm[comp[7].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[6]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[7].ht[comp[7].c+(hmap4&15)]=st.next(comp[7].cxt, y);
-      }
-
-      // 8 MATCH 22 24
-      {
-        if (int(comp[8].c)!=y) comp[8].a=0;
-        comp[8].ht(comp[8].limit>>3)+=comp[8].ht(comp[8].limit>>3)+y;
-        if ((++comp[8].limit&7)==0) {
-          int pos=comp[8].limit>>3;
-          if (comp[8].a==0) {
-            comp[8].b=pos-comp[8].cm(z.H(8));
-            if (comp[8].b&(comp[8].ht.size()-1))
-              while (comp[8].a<255 && comp[8].ht(pos-comp[8].a-1)
-                     ==comp[8].ht(pos-comp[8].a-comp[8].b-1))
-                ++comp[8].a;
-          }
-          else comp[8].a+=comp[8].a<255;
-          comp[8].cm(z.H(8))=pos;
-          if (comp[8].a>0) comp[8].cxt=2048/comp[8].a;
-        }
-      }
-
-      // 9 ICM 17
-      {
-        comp[9].ht[comp[9].c+(hmap4&15)]=
-            st.next(comp[9].ht[comp[9].c+(hmap4&15)], y);
-        U32& pn=comp[9].cm(comp[9].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 10 ISSE 19 9
-      {
-        int err=y*32767-squash(p[10]);
-        int *wt=(int*)&comp[10].cm[comp[10].cxt*2];
-        wt[0]=clamp512k(wt[0]+((err*p[9]+(1<<12))>>13));
-        wt[1]=clamp512k(wt[1]+((err+16)>>5));
-        comp[10].ht[comp[10].c+(hmap4&15)]=st.next(comp[10].cxt, y);
-      }
-
-      // 11 ICM 13
-      {
-        comp[11].ht[comp[11].c+(hmap4&15)]=
-            st.next(comp[11].ht[comp[11].c+(hmap4&15)], y);
-        U32& pn=comp[11].cm(comp[11].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 12 ICM 13
-      {
-        comp[12].ht[comp[12].c+(hmap4&15)]=
-            st.next(comp[12].ht[comp[12].c+(hmap4&15)], y);
-        U32& pn=comp[12].cm(comp[12].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 13 ICM 13
-      {
-        comp[13].ht[comp[13].c+(hmap4&15)]=
-            st.next(comp[13].ht[comp[13].c+(hmap4&15)], y);
-        U32& pn=comp[13].cm(comp[13].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 14 ICM 14
-      {
-        comp[14].ht[comp[14].c+(hmap4&15)]=
-            st.next(comp[14].ht[comp[14].c+(hmap4&15)], y);
-        U32& pn=comp[14].cm(comp[14].cxt);
-        pn+=int(y*32767-(pn>>8))>>2;
-      }
-
-      // 15 MIX 16 0 15 24 255
-      {
-        int err=(y*32767-squash(p[15]))*24>>4;
-        int* wt=(int*)&comp[15].cm[comp[15].cxt];
-          wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-          wt[1]=clamp512k(wt[1]+((err*p[1]+(1<<12))>>13));
-          wt[2]=clamp512k(wt[2]+((err*p[2]+(1<<12))>>13));
-          wt[3]=clamp512k(wt[3]+((err*p[3]+(1<<12))>>13));
-          wt[4]=clamp512k(wt[4]+((err*p[4]+(1<<12))>>13));
-          wt[5]=clamp512k(wt[5]+((err*p[5]+(1<<12))>>13));
-          wt[6]=clamp512k(wt[6]+((err*p[6]+(1<<12))>>13));
-          wt[7]=clamp512k(wt[7]+((err*p[7]+(1<<12))>>13));
-          wt[8]=clamp512k(wt[8]+((err*p[8]+(1<<12))>>13));
-          wt[9]=clamp512k(wt[9]+((err*p[9]+(1<<12))>>13));
-          wt[10]=clamp512k(wt[10]+((err*p[10]+(1<<12))>>13));
-          wt[11]=clamp512k(wt[11]+((err*p[11]+(1<<12))>>13));
-          wt[12]=clamp512k(wt[12]+((err*p[12]+(1<<12))>>13));
-          wt[13]=clamp512k(wt[13]+((err*p[13]+(1<<12))>>13));
-          wt[14]=clamp512k(wt[14]+((err*p[14]+(1<<12))>>13));
-      }
-
-      // 16 MIX 8 0 16 10 255
-      {
-        int err=(y*32767-squash(p[16]))*10>>4;
-        int* wt=(int*)&comp[16].cm[comp[16].cxt];
-          wt[0]=clamp512k(wt[0]+((err*p[0]+(1<<12))>>13));
-          wt[1]=clamp512k(wt[1]+((err*p[1]+(1<<12))>>13));
-          wt[2]=clamp512k(wt[2]+((err*p[2]+(1<<12))>>13));
-          wt[3]=clamp512k(wt[3]+((err*p[3]+(1<<12))>>13));
-          wt[4]=clamp512k(wt[4]+((err*p[4]+(1<<12))>>13));
-          wt[5]=clamp512k(wt[5]+((err*p[5]+(1<<12))>>13));
-          wt[6]=clamp512k(wt[6]+((err*p[6]+(1<<12))>>13));
-          wt[7]=clamp512k(wt[7]+((err*p[7]+(1<<12))>>13));
-          wt[8]=clamp512k(wt[8]+((err*p[8]+(1<<12))>>13));
-          wt[9]=clamp512k(wt[9]+((err*p[9]+(1<<12))>>13));
-          wt[10]=clamp512k(wt[10]+((err*p[10]+(1<<12))>>13));
-          wt[11]=clamp512k(wt[11]+((err*p[11]+(1<<12))>>13));
-          wt[12]=clamp512k(wt[12]+((err*p[12]+(1<<12))>>13));
-          wt[13]=clamp512k(wt[13]+((err*p[13]+(1<<12))>>13));
-          wt[14]=clamp512k(wt[14]+((err*p[14]+(1<<12))>>13));
-          wt[15]=clamp512k(wt[15]+((err*p[15]+(1<<12))>>13));
-      }
-
-      // 17 MIX2 0 15 16 24 0
-      {
-        int err=(y*32767-squash(p[17]))*24>>5;
-        int w=comp[17].a16[comp[17].cxt];
-        w+=(err*(p[15]-p[16])+(1<<12))>>13;
-        if (w<0) w=0;
-        if (w>65535) w=65535;
-        comp[17].a16[comp[17].cxt]=w;
-      }
-
-      // 18 SSE 8 17 32 255
-      train(comp[18], y);
-
-      // 19 MIX2 8 17 18 16 255
-      {
-        int err=(y*32767-squash(p[19]))*16>>5;
-        int w=comp[19].a16[comp[19].cxt];
-        w+=(err*(p[17]-p[18])+(1<<12))>>13;
-        if (w<0) w=0;
-        if (w>65535) w=65535;
-        comp[19].a16[comp[19].cxt]=w;
-      }
-
-      // 20 SSE 16 19 32 255
-      train(comp[20], y);
-
-      // 21 MIX2 0 19 20 16 0
-      {
-        int err=(y*32767-squash(p[21]))*16>>5;
-        int w=comp[21].a16[comp[21].cxt];
-        w+=(err*(p[19]-p[20])+(1<<12))>>13;
-        if (w<0) w=0;
-        if (w>65535) w=65535;
-        comp[21].a16[comp[21].cxt]=w;
-      }
-      break;
-    }
-    default: return update0(y);
-  }
-  c8+=c8+y;
-  if (c8>=256) {
-    z.run(c8-256);
-    hmap4=1;
-    c8=1;
-  }
-  else if (c8>=16 && c8<32)
-    hmap4=(hmap4&0xf)<<5|y<<4|1;
-  else
-    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);
-}
-
-void ZPAQL::run(U32 input) {
-  switch(select) {
-    case 1: {
-      a = input;
-      m(b) = a;
-      a = 0;
-      d = 0;
-      a = (a+m(b)+512)*773;
-      --b;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      ++d;
-      --b;
-      a = (a+m(b)+512)*773;
-      --b;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      return;
-      break;
-    }
-    case 2: {
-      a = input;
-      f = (a == c);
-      c = a;
-      if (!f) goto L200007;
-      ++b;
-      goto L200008;
-L200007:
-      b = 0;
-L200008:
-      a = b;
-      h(d) = 0;
-      h(d) = (h(d)+a+512)*773;
-      return;
-      break;
-    }
-    case 3: {
-      a = input;
-      f = (a > U32(255));
-      if (f) goto L300052;
-      c = a;
-      a = d;
-      f = (a == U32(0));
-      if (!f) goto L300016;
-      d = c;
-      ++d;
-      m(b) = c;
-      ++b;
-      goto L300050;
-L300016:
-      a = d;
-      --a;
-      f = (a > U32(255));
-      if (f) goto L300038;
-      f = (a == c);
-      if (!f) goto L300032;
-      a += 255;
-      ++a;
-      ++a;
-      d = a;
-      goto L300034;
-L300032:
-      d = c;
-      ++d;
-L300034:
-      m(b) = c;
-      ++b;
-      goto L300050;
-L300038:
-      --d;
-L300039:
-      a = c;
-      f = (a > U32(0));
-      if (!f) goto L300049;
-      m(b) = d;
-      ++b;
-      --c;
-      goto L300039;
-L300049:
-      d = 0;
-L300050:
-      goto L300147;
-L300052:
-      --b;
-      a = m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      c = a;
-      r[1] = a;
-      a = b;
-      r[2] = a;
-L300072:
-      a = b;
-      f = (a > U32(0));
-      if (!f) goto L300087;
-      --b;
-      a = m(b);
-      ++a;
-      a &= 255;
-      d = a;
-      d = ~d;
-      ++h(d);
-      goto L300072;
-L300087:
-      d = 0;
-      d = ~d;
-      h(d) = 1;
-      a = 0;
-L300092:
-      a += h(d);
-      h(d) = a;
-      --d;
-      swap(d);
-      a = ~a;
-      f = (a > U32(255));
-      a = ~a;
-      swap(d);
-      if (!f) goto L300092;
-      b = 0;
-L300104:
-      a = c;
-      f = (a > b);
-      if (!f) goto L300117;
-      d = m(b);
-      d = ~d;
-      ++h(d);
-      d = h(d);
-      --d;
-      h(d) = b;
-      ++b;
-      goto L300104;
-L300117:
-      b = c;
-      ++b;
-      c = r[2];
-L300121:
-      a = c;
-      f = (a > b);
-      if (!f) goto L300134;
-      d = m(b);
-      d = ~d;
-      ++h(d);
-      d = h(d);
-      --d;
-      h(d) = b;
-      ++b;
-      goto L300121;
-L300134:
-      d = r[1];
-L300136:
-      a = d;
-      f = (a == U32(0));
-      if (f) goto L300147;
-      d = h(d);
-      b = d;
-      a = m(b);
-      if (output) output->put(a); if (sha1) sha1->put(a);
-      goto L300136;
-L300147:
-      return;
-      break;
-    }
-    case 4: {
-      a = input;
-      d = 1;
-      h(d) = 0;
-      h(d) = (h(d)+a+512)*773;
-      return;
-      break;
-    }
-    case 5: {
-      a = input;
-      f = (a > U32(255));
-      if (f) goto L500008;
-      m(b) = a;
-      ++b;
-      goto L500103;
-L500008:
-      --b;
-      a = m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      --b;
-      a <<= (8&31);
-      a += m(b);
-      c = a;
-      r[1] = a;
-      a = b;
-      r[2] = a;
-L500028:
-      a = b;
-      f = (a > U32(0));
-      if (!f) goto L500043;
-      --b;
-      a = m(b);
-      ++a;
-      a &= 255;
-      d = a;
-      d = ~d;
-      ++h(d);
-      goto L500028;
-L500043:
-      d = 0;
-      d = ~d;
-      h(d) = 1;
-      a = 0;
-L500048:
-      a += h(d);
-      h(d) = a;
-      --d;
-      swap(d);
-      a = ~a;
-      f = (a > U32(255));
-      a = ~a;
-      swap(d);
-      if (!f) goto L500048;
-      b = 0;
-L500060:
-      a = c;
-      f = (a > b);
-      if (!f) goto L500073;
-      d = m(b);
-      d = ~d;
-      ++h(d);
-      d = h(d);
-      --d;
-      h(d) = b;
-      ++b;
-      goto L500060;
-L500073:
-      b = c;
-      ++b;
-      c = r[2];
-L500077:
-      a = c;
-      f = (a > b);
-      if (!f) goto L500090;
-      d = m(b);
-      d = ~d;
-      ++h(d);
-      d = h(d);
-      --d;
-      h(d) = b;
-      ++b;
-      goto L500077;
-L500090:
-      d = r[1];
-L500092:
-      a = d;
-      f = (a == U32(0));
-      if (f) goto L500103;
-      d = h(d);
-      b = d;
-      a = m(b);
-      if (output) output->put(a); if (sha1) sha1->put(a);
-      goto L500092;
-L500103:
-      return;
-      break;
-    }
-    case 6: {
-      a = input;
-      ++c;
-      m(c) = a;
-      b = c;
-      a = 0;
-      d = 1;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      --b;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      ++d;
-      a = m(c);
-      a <<= (8&31);
-      h(d) = a;
-      return;
-      break;
-    }
-    case 7: {
-      a = input;
-      ++c;
-      m(c) = a;
-      b = c;
-      a = 0;
-      d = 2;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      --b;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      --b;
-      ++d;
-      a = m(c);
-      a &= ~ 32;
-      f = (a > U32(64));
-      if (!f) goto L700057;
-      f = (a < U32(91));
-      if (!f) goto L700057;
-      ++d;
-      h(d) = (h(d)+a+512)*773;
-      --d;
-      swap(h(d));
-      a += h(d);
-      a *= 20;
-      h(d) = a;
-      goto L700066;
-L700057:
-      a = h(d);
-      f = (a == U32(0));
-      if (f) goto L700065;
-      ++d;
-      h(d) = a;
-      --d;
-L700065:
-      h(d) = 0;
-L700066:
-      ++d;
-      ++d;
-      b = c;
-      --b;
-      a = 0;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      ++d;
-      --b;
-      a = 0;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      ++d;
-      --b;
-      a = 0;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      ++d;
-      a = b;
-      a -= 212;
-      b = a;
-      a = 0;
-      a = (a+m(b)+512)*773;
-      h(d) = a;
-      swap(b);
-      a -= 216;
-      swap(b);
-      a = m(b);
-      a &= 60;
-      h(d) = (h(d)+a+512)*773;
-      ++d;
-      a = m(c);
-      a <<= (9&31);
-      h(d) = a;
-      ++d;
-      ++d;
-      ++d;
-      ++d;
-      ++d;
-      h(d) = a;
-      return;
-      break;
-    }
-    default: run0(input);
-  }
-}
-}
-
-#endif // ifndef OPT
