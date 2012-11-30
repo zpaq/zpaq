@@ -1,7 +1,7 @@
-/*  zpaq v1.02 archiver and file compressor.
+/*  zpaq v1.03 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, June 14, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 8, 2009.
 
     LICENSE
 
@@ -19,13 +19,16 @@
 Usage: zpaq command [archive [files...]]  Commands are:
 
   a - Compress files and create or append to archive.
-      Store file names as given on command line.
+      Store file names without a path or drive letter.
 
   c - Create, overwriting archive.
 
   b - Append without storing SHA1 checksum.
 
-  aconfig, cconfig, bconfig - Use compression options in file config
+  ra, rc, rb - Store paths as given on command line.
+
+  aconfig, cconfig, bconfig, raconfig, rcconfig, rbconfig - 
+      Use compression options in file config
 
   x - Extract and uncompress files. If no file names are given, then
       extract all files using the stored names. Skips (does not overwrite)
@@ -35,13 +38,27 @@ Usage: zpaq command [archive [files...]]  Commands are:
 
   l - List contents.
 
-Each "a" command appends one block with one segment per file.
-See http://cs.fit.edu/~mmahoney/compression/zpaq1.pdf
+  v - List contents verbosely.
 
-Versions before 1.00 are in the experimental ZPAQ level 0 format, which
-is not compatible with level 1 or other level 0 versions.
+  [r]k{abc}[config] archive file [offset [length]] - Compress a single file
+      or part of a file. If offset is specified, then skip the first
+      offset bytes (default 0). If length is specified, then compress
+      length bytes (default is to end of file). Also, if offset is not
+      0, then the filename is not stored in the archive to signal
+      the decompressor to append to the previous file. The commands
+      ka, kb, kc otherwise work like a, b, c: ka appends, kb appends
+      without a checksum, and kc creates a new archive. For example:
 
-Options for development:
+        zpaq kccfg1 arc.zp file1 0 100   - compress first 100 bytes using cfg1
+        zpaq kacfg2 arc.zp file1 100 300 - compress next 300 bytes using cfg2
+        zpaq kacfg3 arc.zp file1 400     - compress the rest using cfg3
+        zpaq x arc.zp                    - extract file1
+
+
+Each compression command appends one block with one segment per file. Archives
+are created in ZPAQ level 1 format. See http://mattmahoney.net/dc/zpaq.pdf
+
+Options for developers:
 
   t - Extract like x but without post-processing (for debugging).
 
@@ -58,7 +75,7 @@ Options for development:
       output is omitted, write to stdout. If input is omitted, read
       from stdin.
 
-  sconfig - Compile config and output in the format of a C array
+  sconfig - Compile config and output the header in the format of a C array
       initialization list.
 
 The configuration file has the following format:
@@ -650,6 +667,7 @@ static const char* opcodelist[258]={
 class ZPAQL {
 public:
   ZPAQL();
+  void load(int cn, int hn, const U8* data); // init from data[cn+hn]
   void read(FILE* in);    // Read header from archive
   void write(FILE* out);  // Write header to archive
   U32 compile(FILE* in);  // Create header from config file
@@ -658,7 +676,7 @@ public:
   void initp();           // Initialize as PCOMP
   void run(U32 input);    // Execute with input
   void step(U32 input);   // Execute while displaying progress
-  void prints();          // Print HCOMP as an array initialization
+  void prints();          // Print header as an array initialization
   double memory();        // Return memory requirement in bytes
   int ph() {return header[4];}  // ph
   int pm() {return header[5];}  // pm
@@ -703,6 +721,26 @@ ZPAQL::ZPAQL() {
   verbose=true;
   output=0;
   sha1=0;
+}
+
+// Copy cn bytes of COMP and hn bytes of HCOMP from data to header
+void ZPAQL::load(int cn, int hn, const U8* data) {
+  assert(header.size()==0);
+  assert(cn>=7);
+  assert(hn>=1);
+  assert(data);
+  cend=cn;
+  hbegin=cend+128;
+  hend=hbegin+hn;
+  header.resize(hend+144);
+  for (int i=0; i<cn; ++i)
+    header[i]=data[i];
+  for (int i=0; i<hn; ++i)
+    header[hbegin+i]=data[cn+i];
+  hsize=cn+hn-2;
+  assert(header[0]+256*header[1]==hsize);
+  assert(header[cend-1]==0);
+  assert(header[hend-1]==0);
 }
 
 // Read header
@@ -948,7 +986,7 @@ void ZPAQL::step(U32 input) {
   assert(h.size()>0);
   pc=hbegin;
   a=input;
-  printf(
+  printf("\n"
   "  pc   opcode  f      a          b      *b      c      *c      d         *d\n"
   "----- -------- - ---------- ---------- --- ---------- --- ---------- ----------\n");
   printf("               %d %10u %10u %3u %10u %3u %10u %10u\n",
@@ -991,16 +1029,21 @@ void ZPAQL::step(U32 input) {
   printf("\n\n");
 }
 
-// Print HCOMP as an array initialization in C
+// Print header as an array initialization in C
 void ZPAQL::prints() {
   assert(header.size()>hend);
   assert(hend>=hbegin);
   assert(hbegin>=0);
-  printf("\n[%d]={1,%d,%d", hend-hbegin+3, (hend-hbegin)&255, (hend-hbegin)>>8);
+  printf("\n\n[%d]={ // COMP %d bytes\n", cend+hend-hbegin, cend);
+  for (int i=0; i<cend; ++i) {
+    printf("%d,", header[i]);
+    if (i%16==15) printf("\n");
+  }
+  printf("\n  // HCOMP %d bytes\n", hend-hbegin);
   for (int i=hbegin; i<hend; ++i) {
-    printf(",");
-    if ((i-hbegin)%16==15) printf("\n");
     printf("%d", header[i]);
+    if (i<hend-1) printf(",");
+    if ((i-hbegin)%16==15) printf("\n");
   }
   printf("}\n");
 }
@@ -2107,7 +2150,21 @@ void PostProcessor::write(int c) {
 
 /////////////////////////// Decompress ///////////////////////
 
+// Reject archive filenames that might cause problems
+bool validate_filename(const char* filename) {
+  int len=strlen(filename);
+  if (len<1) return true;  // No name is OK
+  if (len>511) return false;  // name too long
+  if (strstr(filename, "../")) return false; // no backward paths
+  if (strstr(filename, "..\\")) return false;
+  if (filename[0]=='/' || filename[0]=='\\') return false; // no absolute path
+  for (int i=0; i<len; ++i)  // no control chars, drive letters, or devices
+    if ((filename[i]&255)<32 || filename[i]==':') return false;
+  return true;
+}
+
 // Decompress archive argv[2] to stored filenames or argv[3..argc-1]
+// If a segment has no filename, then append to the previous file.
 void decompress(int argc, char** argv) {
   assert(argc>=3);
   assert(argv[1][0]=='x' || argv[1][0]=='t');
@@ -2116,10 +2173,9 @@ void decompress(int argc, char** argv) {
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
 
-  // number of files extracted
-  int filecount=0;
-
   // Read the archive
+  int filecount=0;  // number of files extracted
+  FILE *out=0;  // file to extract
   int c;
   while ((c=getc(in))=='z') {
     if (getc(in)!='P' || getc(in) != 'Q' || getc(in)!=LEVEL || getc(in)!=1)
@@ -2147,43 +2203,53 @@ void decompress(int argc, char** argv) {
       while ((c=getc(in))!=EOF && c!=0) ;
       if (getc(in)) error("reserved");  // reserved 0
 
-      // If the user gave an output file starting at argv[3], use it instead.
-      // If the user doesn't name all the files, then stop after the last
-      // named file.
-      FILE* out=0;
-      if (argc>3) {
-        if (filecount+3 < argc) {
-          out=fopen(argv[filecount+3], "wb");
-          if (!out) {
-            perror(argv[filecount+3]);
-            printf("skipping %s -> %s ... ", filename, argv[filecount+3]);
-          }
-          else
-            printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
-        }
-        else {
-          printf("Skipping %s and remaining files\n", filename);
-          goto end;
-        }
-      }
+      // If a segment is named, or no output file is open, then
+      // create a new output file.
+      if (filename[0] || !out) {
+        if (out) fclose(out), out=0;
 
-      // Otherwise, use the names in the archive, but don't clobber.
-      else {
-        out=fopen(filename, "rb");
-        if (out) {
-          printf("Won't overwrite %s, skipping... ", filename);
-          fclose(out);
-          out=0;
-        }
-        else {
-          out=fopen(filename, "wb");
-          if (!out) {
-            perror(filename);
-            printf("skipping %s ... ", filename);
+        // If the user gave an output file starting at argv[3], use it instead.
+        // If the user doesn't name all the files, then stop after the last
+        // named file.
+        if (argc>3) {
+          if (filecount+3 < argc) {
+            out=fopen(argv[filecount+3], "wb");
+            if (!out) {
+              perror(argv[filecount+3]);
+              goto end;
+            }
+            else
+              printf("Decompressing %s -> %s ... ", filename, argv[filecount+3]);
+          }
+          else {
+            printf("Skipping %s and remaining files\n", filename);
+            goto end;
           }
         }
-        if (out)
-          printf("Decompressing %s ... ", filename);
+
+        // Otherwise, use the names in the archive, but don't clobber
+        // or use suspicious filenames
+        else {
+          if (!validate_filename(filename)) {
+            printf("Bad filename in archive: %s\n", filename);
+            goto end;
+          }
+          out=fopen(filename, "rb");
+          if (out) {
+            printf("Error: won't overwrite %s\n", filename);
+            goto end;
+          }
+          else {
+            out=fopen(filename, "wb");
+            if (!out) {
+              perror(filename);
+              goto end;
+            }
+          }
+          if (out)
+            printf("Decompressing %s ... ", filename);
+        }
+        ++filecount;
       }
 
       // Decompress
@@ -2200,8 +2266,6 @@ void decompress(int argc, char** argv) {
           pp.write(c);
         pp.write(-1);
       }
-      ++filecount;
-      if (out) fclose(out);
 
       // Check for end of segment and block markers
       int eos=getc(in);  // 253=SHA1 follows, 254=EOS
@@ -2236,6 +2300,7 @@ void decompress(int argc, char** argv) {
 
   // Close the archive
 end:
+  if (out) fclose(out);
   printf("%d file(s) extracted\n", filecount);
   fclose(in);
 }
@@ -2536,29 +2601,65 @@ void PreProcessor::compress(U32 a) {
 
 //////////////////////////// Compress ////////////////////////////
 
-// Compress files in argv[3..argc-1] to argv[2]
-// argv[1][0]: a=append, b=append without checksum, c=create archive
-// argv[1]+1: config file
+void usage();  // print help message and exit.
+
+// Remove path from filename
+const char* strip(const char* filename) {
+  assert(filename);
+  int len=strlen(filename);
+  const char *result=filename;
+  for (int i=0; i<len; ++i) {
+    if (filename[i]=='/' || filename[i]=='\\' || (i==1 && filename[i]==':'))
+      result=filename+i+1;
+  }
+  return result;
+}
+
+// Compress files
+// argv = [r](a|b|c)config archive files... 
+// or     [r][k](a|b|c)[config] archive file [offset [length]]
+// a=append, b=append without checksum, c=create archive,
+// k=compress file[offset..offset+length-1], r=store full path.
 void compress(int argc, char** argv) {
   assert(argc>=3);
-  assert(argv[1][0]=='a' || argv[1][0]=='b' || argv[1][0]=='c');
+  const char *command=argv[1];
+  int rcmd=command[0]=='r';
+  if (rcmd) ++command;
+  int kcmd=command[0]=='k';
+  if (kcmd) ++command;
+  if (!(command[0]=='a' || command[0]=='b' || command[0]=='c')) usage();
 
   // Compile config file
   FILE* cfg=0;   // config file
   U32 cmd=0;     // postprocessor command
   ZPAQL z;       // HCOMP
-  if (argv[1][1]) {
-    cfg=fopen(argv[1]+1, "rb");
-    if (!cfg) perror(argv[1]+1), exit(1);
+  if (command[1]) {
+    cfg=fopen(command+1, "rb");
+    if (!cfg) perror(command+1), exit(1);
     z.verbose=false;
     cmd=z.compile(cfg);
     printf("%1.3f MB memory required.\n", z.memory()/1000000);
   }
-  else
-    error("no config file");
+  else {
+    static U8 header[71]={ // COMP 34 bytes from mid.cfg
+      69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
+      18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
+      255,0,
+      // HCOMP 37 bytes
+      17,104,74,4,95,1,59,112,10,25,59,112,10,25,59,112,
+      10,25,59,112,10,25,59,112,10,25,59,10,59,112,25,69,
+      207,8,112,56,0};
+    z.load(34, 37, header);
+    cmd='0';
+  }
+
+  // Fail if first input file does not exist
+  FILE *in=0;
+  if (argc<=3 || (in=fopen(argv[3], "rb"))==0)
+    perror(argv[3]), exit(1);
 
   // Open archive
-  FILE* out=fopen(argv[2], argv[1][0]=='c' ? "wb" : "ab");
+  FILE* out=fopen(argv[2], command[0]=='c' ? "wb" : "ab");
   if (!out) perror(argv[2]), exit(1);
 
   // Write block header
@@ -2572,29 +2673,42 @@ void compress(int argc, char** argv) {
   PreProcessor pp(&enc, cmd, z.ph(), z.pm());
 
   // Compress files argv[3..argc-1]
-  for (int i=3; i<argc; ++i) {
-    FILE* in=fopen(argv[i], "rb");
-    if (!in)
-      perror(argv[i]);  // skip file not found
+  for (int i=3; i<(kcmd?4:argc); ++i) {
+    if (!in) in=fopen(argv[i], "rb");
+    if (!in) perror(argv[i]);  // skip file not found
     else {
 
-      // Write filename and size to segment header
+      // Write filename (unless kcmd) and size+offset to segment header
       fseek(in, 0, SEEK_END);
-      long size=ftell(in);
-      fprintf(out, "%c%s%c%ld%c%c", 1, argv[i], 0, size, 0, 0);
-      fseek(in, 0, SEEK_SET);
+      long size=ftell(in);  // file size (-1 if fails)
+      long offset=0, length=size;  // from k command
+      if (kcmd && size>=0) {
+        if (argc>4) offset=atol(argv[4]);
+        if (argc>5) length=atoi(argv[5]);
+        if (offset<0) offset=0;
+        if (offset>size) offset=size;
+        if (length<0) length=0;
+        if (length>size-offset) length=size-offset;
+      }
+      fprintf(out, "%c%s%c%ld",
+        1, offset?"":rcmd?argv[i]:strip(argv[i]), 0, length);
+      if (kcmd && offset>0) fprintf(out, "+%ld", offset);
+      fprintf(out, "%c%c", 0, 0);
 
       // Compress 
+      fseek(in, offset, SEEK_SET);
       int c;
       SHA1 sha1;
+      size=length;
       while ((c=getc(in))!=EOF) {
-        if (argv[1][0]!='b') sha1.put(c);
+        if (kcmd && size--<=0) break;
+        if (command[0]!='b') sha1.put(c);
         pp.compress(c);
       }
       pp.compress(EOS);
 
       // Write segment trailer
-      if (argv[1][0]=='b')
+      if (command[0]=='b')
         fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 254);
       else {
         fprintf(out, "%c%c%c%c%c", 0, 0, 0, 0, 253);
@@ -2602,7 +2716,10 @@ void compress(int argc, char** argv) {
           putc(sha1.result(j), out);
       }
       fclose(in);
-      printf("%s %ld -> %ld\n", argv[i], size, ftell(out)-mark);
+      in=0;
+      printf("%s %ld", argv[i], length);
+      if (kcmd && offset>0) printf("+%ld", offset);
+      printf(" -> %ld\n", ftell(out)-mark);
       mark=ftell(out);
     }
   }
@@ -2724,28 +2841,32 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.02 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.03 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
     "Usage: zpaq command archive files...  Commands are:\n"
-    "  cconfig  Create new archive (or overwrite existing archive)\n"
-    "           using compression options in file config.\n"
-    "  aconfig  Append to archive.\n"
-    "  bconfig  Append without storing checksums (saves 20 bytes).\n"
-    "  x        Extract all files using stored names (does not clobber).\n"
-    "           Or if file names are given, rename in that order (clobbers).\n"
-    "  l        List contents of archive.\n"
-    "  v        Verbose listing.\n"
-    "For debugging:\n"
-    "  t                 Extract without postprocessing.\n"
-    "  hconfig args...   Run HCOMP in config with numeric args (no archive).\n"
-    "  pconfig in out    Run PCOMP on files (default stdin/stdout).\n"
-    "  sconfig           To compile HCOMP to a list of bytes to stdout.\n");
+    "  a archive files... - Compress files and append to archive.\n"
+    "  c archive files... - Compress files to new archive (clobbers).\n"
+    "  x archive - Extract all files using stored names (does not clobber).\n"
+    "  x archive files... - Extract and rename (clobbers).\n"
+    "  l archive - List archive contents.\n"
+    "\n"
+    "Advanced options:\n"
+    "  v archive - List archive contents verbosely.\n"
+    "  b archive files... - Compress files and append with no checksum.\n"
+    "  k{a|b|c} archive file [m [n]] - {Append|no checksum|create} archive\n"
+    "    from n (default all) bytes of file skipping first m (default 0).\n"
+    "  [k]{a|b|c}config - Use compression options in config file.\n"
+    "  r[k]{a|b|c} - Store paths.\n"
+    "  t archive [files...] - extract (like x) without postprocessing.\n"
+    "  hconfig args... - Run HCOMP in config with numeric args (no archive).\n"
+    "  pconfig in out  - Run PCOMP on files (default stdin/stdout).\n"
+    "  sconfig - Compile header to a list of bytes to stdout.\n");
   exit(0);
 }
 
-// Command syntax: zpaq1 (afile|cfile|x|l) archive files...
+// Command syntax as above
 int main(int argc, char** argv) {
 
   // Check usage
@@ -2754,7 +2875,7 @@ int main(int argc, char** argv) {
 
   // Do the command
   char cmd=argv[1][0];
-  if ((cmd=='a' || cmd=='b' || cmd=='c') && argc>=3) {
+  if ((cmd=='a' || cmd=='b' || cmd=='c' || cmd=='k' || cmd=='r') && argc>=3) {
     compress(argc, argv);
     printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
   }
