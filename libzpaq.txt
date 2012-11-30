@@ -1,5 +1,5 @@
-                           LIBZPAQ v0.03
-                    Matt Mahoney, Oct. 14, 2010
+                           LIBZPAQ v0.04
+                    Matt Mahoney, Oct. 20, 2010
 
 Libzpaq is a C++ application programming interface library for compression
 and decompression of files or objects in ZPAQ format. Data compressed
@@ -7,20 +7,22 @@ with libzpaq is compatible with the GPL programs zpaq, zp, zpipe, and
 unzpaq found at http://mattmahoney.net/dc/#zpaq
 The format is described in http://mattmahoney.net/dc/zpaq1.pdf
 
-Libzpaq v0.03 is released to the public domain. There are no restrictions
+Libzpaq v0.04 is released to the public domain. There are no restrictions
 on the use of this code. The software is provided "as is" with
 no warranty.
 
-The LIBZPAQ v0.03 software consists of the following files:
+The LIBZPAQ v0.04 software consists of the following files:
 
-  libzpaq.txt - Documentation, this file.
-  libzpaq.h   - Header file to be included by the application developer.
-  libzpaq.cpp - Source code file to be linked by the application developer.
+  libzpaq.txt  - Documentation, this file.
+  libzpaq.h    - Header file to be included by the application developer.
+  libzpaq.cpp  - Source code file to be linked by the application developer.
+  libzpaqo.cpp - Source code for optimized models fast.cfg, mid.cfg, max.cfg.
 
 To compile an application program (g++):
 
-  g++ program.cpp libzpaq.cpp -o program -DNDEBUG
+  g++ program.cpp libzpaq.cpp libzpaqo.cpp -o program -DNDEBUG
 
+libzpaq.h must be available to the compiler.
 Use the -DNDEBUG option to turn off run time checks for production code.
 You can use other optimization options as appropriate.
 
@@ -490,3 +492,6 @@ Some bugs fixed. Added demo2.cpp.
 
 Oct. 14, 2010. v0.03 changes Reader and Writer from template
 parameters to virtual base classes.
+
+Oct. 20, 2010. v0.04 separates custom models into libzpaqo.cpp,
+plus minor fixes.
