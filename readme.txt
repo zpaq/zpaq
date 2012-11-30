@@ -1,15 +1,15 @@
-README for ZPAQ v0.03.
-Matt Mahoney - Feb. 19, 2009, matmahoney (at) yahoo (dot) com.
+README for ZPAQ v0.04.
+Matt Mahoney - Feb. 21, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
 compatibility between versions as advanced compression techniques
 are discovered.
 
-ZPAQ v. 0.03 is an experimental pre-release (level 0) implementation
-of the proposed ZPAQ open standard for highly compressed data.
-It implements version 0.32 of the ZPAQ standard, dated Feb. 19, 2009.
-It is not intended to be compatible with other versions of ZPAQ
+ZPAQ versions before 1.00 are experimental pre-release (level 0)
+implementations of the proposed ZPAQ open standard for highly compressed
+data. They implement only the accompanying version of the ZPAQ standard.
+They are not intended to be compatible with other versions of ZPAQ
 or the upcoming level 1 standard. When the level 1 standard
 is released, all versions will be compatible with one another.
 Level 2 and higher will be backward compatible i.e. able to
@@ -25,7 +25,7 @@ supplied:
 
   min.cfg - Fast, minimal compression with an order 4 context
             model - requires 4 MB memory.
-  max.cfg - Slow but good compression. Requires 315 MB.
+  max.cfg - Slow but good compression. Requires 322 MB.
 
 To create an archive:
 
@@ -39,26 +39,26 @@ example:
   zpaq cmax.cfg calgary.zpaq calgary\*
 
 will display the contents of max.cfg and then
-compress the Calgary corpus (14 files) to 658,501 bytes
-in 36 seconds on a 2 GHz Pentium T3200. The file names are
+compress the Calgary corpus (14 files) to 655,162 bytes
+in 37 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-calgary\BIB 111261 -> 23337
-calgary\BOOK1 768771 -> 203307
-calgary\BOOK2 610856 -> 127386
-calgary\GEO 102400 -> 47120
-calgary\NEWS 377109 -> 92542
-calgary\OBJ1 21504 -> 8896
-calgary\OBJ2 246814 -> 56985
-calgary\PAPER1 53161 -> 11563
-calgary\PAPER2 82199 -> 17708
-calgary\PIC 513216 -> 28942
-calgary\PROGC 39611 -> 9347
-calgary\PROGL 71646 -> 11282
-calgary\PROGP 49379 -> 8119
-calgary\TRANS 93695 -> 11967
--> 658501
-Used 36.60 seconds
+calgary\BIB 111261 -> 23082
+calgary\BOOK1 768771 -> 201796
+calgary\BOOK2 610856 -> 126387
+calgary\GEO 102400 -> 46839
+calgary\NEWS 377109 -> 92230
+calgary\OBJ1 21504 -> 9044
+calgary\OBJ2 246814 -> 57231
+calgary\PAPER1 53161 -> 11449
+calgary\PAPER2 82199 -> 17537
+calgary\PIC 513216 -> 28924
+calgary\PROGC 39611 -> 9315
+calgary\PROGL 71646 -> 11253
+calgary\PROGP 49379 -> 8174
+calgary\TRANS 93695 -> 11891
+-> 655152
+Used 37.45 seconds
 
 To append to an existing archive:
 
@@ -175,8 +175,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq033.pdf -Version 0.33 of the ZPAQ specification, valid only
-               for zpaq v0.03.
+  zpaq034.pdf -Version 0.34 of the ZPAQ specification, valid only
+               for zpaq v0.04.
 
   zpaq.cpp -   Source code.
 
@@ -210,21 +210,24 @@ v0.02 - Feb. 18, 2009. Adds R=X, X=R, and LJ
         Current max.cfg does poorly with maximumcompression.com.
         Expect more changes.
 
-v0.03 - Feb. 19, 2009. Fixed MIX, MIX2, and IMIX to reduce overflow,
+v0.03 - Feb. 19, 2009. Fixed MIX, MIX2, and IMIX spec. to reduce overflow,
         which resulted in poor compression of large files. Modified
         stretch function for better compression.
 
-Block 1: requires 314.476 MB memory (with POST X to turn on E8E9)
-  maxcomp\a10.jpg  842468 -> 829159
-  maxcomp\acrord32.exe  3870784 -> 1154882
-  maxcomp\english.dic  4067439 -> 476099
-  maxcomp\FlashMX.pdf  4526946 -> 3649140
-  maxcomp\fp.log  20617071 -> 432826
-  maxcomp\mso97.dll  3782416 -> 1545417
-  maxcomp\ohs.doc  4168192 -> 757538
-  maxcomp\rafale.bmp  4149414 -> 763314
-  maxcomp\vcfiu.hlp  4121418 -> 499321
-  maxcomp\world95.txt  2988578 -> 441130
-53,134,726 -> 10,548,826
+        Block 1: requires 314.476 MB memory (with POST X to turn on E8E9)
+          maxcomp\a10.jpg  842468 -> 829159
+          maxcomp\acrord32.exe  3870784 -> 1154882
+          maxcomp\english.dic  4067439 -> 476099
+          maxcomp\FlashMX.pdf  4526946 -> 3649140
+          maxcomp\fp.log  20617071 -> 432826
+          maxcomp\mso97.dll  3782416 -> 1545417
+          maxcomp\ohs.doc  4168192 -> 757538
+          maxcomp\rafale.bmp  4149414 -> 763314
+          maxcomp\vcfiu.hlp  4121418 -> 499321
+          maxcomp\world95.txt  2988578 -> 441130
+        53,134,726 -> 10,548,826
 
+v0.04 - Feb. 21, 2009. Fixed train() spec. to fix poor compression with
+        SSE and possibly other components. Modifed squash() for better
+        compression. New max.cfg.
 
