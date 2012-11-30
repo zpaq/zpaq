@@ -1,40 +1,17 @@
-#   Copyright
+#  Documentation for libzpaq
 #
-#      Copyright (C) 2011 Matt Mahoney <matmahoney@yahoo.com>
+#  Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 #
-#   License
+#  Permission is hereby granted, free of charge, to any person obtaining a copy
+#  of this software and associated documentation files (the "Software"), to deal
+#  in the Software without restriction, including without limitation the rights
+#  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#  copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so without restriction.
+#  This Software is provided "as is" without warranty.
 #
-#       This program is free software; you can redistribute it and/or modify
-#       it under the terms of the GNU General Public License as published by
-#       the Free Software Foundation; either version 3 of the License, or
-#       (at your option) any later version.
-#
-#       This program is distributed in the hope that it will be useful,
-#       but WITHOUT ANY WARRANTY; without even the implied warranty of
-#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-#       GNU General Public License for more details.
-#
-#       You should have received a copy of the GNU General Public License
-#       along with this program. If not, see <http://www.gnu.org/licenses/>.
-#
-#   Description
-#
-#	To learn what TOP LEVEL section to use in manual pages,
-#	see POSIX/Susv standard and "Utility Description Defaults" at
-#	http://www.opengroup.org/onlinepubs/009695399/utilities/xcu_chap01.html#tag_01_11
-#
-#	This is manual page in Perl POD format. Read more at
-#	http://perldoc.perl.org/perlpod.html or run command:
-#
-#	    perldoc perlpod | less
-#
-#	To check the syntax:
-#
-#	    podchecker *.pod
-#
-#	Create manual page with command:
-#
-#	    pod2man PAGE.N.pod > PAGE.N
+#  To create man page: pod2man libzpaq.3.pod > libzpaq.3
+#  To create HTML documentation: pod2html libzpaq.3.pod > libzpaq.html
 
 =pod
 
@@ -80,7 +57,7 @@ libzpaq - ZPAQ compression API
         void startSegment(const char* filename = 0,
                           const char* comment = 0);
         void setInput(Reader* i);
-        void postProcess(const char* pcomp = 0);
+        void postProcess(const char* pcomp = 0, int length = 0);
         bool compress(int n = -1);
         void endSegment(const char* sha1string = 0);
         void endBlock();
@@ -108,9 +85,11 @@ libzpaq - ZPAQ compression API
 
 =head1 DESCRIPTION
 
-I<libzpaq> is a public domain C++ API for compressing or decompressing
+I<libzpaq> is a C++ API for compressing or decompressing
 files or objects in memory comforming to the ZPAQ level 1 standard
-(see I<availability>).
+(see I<availability>). This document describes version 3.00
+of the software. The software may be used without
+restriction under a modified MIT license.
 
 ZPAQ provides a high level of data compression in a streaming
 (single pass) self-describing format that supports single or multiple
@@ -143,7 +122,7 @@ a description of the decompression algorithm. Each segment consists
 of an optional filename string, an optional comment string,
 self delimiting compressed data, and an optional SHA-1 checksum.
 If ZPAQ blocks are mixed with other data, they must be
-preceded by an identifying 13 byte tag which does not
+preceded by an identifying 13 byte tag which does not otherwise
 appear in that data.
 
 ZPAQ compression is based on the PAQ context mixing model.
@@ -219,6 +198,9 @@ define methods C<get()> and C<put()> which the code
 will use to read and write bytes. The user must also define
 a callback error handler.
 
+By default, libzpaq(3) includes run time assertions. These may be
+turned off for greater speed by compiling with option -DNDEBUG.
+
 All of the API code is contained in the namespace C<libzpaq>.
 
 =head2 Callback Functions
@@ -227,7 +209,7 @@ The following three functions must be defined by the user.
 
 =over
 
-=item C<extern void error(const char* msg);>
+=item C<extern void libzpaq::error(const char* msg);>
 
 This function must be defined by the user to handle errors
 from libzpaq. The library will call the function with
@@ -236,7 +218,7 @@ result from bad input during decompression, out of memory,
 or illegal arguments or calling sequences to libzpaq
 functions. Errors should be considered unrecoverable.
 
-=item C<int Reader::get() = 0;>
+=item C<int libzpaq::Reader::get() = 0;>
 
 The user must create a class derived from Reader with an
 implementation for C<get()> that reads one byte of input
@@ -244,7 +226,7 @@ and returns its value in the range 0...255, or returns
 EOF (-1) at end of input. Objects of the derived type
 would then be passed to functions that require a C<Reader>.
 
-=item C<void Writer::put(int c) = 0;>
+=item C<void libzpaq::Writer::put(int c) = 0;>
 
 The user must create a class derived from Writer with
 an implemenation of C<put()> which is expected to take
@@ -255,6 +237,9 @@ would then be passed to functions that require a C<Writer>.
 =back
 
 =head2 Simple Compression
+
+In the remainder of this document, all classes and
+functions are assumed to be in namespace C<libzpaq>.
 
 =over
 
@@ -312,9 +297,12 @@ Appends one byte c (0...255) to the string whose hash is represented.
 
 =item C<double size() const;>
 
-Returns the length of the string whose hash is represented.
+Returns the length (so far) of the string whose hash is represented.
 The largest possible value returned is
-2^61 - 1 = 2305843009213693951.0. The initial value is 0.0.
+2^61 - 1 = 2305843009213693951.0, but values larger than 2^53 =
+9007199254740992.0
+will not be exact on systems using IEEE 64 bit floating point
+representation of type C<double>. The initial value is 0.0.
 
 =item C<const char* result();>
 
@@ -376,7 +364,7 @@ archives, C<comment> is normally the file size as a decimal
 number which is displayed when listing the archive contents.
 Omitting it does not affect decompression.
 
-=item C<void postProcess(const char* pcomp = 0);>
+=item C<void postProcess(const char* pcomp = 0, int length = 0);>
 
 Specifies the optional PCOMP string used for post-processing.
 It must be called from within the first segment
@@ -387,14 +375,16 @@ will not post-process the data. The effect is to compress a
 0 byte to indicate to the decompresser that no PCOMP string
 is present.
 
-If C<pcomp> is not 0, then the first two bytes must encode
+If C<pcomp> is not 0, then I<length> bytes of the string I<pcomp>
+are passed. If I<length> is 0 or omitted, then
+the first two bytes must encode
 the length of the rest of the string as a 16 bit unsigned number
 with the least significant byte first. The format of the remainder
 of the string is described in the ZPAQ level 1 standard.
 The effect is to compress a 1 byte
 to indicate the presence of PCOMP, followed by the two length
-bytes and the string as passed. For example,
-C<pcomp("\x02\x00\x05\x08");>
+bytes and the string as passed. For example, either
+C<pcomp("\x02\x00\x05\x08")> or C<pcomp("\x05\x08", 2)>
 would compress the 5 bytes 1, 2, 0, 5, 8.
 The user is responsible for pre-processing the input
 prior to compression so that PCOMP restores the original data.
@@ -516,7 +506,7 @@ the stored checksum, if any.
 
 =item C<bool decompress(int n = -1);>
 
-Decode n byte or until the end of segment, whichever comes
+Decode n bytes or until the end of segment, whichever comes
 first. Return false if the end of segment is reached first. If
 n < 0 or not specified, then decompress to the end of segment
 and return false. C<n> is the number of bytes prior to post-processing.
@@ -547,6 +537,9 @@ Then if C<sha1string> is not 0 then write into
 the 21 byte array that it points to. If a checksum is present,
 then write a 1 into C<sha1string[0]> and write the stored checksum
 in C<sha1string[1...20]>. Otherwise write a 0 in C<sha1string[0]>.
+
+Note that it is not permitted to call decompress() if any compressed
+data has been skipped in any earlier segments in the same block.
 
 =back
 
@@ -689,8 +682,9 @@ if present.
                 d.decompress();
                 char sha1string[21];
                 d.readSegmentEnd(sha1string);
+                const char* sha1result = sha1.result();
                 if (sha1string[0]==1
-                         && memcmp(sha1string+1, sha1.result(), 20))
+                         && memcmp(sha1string+1, sha1result, 20))
                     libzpaq::error("checksum verify error");
             }
         }
@@ -731,18 +725,13 @@ All classes are in C<namespace libzpaq>.
 
 =head2 Types
 
-    typedef unsigned char U8;
-    typedef unsigned short U16;
-    typedef unsigned int U32;
+    typedef uint8_t U8;
+    typedef uint16_t U16;
+    typedef uint32_t U32;
 
 These should be set appropriately for your machine
 to represent 8, 16, and 32 bit two's complement
 unsigned integers, respectively.
-These settings will work on most machines but are not
-guaranteed by the C/C++ standard.
-In particular, C<int> could be 16 bits.
-C<U32> really ought to be defined as C<uint32_t>, but some
-older compilers don't support this.
 
 =head2 Array
 
@@ -751,17 +740,17 @@ constructors. The memory is allocated on a 64 byte address boundary,
 which can improve performance by decreasing cache misses. When
 an Array is created or resized, the memory is initialized to
 zero bits. Arrays cannot be copied or assigned. When compiled
-without -DNDEBUG, element accesses are bounds checked. The maximum
-size is 2^30 - 1 bytes (under 1 GB).
+without -DNDEBUG, element accesses are bounds checked.
 
     template <typename T>
     class Array {
     public:
-        Array(int sz=0, int ex=0);
-        void resize(int sz, int ex=0);
-        int size() const;
-        T& operator[](int i);
-        T& operator()(int i);
+        Array(size_t sz=0, int ex=0);
+        void resize(size_t sz, int ex=0);
+        size_t size() const;
+        int isize() const;
+        T& operator[](size_t i);
+        T& operator()(size_t i);
     };
 
 =over
@@ -771,30 +760,37 @@ size is 2^30 - 1 bytes (under 1 GB).
 C<T> is the type of the element. It should be a simple type without
 constructors.
 
-=item C<Array(int sz=0, int ex=0);>
+=item C<Array(size_t sz=0, int ex=0);>
 
 Creates an Array with C<sz> * 2^C<ex> elements.
 (The size is specified this way because C<sz E<lt>E<lt> ex>
 might overflow). If C<ex> is omitted, then
 the size is C<sz> elements. If C<sz> is omitted, then no memory is
-allocated. If the requested size exceeds 1^30 - 1 (for
-example, C<Array<int> a(1, 100);>) then it calls C<error("Array too big")>.
+allocated. If the requested size exceeds the range of C<size_t> (for
+example, C<ArrayE<lt>intE<gt> a(1, 100);>)
+then it calls C<error("Array too big")>.
 If allocation fails, then it calls C<error("Out of memory")>.
 
-=item C<resize(int sz=0, int ex=0);>
+=item C<resize(size_t sz=0, int ex=0);>
 
 Changes the size of the Array as with creation and zeros the memory.
 
-=item C<int size() const;>
+=item C<size_t size() const;>
 
 Returns the number of elements.
 
-=item C<T& operator[](int i);>
+=item C<int isize() const;>
+
+Return the number of elements as an C<int>, which is convenient
+for signed comparisons but might overflow
+if an C<int> is not large enough to hold the result.
+
+=item C<T& operator[](size_t i);>
 
 Returns a reference to the i'th element
 (e.g. C<a[i]>) where i is in the range 0...C<size()-1>.
 
-=item C<T& operator()(int i);>
+=item C<T& operator()(size_t i);>
 
 (e.g. C<a(i)>) returns a reference to the element indexed by
 the low log2(C<size()>) bits of C<i>. The size must be a power of 2.
@@ -928,13 +924,13 @@ is executed and dumps memory on return.
 =item C<Writer* output;>
 
 Points to the destination of the OUT instruction. It calls
-output->put(A) for each output byte A. If 0, then
+C<output-E<gt>put(A)> for each output byte A. If 0, then
 OUT does not write anything. It is normally set only for PCOMP.
 
 =item C<SHA1* sha1;>
 
 Points to the destination of the OUT instruction for computing
-SHA-1 checksums. It calls sha1->put(A) for each output byte A.
+SHA-1 checksums. It calls C<sha1-E<gt>put(A)> for each output byte A.
 If sha1 is 0, no checksum is computed. It is normally set only
 for PCOMP when the user code verifies checksums.
 
@@ -1043,7 +1039,7 @@ a probability of (p*2+1)/65536.
 Updates the model with bit C<y>, which should be 0 or 1.
 
 C<predict()> and C<update()> are defined in either
-I<libzpaqo> or I<zpaqopt> generated by zpaq(1).
+I<libzpaqo> or in code generated by zpaq(1).
 If z.select is 0, then C<predict()> calls C<predict0()>
 and C<update()> calls C<update0()> to
 interpret the COMP section of z. If it is positive, then
@@ -1060,9 +1056,9 @@ ZPAQL byte code string COMP in z.header[7...z.cend-1].
 Each component element in C<comp> has the form:
 
     struct Component {
-        int limit;
-        U32 cxt; 
-        int a, b, c; 
+        size_t limit;
+        size_t cxt; 
+        size_t a, b, c; 
         Array<U32> cm;
         Array<U8> ht;
         Array<U16> a16;
