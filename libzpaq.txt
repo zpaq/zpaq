@@ -1,5 +1,5 @@
-                           LIBZPAQ v0.04
-                    Matt Mahoney, Oct. 20, 2010
+                           LIBZPAQ v2.00
+                    Matt Mahoney, Oct. 30, 2010
 
 Libzpaq is a C++ application programming interface library for compression
 and decompression of files or objects in ZPAQ format. Data compressed
@@ -7,11 +7,11 @@ with libzpaq is compatible with the GPL programs zpaq, zp, zpipe, and
 unzpaq found at http://mattmahoney.net/dc/#zpaq
 The format is described in http://mattmahoney.net/dc/zpaq1.pdf
 
-Libzpaq v0.04 is released to the public domain. There are no restrictions
+Libzpaq v2.00 is released to the public domain. There are no restrictions
 on the use of this code. The software is provided "as is" with
 no warranty.
 
-The LIBZPAQ v0.04 software consists of the following files:
+The LIBZPAQ v2.00 software consists of the following files:
 
   libzpaq.txt  - Documentation, this file.
   libzpaq.h    - Header file to be included by the application developer.
@@ -495,3 +495,6 @@ parameters to virtual base classes.
 
 Oct. 20, 2010. v0.04 separates custom models into libzpaqo.cpp,
 plus minor fixes.
+
+Oct. 30, 2010. v2.00 added functions to support zpaq.cpp. Interface
+is compatible with v0.04.

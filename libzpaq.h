@@ -1,6 +1,6 @@
 /* libzpaq.h 
-LIBZPAQ Version 0.04
-Written by Matt Mahoney, Oct. 20, 2010
+LIBZPAQ Version 2.00
+Written by Matt Mahoney, Oct. 30, 2010
 
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 1 standard described in
@@ -138,6 +138,7 @@ public:
   void run(U32 input);    // Execute with input
   int read(Reader* in2);  // Read header
   bool write(Writer* out2);  // Write header, true unless empty PCOMP
+  int step(U32 input, int mode);  // Trace execution (defined externally)
 
   Writer* output;         // Destination for OUT instruction, or 0 to suppress
   SHA1* sha1;             // Points to checksum computer
@@ -301,9 +302,12 @@ class PostProcessor {
 public:
   ZPAQL z;     // holds PCOMP
   PostProcessor(): state(0), hsize(0), ph(0), pm(0) {}
-  void init(ZPAQL& hz);
+  void init(int h, int m);  // ph, pm sizes of H and M
   int write(int c);  // Input a byte, return state
   int getState() const {return state;}
+  int getModel() const {return z.select;}
+  void setOutput(Writer* out) {z.output=out;}
+  void setSHA1(SHA1* sha1ptr) {z.sha1=sha1ptr;}
 };
 
 //////////////////////////// Encoder ///////////////////////////////
@@ -337,6 +341,7 @@ public:
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
   void endBlock();
+  int getModel() const {return z.select;}
 private:
   ZPAQL z;
   Encoder enc;
@@ -355,11 +360,13 @@ public:
   void hcomp(Writer* out2) {z.write(out2);}
   bool findFilename(Writer* = 0);
   void readComment(Writer* = 0);
-  void setOutput(Writer* out) {pp.z.output=out;}
-  void setSHA1(SHA1* sha1ptr) {pp.z.sha1=sha1ptr;}
+  void setOutput(Writer* out) {pp.setOutput(out);}
+  void setSHA1(SHA1* sha1ptr) {pp.setSHA1(sha1ptr);}
   bool decompress(int n = -1);  // n bytes, -1=all, return true until done
   bool pcomp(Writer* out2) {return pp.z.write(out2);}
   void readSegmentEnd(char* sha1string = 0);
+  int getModel() const {return z.select;}
+  int getPostModel() const {return pp.getModel();}
 private:
   ZPAQL z;
   Decoder dec;
