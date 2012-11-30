@@ -1,219 +1,111 @@
-README for ZPAQ v1.10
-Matt Mahoney - Dec. 28, 2009, matmahoney (at) yahoo (dot) com.
+                       LIBZPAQ Distribution 1.00
+                        Matt Mahoney, Dell Inc.
+                           Sept. 29, 2010
 
-ZPAQ is a configurable file compressor and archiver. Its goal
-is a high compression ratio in an open format without loss of
-compatibility between versions as new compression algorithms
-are discovered. ZPAQ includes tools to help develop and test
-new algorithms.
-
-All software is (C) 2009, Ocarina Networks Inc. and written
-by Matt Mahoney. It is open source licensed under GPL v3.
-http://www.gnu.org/copyleft/gpl.html
-
+ZPAQ is a proposed standard for highly compressed data. This package
+contains the specification, a library application programming interface
+for reading and writing ZPAQ formatted compressed data, and two applications
+that use the library: a file compressor, zpipe, and an archiver, zp.
 Contents:
 
-  zpaq.exe -     The ZPAQ compressor, decompressor, and environment for
-                 developing new compression algorithms in the ZPAQ format.
-                 Compiled for 32 bit Windows.
+   File         Ver.  Date                Description         License
+------------   -----  -----------  -----------------------  ------------
+readme.txt            Sep 29 2010  This file                Free to copy
+zpaq.pdf       Rev 1  Sep 29 2009  Format specification     Free to copy
+unzpaq108.cpp  1.08   Oct 14 2009  Reference decoder        GPL
 
-  zpaq.cpp, zpaq.h - Source code (GPL) for zpaq.exe. See comments for usage.
+libzpaq.txt    0.02   Sep 27 2010  API documentation        Public domain
+libzpaq.cpp    0.02   Sep 28 2010  API source code          Public domain
+libzpaq.h      0.02   Sep 28 2010  API header file          Public domain
 
-  zpaqmake.bat - Script used by ZPAQ to build optimized code.
+zpipe.cpp      2.00   Sep 28 2010  File compressor source   GPL
+zpipe.exe      2.00   Sep 28 2010  Windows executable       GPL
 
-  min.cfg -      ZPAQ config file for fast compression.
+zp.cpp         2.00   Sep 29 2010  Archiver source          GPL
+zp.exe         2.00   Sep 29 2010  Windows executable       GPL
 
-  mid.cfg -      Config file for average compression (default).
+fast.cfg              Apr 26 2010  ZPAQL source for         GPL
+mid.cfg               Oct 09 2009    compression levels     GPL
+max.cfg               Oct 09 2009    1, 2, and 3            GPL
 
-  max.cfg -      Config file for good compression.
+gpl.txt        3      Jun 29 2007  GPL license              Free to copy
 
-  lzppre.exe -   LZP preprocessor, required with min.cfg.
+All of the files except gpl.txt were written by Matt Mahoney at Dell Inc.
+Files licensed as free to copy may be copied and distributed by anyone,
+but changes are not allowed. Files marked as public domain have no
+restrictions on their use. Files marked GPL are licensed under the GNU
+general public license, which allows copying and changes but requires that
+any redistribution of derived code also be licensed under GPL and include
+source code. See gpl.txt or http://www.gnu.org/copyleft/gpl.html
 
-  lzppre.cpp -   Source code for lzppre.exe.
+The latest version of this package can be found at http://mattmahoney.net/dc/
 
-  readme.txt -   This file.
+The ZPAQ specification has two parts. zpaq1.pdf describes the format.
+The program unzpaq is the reference decoder. unzpaq does not use the
+library API because it was written earlier in conjunction with the
+document. The specification only defines the decompression procedure.
+The implementation of the compressor is up to the user.
 
-Brief usage summary:
+Libzpaq is an API in C++ that allows applications to compress or
+decompress ZPAQ formatted data to or from files or objects in memory.
+It consists of a header file (libzpaq.h) that should be #included in
+the application, and source code (libzpaq.cpp) that should be linked
+to it.
 
-To compress:      zpaq ocmax.cfg,2 archive files...
-To decompress:    zpaq ox archive files...
-To list contents: zpaq l archive
-For help:         zpaq
+zpipe compresses or decompresses from standard input to standard
+output. It supports 3 compression levels: 1=fast, 2=mid, 3=max
+(slowest but best compression). For example:
 
-For compression, "c" means compress. To append to an existing
-archive, use "a" instead, as "zpaq oamax.cfg,2 archive files...".
+  zpipe -3 < input > archive.zpaq    (use best compression)
+  zpipe -d < archive.zpaq > output   (decompress)
 
-"o" means optimize (run faster). You need a C++ compiler installed
-to use this option. If not, drop the "o". You can still use zpaq
-but it will take about twice as long to run.
+zp creates, lists, and extracts archives containing many files.
+For example:
 
-"max.cfg" selects maximum (but slow) compression. min.cfg selects
-minimum but fast compression. mid.cfg is in the middle.
-Decompression speed will be the same as compression.
+  zp c3 archive file1 file2   (compress (3=max) 2 files to archive.zpaq)
+  zp a1 archive file3         (append (1=fast) another file)
+  zp l archive                (list contents: file1 file2 file3)
+  zp v archive                (verbose listing)
+  zp x archive                (extract all 3 files)
+  zp x archive out1 out2      (extract first 2 files and rename)
+  zp e archive                (extract all files to current directory)
 
-",2" means use 4 times more memory. Each increment doubles usage.
-You need the same memory to decompress.
+Running either program with no arguments prints a brief help message.
+More detailed usage instructions are documented in zpipe.cpp and zp.cpp.
 
-"ox" means extract fast. You can extract more slowly with "x"
-if you don't have C++ installed. Output files are renamed in
-the same order they are stored and listed. If you don't rename the
-output files, then the files will be extracted to the current
-directory with the same names they had when stored.
+All of these programs can read each other's output. When zpipe
+decompresses an archive, all of the output is concatenated together.
+When zp or unzpaq decompresses a file compressed with zpipe, the user must
+specify the output file name.
 
-See zpaq.cpp for complete descriptions, many other options,
-and how to write config files for custom compression algorithms,
-and installation instructions.
+The executables were compiled with g++ 4.5.0 and compressed with upx 3.06w
+as follows:
 
+  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG zpipe.cpp libzpaq.cpp -o zpipe
+  upx zpipe.exe
 
-History
--------
+  g++ -O2 -march=pentiumpro -fomit-frame-pointer -s -DNDEBUG zp.cpp libzpaq.cpp -o zp
+  upx zp.exe
 
-Versions prior to 1.00 are not compatible with the ZPAQ
-standard and are obsolete. All versions 1.00 and higher are forward
-and backward compatible.
+Libzpaq and the applications that use it (zpipe and zp, but not unzpaq)
+support arbitrary compression algorithms, but are optimized for 3 levels
+as shown. Speed is measured on a 2.0 GHz T3200 under 32 bit Windows.
+The input data is the 14 file Calgary corpus compressed into a single
+block (solid archive). zip is shown for comparison.
 
-v0.01 - Feb. 15, 2009. Original release. Conforms to v0.29 of spec.
-        except does not support postprocessing.
+              Memory     Speed     Calgary corpus
+              ------  -----------  ---------------
+  1 (fast)     38 MB  0.7  sec/MB    807,214 bytes
+  2 (mid)     111 MB  2.3  sec/MB    699,586 bytes
+  3 (max)     246 MB  6.4  sec/MB    644,545 bytes
+  zip -9       <1 MB  0.13 sec/MB  1,020,719 bytes
 
-v0.02 - Feb. 18, 2009. Adds R=X, X=R, and LJ
-        instructions and R[256] register. Removes .= instruction.
-        Spaces are required before ZPAQL operands. Adds end of segment
-        signal to decoder. Adds "x" transform (E8E9). PASS transform
-        is changed to "0". Adds a header byte to describe HCOMP
-        language. Not compatible with v0.01. Conforms to v0.32 of spec.
-        Current max.cfg does poorly with maximumcompression.com.
-        Expect more changes.
-
-v0.03 - Feb. 19, 2009. Fixed MIX, MIX2, and IMIX spec. to reduce overflow,
-        which resulted in poor compression of large files. Modified
-        stretch function for better compression.
-
-        Block 1: requires 314.476 MB memory (with POST X to turn on E8E9)
-          maxcomp\a10.jpg  842468 -> 829159
-          maxcomp\acrord32.exe  3870784 -> 1154882
-          maxcomp\english.dic  4067439 -> 476099
-          maxcomp\FlashMX.pdf  4526946 -> 3649140
-          maxcomp\fp.log  20617071 -> 432826
-          maxcomp\mso97.dll  3782416 -> 1545417
-          maxcomp\ohs.doc  4168192 -> 757538
-          maxcomp\rafale.bmp  4149414 -> 763314
-          maxcomp\vcfiu.hlp  4121418 -> 499321
-          maxcomp\world95.txt  2988578 -> 441130
-        53,134,726 -> 10,548,826
-
-v0.04 - Feb. 21, 2009. Fixed train() spec. to fix poor compression with
-        SSE and possibly other components. Modifed squash() for better
-        compression. New max.cfg.
-
-v0.05 - Feb. 26, 2009. Changed representation of squashed probabilities
-        to 15 bits (0..32767) and stretched to 6 bit scale in (-2048..2047),
-	and mixer weights to 20 bit signed numbers. Mixers are now guaranteed
-	not to overflow. The higher resolution improves compression on highly
-	redundant files. MIX2 now has weights constrained to add to 1 which
-	also improves compression.
-
-v0.06 - Feb. 27, 2009. Optionally appends a SHA1 hash of the input file
-	for each segment, which is checked by the decompressor. Added
-	"b" command to append without a checksum. Replaced IMIX2 with
-	ISSE. Compression prints memory usage by component.
-
-v0.07 - Feb. 28, 2009. Modified ISSE to use decreasing learning rate
-        on the fixed size inversely proportional to a count. ISSE drops the
-        c and rate parameters. SSE drops the mask parameter. Bit history
-        next-state tables are updated by removing some of the n0=0 or n1=0
-        states and adding other states.
-
-v0.08 - Mar. 8, 2009. Added LZP preprocessor. Improved memory utilization
-        reporting. Minor speed improvements. Added mid.cfg. Changed
-        MATCH so that the buffer and hash table sizes are specified
-        separately. Clarified role of comment field. Removed zpaqd.exe.
-
-v0.09 - Mar. 9, 2009. Removed counters from ISSE and ICM and replaced
-        bit history map with initial estimates based on n1/(n0+n1) to
-        improve speed. Fixed a bug where x clobbers files when it says
-        it isn't.
-
-v1.00 - Mar. 12, 2009. First level 1 candidate. Simplified the
-        bit history tables and replaced with code to generate them
-        in both the documentation and code. First release of the
-        reference standard unzpaq1 v1.00. Improved compression on 
-        some files.
-
-v1.01 - Apr. 27, 2009. Updated unzpaq to fix VS2005 compiler issues.
-
-v1.02 - June 14, 2009. Updated zpaq and unzpaq to close files
-        immediately after extraction instead of when program exits.
-        Fixed g++ 4.4 compiler warnings.
-
-v1.03 - Sept. 8, 2009. unzpaq and zpaq: added support for appending
-        unnamed segments to the previous file. In unzpaq 1.02 and earlier
-        you would need to extract each segment to a different file
-        and concatenate them manually. Also, unzpaq will refuse
-        to extract filenames stored with an absolute path, drive letter,
-        or that have upward links "../" or "..\" or that have
-        control characters (ASCII 0-31) in the file name unless
-        a filename is given on the command line (in which case
-        any name is allowed). Quits on the first error rather
-        than skipping files. zpaq only: made mid.cfg the default
-        configuration. Also added the k command
-        to create segmented files. When the offset is not 0 the
-        segment is stored with no name to signal the decompressor
-        to append to the previous file (which may be in a different
-        ZPAQ block). Added the r command to store full paths.
-        1.02 and earlier always did this. By default, 1.03 stores
-        only the file name. Updated the s command to output the
-        full header as a C array.
-
-        Sept. 14, 2009. Added zpaqsfx 1.03.
-
-v1.04 - Sept. 18, 2009. zpaq will extract from self extracting archives.
-        Added progress meter. zpaqsfx.exe is slightly smaller. Fixed
-        zpaqsfx.cpp compiler issue (replaced "and" with "&&" in main()).
-
-v1.05 - Sept. 28, 2009. Removed built in x (E8E9) and p (LZP)
-        preprocessors and made these external programs (included).
-        Config files now specify an external preprocessor command
-        line and ZPAQL code to invert the transform. The inversion
-        is verified before compression. Added structured programming
-        (if/ifnot-else-endif, do-while/until/forever) to ZPAQL.
-        Reorganized the less commonly used commands. New commands
-        to extract from single blocks, extract with paths (default
-        is now to current directory), extract unnamed blocks as
-        separate files, compress without filenames or with full paths,
-        or without comments, debug both the HCOMP and new PCOMP sections
-        of config files, and display trace in either decimal or
-        hexadecimal. Fixed detection of corrupted input in decoder.
-        unzpaq.exe not included in distribution because zpaq.exe
-        has all the same functions.
-
-v1.06 - Sept. 29, 2009. Updated specification zpaq1.pdf to include
-        a recommendation of adding a 13 byte locater tag to mark the
-        start of a ZPAQ archive embedded in other data. Updated
-        zpaq.cpp, unzpaq.cpp, and zpaqsfx.cpp to find this tag.
-        Also added "ta" to append this tag. Some minor bug fixes
-        and porting issues fixed. Changed unzpaq to extract to current
-        directory by default.
-
-v1.07 - Oct. 2, 2009. zpaq config files now accept arguments. Fixed
-        a bug in min.cfg. Cleaned up "tr" command display. min.cfg,
-        mid.cfg, max.cfg accept an argument to change memory.
-        min.cfg takes a second argument to change LZP minimum match.
-        pcomp external preprocessor command must end with ;
-
-v1.08 - Oct. 14, 2009. Added optimization, which makes zpaq about
-        twice as fast if an external C++ compiler is available.
-        The "o" option compiles the model and creates a temporary
-        program optimized for the current input, and runs it.
-        Also changed meaning of "nx" to mean decompress all output
-        to one file. Fixed ZPAQL shift instructions to be consistent
-        with spec on non x86 machines.
-
-v1.09 - Oct 21, 2009. Port to Linux. Preprocessor temporary files
-        now go in %TEMP% or $TEMP. TMPDIR not used. Optimized
-        decompressor now verifies header contents matches code.
-        File size display fixed for sizes over 2 GB. Added q option
-        (quiet) to suppress output. Compression shows preprocessed
-        size if different.
-
-v1.10 - Dec. 28, 2009. zpaq.cpp bug fix for g++ 4.4.1/Linux. Thanks to
-        Tom Hargreaves for a patch. zpaq.h is still v1.09.
+The source code for these models is given in fast.cfg, mid.cfg, and
+max.cfg. The zpaq program will compile these configuration files
+into C++ code and header strings which were inserted into libzpaq
+and used in zpipe and zp. zpaq is not included in this distribution
+but is available at http://mattmahoney/dc/ as GPL source and a
+Windows executable. It also runs under Linux. zpaq.cpp and zpaq1.pdf
+tell how to interpret the ZPAQL code in these configuration files.
+You do not need these files to compile or run any of the applications
+in this package or to use libzpaq.
