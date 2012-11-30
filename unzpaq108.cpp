@@ -1,7 +1,7 @@
-/*  unzpaq1 v1.06 ZPAQ reference decompressor
+/*  unzpaq v1.08 ZPAQ reference decompressor
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Sept. 29, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 14, 2009.
 
     LICENSE
 
@@ -49,6 +49,14 @@ when program exits. Fixed g++ 4.4 warnings.
 1.03 - Sept. 8, 2009. Added support for extracting segmented files.
 (Unnamed segments are appended to the last named segment). Rejects
 absolute paths and suspicious filenames in archive.
+
+1.06 - Sept. 29, 2009. Added support for locater tags to find
+ZPAQ data embedded in other data.
+
+1.08 - Oct. 14, 2009. Corrected ZPAQL shift instructions to implement
+shifts larger then 31 according to the standard, e.g. a<<=b means
+a<<=(b%32). This change has no effect on x86 machines. However,
+the former has strictly undefined behavior according to the C++ standard.
 
 */
 
@@ -829,22 +837,22 @@ inline int ZPAQL::execute() {
     case 197: a ^= m(c); break; // A^=*C
     case 198: a ^= h(d); break; // A^=*D
     case 199: a ^= header[pc++]; break; // A^= N
-    case 200: a <<= a; break; // A<<=A
-    case 201: a <<= b; break; // A<<=B
-    case 202: a <<= c; break; // A<<=C
-    case 203: a <<= d; break; // A<<=D
-    case 204: a <<= m(b); break; // A<<=*B
-    case 205: a <<= m(c); break; // A<<=*C
-    case 206: a <<= h(d); break; // A<<=*D
-    case 207: a <<= header[pc++]; break; // A<<= N
-    case 208: a >>= a; break; // A>>=A
-    case 209: a >>= b; break; // A>>=B
-    case 210: a >>= c; break; // A>>=C
-    case 211: a >>= d; break; // A>>=D
-    case 212: a >>= m(b); break; // A>>=*B
-    case 213: a >>= m(c); break; // A>>=*C
-    case 214: a >>= h(d); break; // A>>=*D
-    case 215: a >>= header[pc++]; break; // A>>= N
+    case 200: a <<= (a&31); break; // A<<=A
+    case 201: a <<= (b&31); break; // A<<=B
+    case 202: a <<= (c&31); break; // A<<=C
+    case 203: a <<= (d&31); break; // A<<=D
+    case 204: a <<= (m(b)&31); break; // A<<=*B
+    case 205: a <<= (m(c)&31); break; // A<<=*C
+    case 206: a <<= (h(d)&31); break; // A<<=*D
+    case 207: a <<= (header[pc++]&31); break; // A<<= N
+    case 208: a >>= (a&31); break; // A>>=A
+    case 209: a >>= (b&31); break; // A>>=B
+    case 210: a >>= (c&31); break; // A>>=C
+    case 211: a >>= (d&31); break; // A>>=D
+    case 212: a >>= (m(b)&31); break; // A>>=*B
+    case 213: a >>= (m(c)&31); break; // A>>=*C
+    case 214: a >>= (h(d)&31); break; // A>>=*D
+    case 215: a >>= (header[pc++]&31); break; // A>>= N
     case 216: f = (a == a); break; // A==A
     case 217: f = (a == b); break; // A==B
     case 218: f = (a == c); break; // A==C
@@ -1772,7 +1780,7 @@ void list(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("UNZPAQ v1.06 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
+  printf("UNZPAQ v1.08 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
@@ -1781,7 +1789,7 @@ void usage() {
     "\n"
     "To list contents: unzpaq l archive\n"
     "To extract files: unzpaq x archive  (does not clobber)\n"
-    "To extract with new file names: unzpaq1 x archive files...  (clobbers)\n");
+    "To extract with new file names: unzpaq x archive files...  (clobbers)\n");
   exit(0);
 }
 
