@@ -1,4 +1,4 @@
-/* libzpaq.cpp - Part of LIBZPAQ Version 4.00
+/* libzpaq.cpp - Part of LIBZPAQ Version 4.01
 
   Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
@@ -26,8 +26,6 @@ conforming to the ZPAQ level 1 standard. See http://mattmahoney.net/zpaq/
 #include <windows.h>
 #endif
 #endif
-
-#include <stdio.h>
 
 namespace libzpaq {
 
@@ -71,7 +69,7 @@ void allocx(U8* &p, int &n, int newsize) {
   if (newsize>0) {
 #ifdef unix
     p=(U8*)mmap(0, newsize, PROT_READ|PROT_WRITE|PROT_EXEC,
-                MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+                MAP_PRIVATE|MAP_ANON, -1, 0);
     if ((void*)p==MAP_FAILED) p=0;
 #else
     p=(U8*)VirtualAlloc(0, newsize, MEM_RESERVE|MEM_COMMIT,
@@ -2243,19 +2241,6 @@ int ZPAQL::assemble() {
   o=0;
   put1a(0xe9, start-5);  // jmp near start
 
-/*
-  // debug: write object code to file obj
-  if (rsize>0) {
-    FILE* outf=fopen("obj", "wb");
-    if (outf) {
-      fprintf(stderr, "wrote %d/%d -> %d/%d bytes to obj\n",
-          done, hlen, rsize, rcode_size);
-      for (int j=0; j<rsize; ++j)
-        putc(rcode[j], outf);
-      fclose(outf);
-    }
-  }
-*/
   return rsize;
 }
 
@@ -3028,16 +3013,6 @@ int Predictor::assemble_p() {
   put1(0x5d);                 // pop ebp
   put1(0x5b);                 // pop ebx
   put1(0xc3);                 // ret
-
-/*
-  // debug
-  FILE* outf;
-  if (rcode_size>0 && (outf=fopen("objp", "wb"))!=0) {
-    for (int i=0; i<rcode_size; ++i) putc(rcode[i], outf);
-    fprintf(stderr, "wrote %d bytes to objp\n", o);
-    fclose(outf);
-  }
-*/
 
   return o;
 }
