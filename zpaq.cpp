@@ -1,7 +1,7 @@
-/*  zpaq v1.07 archiver and file compressor.
+/*  zpaq v1.08 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 2, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Oct. 14, 2009.
 
     LICENSE
 
@@ -16,43 +16,92 @@
     General Public License for more details at
     Visit <http://www.gnu.org/copyleft/gpl.html>.
 
-Compressed archives created with this program are readable by this and
-any other ZPAQ level 1 compliant decompressor including the unzpaq
-reference decoder found at http://mattmahoney.net/dc/
-The archive format is described in the ZPAQ specification also found
-at this website.
+This program compresses files into archives and decompresses them.
+The archive format is compatible with other ZPAQ level 1 compliant
+programs. See http://mattmahoney.net/dc/
+
+
+Installation
+------------
+
+ZPAQ runs from a command window. In Windows, the following files
+need to be somewhere in your PATH or in the current directory when run:
+
+  zpaq.exe     - this program.
+  zpaqmake.bat - script used for optimization.
+
+In addition you will need a C++ compiler and zpaq.cpp and zpaq.h
+to use the optimization feature. Optimization creates specialized
+compressors and decompressors that are tuned to their input and run
+50-100% faster.
+
+The script zpaqmake.bat should take one argument, which will be a
+C++ program without the .cpp extension. It should look for this file
+in the temporary directory %TEMP%, compile it,
+link to zpaq.o (wherever you put it) and put the result with a .exe
+extension in %TEMP%. The compiler needs to know where zpaq.h and zpaq.o
+can be found. For example, suppose that zpaq.cpp and zpaq.h
+are placed in the directory \zpaq. Then create zpaq.o:
+
+  cd \zpaq
+  g++ -O2 -DNDEBUG -DOPT -c zpaq.cpp
+
+-DOPT removes features not needed for specialized compressors.
+-DNDEBUG removes run time checks.
+
+The script zpaqmake.bat would be:
+
+  g++ -O2 -I\zpaq %TEMP%\%1.cpp \bin\zpaq.o -o %TEMP%\%1.exe
+  upx -qqq %TEMP%\%1.exe
+
+Additional compiler options should be appropriate for your computer.
+The recommended compiler is g++ 4.4.0 but others will work. The recommended
+options are -O2 -s -fomit-frame-pointer -march=pentiumpro (or higher
+processor).
+
+ZPAQ will look for %1.cpp first in TMPDIR if it exists, else in TEMP
+if it exists, else in the current directory. TEMP is normally defined
+in Windows to be a directory for temporary files, and TMPDIR is not set.
+
+If you are installing in Linux then you will need to write an equivalent
+shell script called zpaqmake (no .bat extension). Normally $TMPDIR
+is "/tmp", but you may need to set it.
+
+If you don't use the optimization feature then you don't need a C++
+compiler, source code, or script. You only need zpaq.exe in your PATH.
 
 
 Command summary
 ---------------
 
-To compress to new archive: zpaq [pnsivt]c[F[,N...]] archive files...
-To append to archive:       zpaq [pnsivt]a[F[,N...]] archive files...
+To compress to new archive: zpaq [opnsitv]c[F[,N...]] archive files...
+To append to archive:       zpaq [opnsitv]a[F[,N...]] archive files...
 Optional modifiers:
+  o = compress faster (requires C++ compiler)
   p = store filename paths in archive
-  n = don't store filenames (extractor will append to last named file)
+  n = don't store filenames (names will be needed to decompress)
   s = don't store SHA1 checksums (saves 20 bytes)
   i = don't store file sizes as comments (saves a few bytes)
-  v = verbose
   t = append locator tag to non-ZPAQ data
+  v = verbose (show F as it compiles)
   F = use options in configuration file F (min.cfg, max.cfg)
-  ,N = pass numeric arguments to configuration file
-To list contents: zpaq [v]l archive
-  v = verbose
-To extract: zpaq [pnt]x[N] archive [files...]
+  ,N = pass numeric arguments to F
+To list contents: zpaq l archive
+To extract: zpaq [opnt]x[N] archive [files...]
+  o = extract faster (requires C++ compiler)
   p = extract to stored paths instead of current directory
-  n = extract unnamed segments as separate files (for debugging)
+  n = decompress all to one file
   t = don't post-process (for debugging)
   N = extract only block N (1, 2, 3...)
   files... = rename extracted files (clobbers)
       otherwise use stored names (does not clobber)
-To debug configuration file F: zpaq [pvth]rF[,N...] [args...]
+To debug configuration file F: zpaq [pthv]rF[,N...] [args...]
   p = run PCOMP (default is to run HCOMP)
-  v = verbose compile and show initialization lists
   t = trace (single step), args are numeric inputs
       otherwise args are input, output (default stdin, stdout)
   h = trace display in hexadecimal
-  ,N = numeric config file arguments
+  v = verbose compile
+  ,N = pass numeric arguments to F
 To make self extracting archive: append to a copy of zpaqsfx.exe
 
 
@@ -72,7 +121,8 @@ exist then it is created as with the c command.
 
   zpaq l archive
 
-List the archive contents.
+List the archive contents. Files are listed in the same order they
+were added.
 
   zpaq x archive
 
@@ -86,11 +136,13 @@ Extract files and renames in the order they were added to the
 archive. Clobbers any already existing output files. The number
 of files extracted is the smaller of the number of filenames
 on the command line or the number of files in the archive.
-No restrictions on file names.
 
 
 Archive format
 --------------
+
+The precise archive format is ZPAQ level 1 revision 1, found at
+http://mattmahoney.net/dc/zpaq1.pdf revised Sept. 29, 2009.
 
 A ZPAQ archive consists of a sequence of blocks that can be
 decompressed independently. Each block contains one or more
@@ -100,54 +152,18 @@ A segment contains an optional filename field, an optional comment
 string, the compressed file, and optionally the SHA1 checksum of the
 data prior to compression. The "c" and "a" commands create or append
 one block with each file in a separate segment. The "l" and "x"
-commands list or extract all of the blocks in the order they appear.
+commands list or extract all of the blocks in the order that they
+were added.
 
 An archive may have other data before the first block, such as a
 stub for a self extracting archive. All ZPAQ commands will work
 with these.
 
 
-Self extracting archives
-------------------------
-
-The program zpaqsfx.exe will read itself and list or extract
-an archive appended to it. It has a size of about 15 KB.
-
-To create a self extracting archive.exe:
-
-  zpaq c archive files...
-  copy/b zpaqsfx.exe+archive archive.exe
-or
-  copy zpaqsfx.exe archive.exe
-  zpaq a archive.exe files...
-
-To list contents:
-
-  zpaq l archive.exe
-or
-  archive.exe
-
-To extract (does not clobber):
-
-  zpaq x archive.exe
-or
-  archive.exe x
-
-To extract and rename (clobbers):
-
-  zpaq x archive.exe files...
-or
-  archive.exe x files...
-
-Self extracting archives don't compress, don't support
-any other options, and don't check for absolute paths
-in file names.
-
-
 Compression options
 -------------------
 
-  zpaq [pnsivt]ca[F[,N...]] archive files...
+  zpaq [opnsitv]ca[F[,N...]] archive files...
 
 Create (c) or append (a) archive with optional modifiers and an optional
 configuration file F. Three files are included:
@@ -156,13 +172,15 @@ configuration file F. Three files are included:
   max.cfg - for slow but good compression.
   mid.cfg - for moderate speed and compression (default).
 
-An argument 1, 2, 3, etc. may be appended to F to increase memory
+A numeric argument may be appended to F to increase memory
 usage for better compression. Each increment doubles usage.
-There should be no space before or after the comma.
+There should be no space before or after the comma. For example:
 
-  zpaq cmax.cfg archive files...    = 278 MB
-  zpaq cmax.cfg,1 archive files...  = 556 MB
-  zpaq cmax.cfg,2 archive files...  = 1112 MB
+  zpaq cmax.cfg archive files...    = 246 MB
+  zpaq cmax.cfg,1 archive files...  = 476 MB
+  zpaq cmax.cfg,2 archive files...  = 938 MB
+  zpaq cmax.cfg,3 archive files...  = 1861 MB
+  zpaq cmax.cfg,-1 archive files... = 130 MB (negative values allowed)
 
 Modifiers may be in any order before the "c" or "a" command.
 The modifiers, command, and configuration file must be written
@@ -185,11 +203,8 @@ ZPAQ does not create directories as needed.
 
   n
 
-Do not store filenames. The effect is that the decompressor
-will append each unnamed segment to the previous file, which
-might be extracted from an earlier block. If the first segment
-of the first block is unnamed, then decompression will fail
-unless a file name is given.
+Do not store filenames. The effect is to require that filenames
+be given during decompression.
 
   s
 
@@ -217,85 +232,101 @@ zpaqsfx.exe already has this tag at the end. However, if a
 new stub is compiled from the source then the t command should
 be used when appending the first file.
 
+  o
 
-List options
-------------
+means optimize. If successful, compression is typically 50% to 100%
+faster. ZPAQ will look for a program named zpaq_X.exe in the
+temporary directory, where X is derived from the SHA1 checksum
+of the block header produced by config file F with arguments N. If the
+program exists, then ZPAQ will call it with the same arguments to
+perform the compression. If it does not exist then ZPAQ will create
+a source code file zpaq_X.cpp in the temporary directory, compile it,
+and link it to zpaq.cpp or zpaq.obj depending on the installation.
 
-  zpaq vl archive
+The temporary directory is specified by the environment variable
+TMPDIR if it exists, or else TEMP if it exists, or else the current
+directory.
 
-Verbose. Show detailed contents of archive.
+The program zpaq_X.exe will compress its input in the same format
+as described by F, but faster. If F specifies a preprocessor, then
+zpaq_X.exe will expect to find it too. It will also decompress archive
+blocks in the same configuration but fail if it attempts to decompress
+blocks in any other configuration.
+
+zpaq_X.exe will accept the "c", "a" and "x" commands with all of the
+same modifiers, but will ignore the "v" and "o" modifiers and ignore
+any config file F and arguments passed to it. It will not accept the
+"l" or "r" commands. Extraction requires a block number ("x1", "x2", etc).
+
+ZPAQ will call the external program zpaqmake to compile zpaq_X.cpp,
+passing it zpaq_X as an argument. Normally this will be a script
+that calls a C++ compiler to produce zpaq_X.obj, links to zpaq.obj
+and outputs zpaq_X.exe. The script should also compile zpaq.cpp
+to zpaq.obj if needed.
 
 
 Extraction options
 ------------------
 
-  zpaq {p|n|t}*x[N] archive [files...]
+  zpaq [opnt]x[N] archive [files...]
 
-p means extract using stored paths if present. The default is
+  p
+
+means extract using stored paths if present. The default is
 to extract to the current directory regardless of how the file
-names are stored. [files...] overrides.
+names are stored. Stored paths must be relative to the current
+directory, not start with a "/", "\", a drive letter like "C:"
+or contain "../" or "..\". If extracting to a subdirectory, it
+must already exist. It will not be created.
 
-n means to ignore stored filenames and extract each segment
-as a different file even if it already is unnamed. Normally
-an unnamed segment is appended to the last named segment.
-If the number of segments is different from the number of files
-named, then the smaller number of files is extracted.
+[files...] overrides and has no restrictions on file names. Each
+segment extracts to a different file. If any segments do not
+have a stored filename then they can only be extracted using 
+the "p" or "n" modifiers.
 
-t means extract without postprocessing (for debugging).
+  n
 
-N means to extract only from block number N, where 1 is the
-first block. Otherwise all blocks are extracted. 
+means to ignore stored filenames and append all output to one file,
+the first file in [files...].
 
-For example:
+  t
 
-  zpaq c arc.zpaq f1 f2
-  zpaq na arc.zpaq f3 f4
+means extract without postprocessing (for debugging). Expect
+checksum errors.
 
-creates an archive with two named files f1 and f2 in block 1
-and two unnamed segments in block 2.
+  N
 
-  zpaq x arc.zpaq
+means to extract only from block number N, where 1 is the
+first block. Otherwise all blocks are extracted. The "l"
+command shows which files are in each block.
 
-would extract file f1 and f2+f3+f4 to f2.
+  o
 
-  zpaq x arc.zpaq f5 f6 f7 f8
-
-would extract f1 to f5, and f2+f3+f4 to f6.
-
-  zpaq nx arc.zpaq f5 f6 f7 f8
-
-would extract f1 to f5, f2 to f6, f3 to f7, f4 to f8.
-
-  zpaq x2 arc.zpaq
-
-would fail because the first file in block 2 is unnamed.
-
-  zpaq x2 arc.zpaq f3 f4
-
-would extract f3+f4 to f3 and not create f4.
-
-  zpaq nx2 arc.zpaq f3 f4
-
-would extract f3 and f4.
+means optimize. This typically speeds up decompression by 50% 
+to 100%. For each block in the archive, ZPAQ will
+compute the SHA1 checksum X of the block
+header including compressed postprocessor code,
+and call zpaq_X.exe in the temporary direcory with the same arguments
+but with the block number N appended. If zpaq_X.exe does not exist in
+the temporary directory (TMPDIR, else TEMP, else the current
+directory), then it will create it by calling the external
+program zpaqmake passing zpaq_X as an argument. The resulting
+program will work like the one created with "oc" or "oa" except
+that it won't be able to pre-process. If the block uses postprocessing,
+then X will be different than the corresponding compressor.
 
 
 Development options
 -------------------
 
-  zpaq {v|p|t|h}*rF [args...]
+  zpaq [pthv]*rF[,N...] [args...]
 
 Run the ZPAQL program in HCOMP section of configuration file F.
 The program is run once for each byte of input from the file
-named in the second argument and once at EOF with the input byte
-(or -1) in the A register. Output is to the file named in the first
+named in the first argument and once at EOF with the input byte
+(or -1) in the A register. Output is to the file named in the second
 argument. If run with no arguments then take input from stdin
 and output to stdout. Modifiers:
-
-  v
-
-Compile in verbose mode. Display contents of program to show jump
-addresses and a C style array initializations of the two
-headers. Also useful for locating compile errors.
 
   p
 
@@ -311,8 +342,19 @@ displayed.
 
   h
 
-When tracing, display register contents in hexadecimal (instead
-of decimal).
+When tracing, display register and memory contents in hexadecimal
+instead of decimal.
+
+  v
+
+Verbose. Display the config file as it is being compiled. If an
+error occurs, it will be easier to locate. v is also useful
+for displaying jump targets.
+
+  ,N
+
+Pass up to 9 numeric arguments to config file F (like the c and a
+commands).
 
 
 Configuration files
@@ -321,7 +363,7 @@ Configuration files
 ZPAQ uses a configurable compression algorithm based on
 bitwise prediction and arithmetic coding, and optional
 pre- and post-processing. The algorithm is described
-precisely in http://mattmahoney.net/dc/zpaq.pdf
+precisely in http://mattmahoney.net/dc/zpaq1.pdf
 
 The compression and decompression algorithm is described
 in a configuration file. The decompression algorithm is
@@ -334,15 +376,15 @@ as input, and outputs a prediction for the next bit.
 The last component's prediction is output to the arithmetic
 coder which codes the bit at a cost of log2(1/p), where p is
 the probability guessed for that bit. (Thus, better prediction
-leads to better compression). Bits are coded in MSB
-to LSB order.
+leads to better compression). Bits are coded in MSB (most
+significant bit) to LSB (least significant bit) order.
 
 HCOMP - a program that is called once for each byte of
 uncompressed data with that byte as input, and outputs
 an array of 32-bit contexts, one for each component
 in the COMP section. The program is written in ZPAQL,
 a sandboxed assembler-like language designed for small size
-and fast interpretation.
+and fast interpretation (rather than for easy development).
 
 POST/PCOMP - an optional pair of programs to preprocess the
 input before compression and postprocess the output after
@@ -357,32 +399,29 @@ reverse conversion to restore the original input. Unlike
 COMP and HCOMP, two programs are needed because the compression
 and decompression models are not the same. During compression,
 ZPAQ will run the input through both programs and compare the
-output with the input. If they don't match, an error occurs.
-If they do, then the input files are preprocessed and compressed,
-along with the postprocessing program that will be used to
+output with the input. If they don't match, then ZPAQ will
+refuse to compress the file. If they do match, then the
+input files are preprocessed and compressed, along with
+the postprocessing program that will be used later to
 invert the preprocessing transform. The compression model
 described in the COMP and HCOMP sections sees a 1 as the
 first byte to indicate that the decoded data should be
 postprocessed before output. This is followed by a 2 byte
 program length (LSB first), the ZPAQL postprocessor code, and a
-concatenation of the preprocessed input files.
+concatenation of the preprocessed input files. The PCOMP
+code sees just the preprocessed files as input, each ending
+with EOS (-1).
 
 The preprocessor is an external program. It is not needed for
 decompression so it is not saved in the archive. It expects to be
-called with one input filename as its last argument, and to write
-its output to a temporary file named "$zpaq.pre". ZPAQ will delete
-this file when done with it. The preprocessor is called once
-for each input filename. If it needs to save any state information
-between calls, it is expected to save it in a file named
-"$zpaq.tmp". ZPAQ will delete this file before calling the
-preprocessor for the first time, and again after the last time
-if there are no errors.
+called with an input filename and output filename as its last 2
+arguments.
 
 The postprocessor is a ZPAQL program that is called once for each
 input byte and once with input EOS (-1) at the end of each segment.
 The program is initialized at the beginning of a block but
 maintains state information between segments within the same
-block. Its input is from $zpaq.pre during compression testing
+block. Its input is from archive.$zpaq.pre during compression testing
 and from the decoder during decompression.
 
 The configuration file has the following format:
@@ -401,14 +440,13 @@ Or (for custom pre/post processing):
     (...)
   HCOMP
     (...)
-  PCOMP preprocessor-command (on a line by itself with no comments)
+  PCOMP preprocessor-command ;
     (postprocessor program, memory size = ph, pm)
   END
 
-Configuration files mostly are free format (all white space is
-the same) and not case sensitive. They may contain comments in
-((nested) parenthesis). The exception is the preprocessor
-command which has to be on a line by itself with no comments.
+Configuration files are free format (all white space is
+the same) and mostly not case sensitive. They may contain comments in
+((nested) parenthesis).
 
 For example, mid.cfg:
 
@@ -469,8 +507,8 @@ The 9 possible component types are:
 All component parameters are numbers in the range 0..255.
 
 Each component outputs a "stretched" probability in the
-form ln(p(1)/p(0)). where p(0) and p(1) are the model's estimated
-probability that the next bit will be a 0 or 1, respectively.
+form ln(p(1)/p(0)). where p(1) and p(0) are the model's estimated
+probabilities that the next bit will be a 1 or 0, respectively.
 Thus, negative numbers predict a 0 and positive predict 1.
 The magnitude is the confidence of the prediction. The output is
 a number in the range -32 to 32 with precision 1/64 (a 12 bit
@@ -514,7 +552,7 @@ efficiency is important. It uses 2^(s+6) bytes.
 
 Outputs a prediction by searching for the previous occurrence
 of the current context in a history buffer of size 2^b bytes,
-and predicting whatever bit came next with a confidence
+and predicting whatever bit came next, with a confidence
 proportional to the length of the match. Matches are found
 using an index of 2^s pointers into the history buffer, each
 of which points to the previous occurrence of the current
@@ -536,16 +574,16 @@ fast and uses no memory.
 
   MIX2 s j k rate mask
 
-Averages the predictions of components j and k (must precede i)
-adaptively. The weight is selected from a table of size 2^s
-by the low s bits of H[i] added to the masked previously coded
+Averages the predictions of components j and k (which must precede
+i) adaptively. The weight is selected from a table of size 2^s
+by the low s bits of H[i] added to the masked, previously coded
 bits of the current byte (an 8 bit value). A mask of 255 includes
 the current byte, and a mask of 0 excludes it. (Other masks
 are rarely useful). The adaptation rate is selectable. Typical
 values are around 8 to 32. Lower values are best for stationary
 sources. Higher rates are more adaptive. A MIX2 generally gives
 better compression than AVG but at a cost in speed and memory.
-Uses 2^(s+2) bytes of memory.
+Uses 2^(s+1) bytes of memory.
 
   MIX s j m rate mask
 
@@ -576,8 +614,8 @@ also used in the PAQ9A compressor). Uses 2^(s+6) bytes.
 
 An SSE takes a predicion and context as input (like an ISSE)
 and outputs an adjusted prediction. The mapping is direct,
-however. The input from component j and the context are
-mapped to a 2^s by 64 CM table by quantizing the prediction and
+however. The input from component j and the context are mapped to
+a 2^s by 64 CM table by quantizing the prediction to 64 levels and
 interpolating between the two nearest values. The context is
 formed by adding the partial current byte to the low s bits
 of H[i]. The table is updated in proportion to the prediction
@@ -616,10 +654,13 @@ the bits of the current byte. This is summarized:
   ICM s                  s+10            2^(s+6)
   MATCH s b              s               2^(s+2) + 2^b
   AVG j k wt             0               0
-  MIX2 s j k rate mask   s               2^(s+2)
+  MIX2 s j k rate mask   s               2^(s+1)
   MIX s j m rate mask    s               m*2^(s+2)
   ISSE s j               s+10            2^(s+6)
   SSE s j start limit    s               2^(s+8)
+
+Although the ZPAQ standard does not specify a maximum for s,
+this program will not create arrays 2GB (2^31) or larger.
 
 
 ZPAQL
@@ -683,8 +724,8 @@ is as follows:
 - J N (conditional jumps)
   - where J is JT JF JMP
   - where N is a number in (-128...127).
-- LJ N (long jump)
-  - where N is in (0...65535).
+- LJ NN (long jump)
+  - where NN is in (0...65535).
 - X=R N (read R array)
   - where X is A B C D
   - where N is in (0...255).
@@ -742,12 +783,12 @@ the program. Thus, "A> 255 JT 3 LJ 0" jumps to the beginning
 of the program if A <= 255.
 
 The R registers can only be read or written, as in "R=A 3 B=R 3"
-which assigns A to B through R3. These registers can only be
+which assigns A to R3, then R3 to B. These registers can only be
 assigned from A or to A, B, C, or D.
 
 ERROR causes an error like an undefined instruction, but is
-not reserved for future use (ZPAQ level 2) like other undefined
-instructions.
+not reserved for future use (possibly in ZPAQ level 2) like
+other undefined instructions.
 
 HALT causes the program to end (and compression to resume).
 A program should always execute HALT.
@@ -823,13 +864,13 @@ The PCOMP/POST section has the form:
 
 to indicate no preprocessing or postprocessing, or
 
-  PCOMP preprocessor-command
+  PCOMP preprocessor-command ;
     (postprocessing code)
   END
 
 to preprocess with an external program and to invert the transform
 with postprocessing code written in ZPAQL. The preprocessing
-command must be on a line by itself after PCOMP with no comments.
+command must end with a space followed by a semicolon.
 The command may contain spaces or options. The program is expected
 to take as two additional arguments an input file and an output
 file. ZPAQ will call the program by appending the input file and
@@ -848,7 +889,7 @@ by inputting archive.$zpaq.pre to the ZPAQL program in PCOMP and comparing
 its output to the original input. If the output is verified then 
 the file is compressed. Otherwise it is skipped. The algorithm is:
 
-  Command: zpaq {pnsiv}*{ca}F archive inputfiles...
+  Command: zpaq [pnsitvo]ca[F][,N...]] archive inputfiles...
 
   if F then compile header Z from F else use default header Z
   If "c" then open archive for write
@@ -863,7 +904,7 @@ the file is compressed. Otherwise it is skipped. The algorithm is:
     if Z.PCOMP then
       Close IN
       Delete archive.$zpaq.pre
-      Run Z.preprocessor-command FILENAME
+      Run Z.preprocessor-command FILENAME $zpaq.pre
       CHECK2 = SHA1(Z.PCOMP(archive.$zpaq.pre, EOS))
       if CHECK1 != CHECK2 then continue
       Open archive.$zpaq.pre as IN
@@ -888,11 +929,9 @@ the file is compressed. Otherwise it is skipped. The algorithm is:
   Close archive
   Delete archive.$zpaq.tmp, archive.$zpaq.pre
 
-The preprocessor-command must appear on a line by itself in the
-config file. The command may not exceed 511 bytes. It is not possible to
-compress a file name archive.$zpaq.pre or archive.$zpaq.pre.tmp
-(depending on the archive name) because these files
-might be overwritten or deleted.
+It is not possible to compress a file named archive.$zpaq.pre
+or archive.$zpaq.pre.tmp (depending on the archive name) because 
+these files might be overwritten or deleted.
 
 Example: Suppose a preprocessor program, caesar.exe,
 implements a Caesar cipher. It takes a number, input file, and
@@ -913,7 +952,7 @@ with a key of 5 and compress with a simple stationary order 0 model.
     0 cm 9 255
   HCOMP
     halt
-  PCOMP caesar 5
+  PCOMP caesar 5 ;
     a> 255 jf 1 halt (ignore EOS)
     a-= 5 out halt (subtract 5 from each byte)
   END
@@ -928,76 +967,41 @@ To compile
 ----------
 
 g++ -O2 -march=pentiumpro -fomit-frame-pointer -s zpaq.cpp -o zpaq
-To turn off assertion checking (faster), compile with -DNDEBUG
+
+To turn off run time checks for better speed, compile with -DNDEBUG
+
+If linking to optimized code generated by "oc", "oa", or "ox"
+then compile with -DOPT. This also removes some features to save space.
 
 */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "zpaq.h"
 #include <ctype.h>
-#include <time.h>
 #include <math.h>
-#include <assert.h>
-
-const int LEVEL=1;  // ZPAQ level 0=experimental 1=final
-
-// 1, 2, 4 byte unsigned integers
-typedef unsigned char U8;
-typedef unsigned short U16;
-typedef unsigned int U32;
+#include <time.h>
 
 // Print an error message and exit
 void error(const char* msg="") {
+#ifdef OPT
+  fprintf(stderr, "\nOPT error: %s\n", msg);
+#else
   fprintf(stderr, "\nError: %s\n", msg);
+#endif
   exit(1);
 }
 
-// An Array of T is cleared and aligned on a 64 byte address
-//   with no constructors called. No copy or assignment.
-// Array<T> a(n, ex=0);  - creates n<<ex elements of type T
-// a[i] - index
-// a(i) - index mod n, n must be a power of 2
-// a.size() - gets n
-template <class T>
-class Array {
-private:
-  T *data; // user location of [0] on a 64 byte boundary
-  int n;   // user size-1
-  int offset;  // distance back in bytes to start of actual allocation
-  void operator=(const Array&);  // no assignment
-  Array(const Array&);  // no copy
-public:
-  Array(int sz=0, int ex=0): data(0), n(-1), offset(0) {
-    resize(sz, ex);} // [0..sz-1] = 0
-  void resize(int sz, int ex=0); // change size, erase content to zeros
-  ~Array() {resize(0);}  // free memory
-  int size() const {return n+1;}  // get size
-  T& operator[](int i) {assert(n>=0 && i>=0 && U32(i)<=U32(n)); return data[i];}
-  T& operator()(int i) {assert(n>=0 && (n&(n+1))==0); return data[i&n];}
-};
-
-// Change size to sz<<ex elements of 0
-template<class T>
-void Array<T>::resize(int sz, int ex) {
-  while (ex>0) {
-    if (sz<0 || sz>=(1<<30)) fprintf(stderr, "Array too big\n"), exit(1);
-    sz*=2, --ex;
+// Append string s to array a, enlarging as needed
+void append(Array<char>& a, const char* s) {
+  if (!s) return;
+  if (!a.size()) a.resize(strlen(s)+1);
+  int len=strlen(&a[0])+strlen(s)+1;
+  if (len>a.size()) {
+    Array<char> tmp(a.size());
+    strcpy(&tmp[0], &a[0]);
+    a.resize(len*5/4+64);
+    strcpy(&a[0], &tmp[0]);
   }
-  if (sz<0) fprintf(stderr, "Array too big\n"), exit(1);
-  if (n>-1) {
-    assert(offset>0 && offset<=64);
-    assert((char*)data-offset);
-    free((char*)data-offset);
-  }
-  n=-1;
-  if (sz<=0) return;
-  n=sz-1;
-  data=(T*)calloc(64+(n+1)*sizeof(T), 1);
-  if (!data) fprintf(stderr, "Out of memory\n"), exit(1);
-  offset=64-int((long)data&63);
-  assert(offset>0 && offset<=64);
-  data=(T*)((char*)data+offset);
+  strcat(&a[0], s);
 }
 
 //////////////////////////// SHA-1 //////////////////////////////
@@ -1006,40 +1010,6 @@ void Array<T>::resize(int sz, int ex) {
 // SHA-1 code modified from RFC 3174.
 // http://www.faqs.org/rfcs/rfc3174.html
 
-enum
-{
-    shaSuccess = 0,
-    shaNull,            /* Null pointer parameter */
-    shaInputTooLong,    /* input data too long */
-    shaStateError       /* called Input after Result */
-};
-const int SHA1HashSize=20;
-
-class SHA1 {
-  U32 Intermediate_Hash[SHA1HashSize/4]; /* Message Digest  */
-  U32 Length_Low;            /* Message length in bits      */
-  U32 Length_High;           /* Message length in bits      */
-  int Message_Block_Index;   /* Index into message block array */
-  U8 Message_Block[64];      /* 512-bit message blocks      */
-  int Computed;              /* Is the digest computed?         */
-  int Corrupted;             /* Is the message digest corrupted? */
-  U8 result_buf[20];         // Place to put result
-  void SHA1PadMessage();
-  void SHA1ProcessMessageBlock();
-  U32 SHA1CircularShift(int bits, U32 word) {
-     return (((word) << (bits)) | ((word) >> (32-(bits))));
-  }
-  int SHA1Reset();   // Initalize
-  int SHA1Input(const U8 *, unsigned int n);  // Hash n bytes
-  int SHA1Result(U8 Message_Digest[SHA1HashSize]);  // Store result
-public:
-  SHA1() {SHA1Reset();}  // Begin hash
-  void put(int c) {  // Hash 1 byte
-    U8 ch=c;
-    SHA1Input(&ch, 1);
-  }
-  int result(int i);  // Finish and return byte i (0..19) of SHA1 hash
-};
 
 int SHA1::result(int i) {
   assert(i>=0 && i<20);
@@ -1381,16 +1351,18 @@ void SHA1::SHA1PadMessage()
 
 //////////////////////////// ZPAQL //////////////////////////////
 
+
 // Symbolic constants, instruction size, and names
 typedef enum {NONE,CONST,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE,
   JT=39,JF=47,JMP=63,LJ=255,
   POST=256,PCOMP,END,IF,IFNOT,ELSE,ENDIF,DO,
   WHILE,UNTIL,FOREVER,IFL,IFNOTL,ELSEL,SEMICOLON} CompType;
 static const int compsize[256]={0,2,3,2,3,4,6,6,3,5};
+bool verbose=false;  // global: display lots of stuff?
 static const char* compname[]=
   {"","const","cm","icm","match","avg","mix2","mix","isse","sse",0};
-bool verbose=false;  // global: display lots of stuff?
 
+#ifndef OPT
 // Opcodes from ZPAQ spec, table 1, without operands (N, M)".
 static const char* opcodelist[272]={
 "error","a++",  "a--",  "a!",   "a=0",  "",     "",     "a=r",
@@ -1427,48 +1399,8 @@ static const char* opcodelist[272]={
 "",     "",     "",     "",     "",     "",     "",     "lj",
 "post", "pcomp","end",  "if",   "ifnot","else", "endif","do",
 "while","until","forever","ifl","ifnotl","elsel",";",    0};
+#endif
 
-// A ZPAQL machine COMP+HCOMP or PCOMP.
-class ZPAQL {
-public:
-  ZPAQL();
-  void load(int cn, int hn, const U8* data); // init from data[cn+hn]
-  void read(FILE* in);    // Read header from archive
-  void write(FILE* out);  // Write header to archive
-  void list();            // Display header contents
-  void inith();           // Initialize as HCOMP to run
-  void initp();           // Initialize as PCOMP to run
-  void run(U32 input);    // Execute with input
-  void step(U32 input, bool ishex); // Execute while displaying progress
-  void prints();          // Print header as an array initialization
-  double memory();        // Return memory requirement in bytes
-  U32 H(int i) {return h(i);}  // get element of h
-  FILE* output;           // Destination for OUT instruction, or 0 to suppress
-  SHA1* sha1;             // Points to checksum computer
-
-  // ZPAQ1 block header
-  Array<U8> header;   // hsize[2] hh hm ph pm n COMP (guard) HCOMP (guard)
-  int cend;           // COMP in header[7...cend-1]
-  int hbegin, hend;   // HCOMP/PCOMP in header[hbegin...hend-1]
-
-private:
-  // Machine state for executing HCOMP
-  Array<U8> m;        // memory array M for HCOMP
-  Array<U32> h;       // hash array H for HCOMP
-  Array<U32> r;       // 256 element register array
-  U32 a, b, c, d;     // machine registers
-  int f;              // condition flag
-  int pc;             // program counter
-
-  // Support code
-  void init(int hbits, int mbits);  // initialize H and M sizes
-  int execute();  // execute 1 instruction, return 0 after HALT, else 1
-  void div(U32 x) {if (x) a/=x; else a=0;}
-  void mod(U32 x) {if (x) a%=x; else a=0;}
-  void swap(U32& x) {a^=x; x^=a; a^=x;}
-  void swap(U8& x)  {a^=x; x^=a; a^=x;}
-  void err();  // exit with run time error
-};
 
 // Constructor
 ZPAQL::ZPAQL() {
@@ -1476,63 +1408,44 @@ ZPAQL::ZPAQL() {
   a=b=c=d=f=pc=0;      // machine state
   output=0;
   sha1=0;
-}
-
-// Copy cn bytes of COMP and hn bytes of HCOMP from data to header
-void ZPAQL::load(int cn, int hn, const U8* data) {
-  assert(header.size()==0);
-  assert(cn>=7);
-  assert(hn>=1);
-  assert(data);
-  cend=cn;
-  hbegin=cend+128;
-  hend=hbegin+hn;
-  header.resize(hend+144);
-  for (int i=0; i<cn; ++i)
-    header[i]=data[i];
-  for (int i=0; i<hn; ++i)
-    header[hbegin+i]=data[cn+i];
-  assert(header[0]+256*header[1]==cn+hn-2);
-  assert(header[cend-1]==0);
-  assert(header[hend-1]==0);
+  select=0;
 }
 
 // Read header
-void ZPAQL::read(FILE* in) {
-  assert(in);
+void ZPAQL::read(Reader r) {
 
   // Get header size and allocate
-  int hsize=getc(in);
-  hsize+=getc(in)*256;
+  int hsize=r.get();
+  hsize+=r.get()*256;
   header.resize(hsize+300);
   cend=hbegin=hend=0;
   header[cend++]=hsize&255;
   header[cend++]=hsize>>8;
-  while (cend<7) header[cend++]=getc(in); // hh hm ph pm n
+  while (cend<7) header[cend++]=r.get(); // hh hm ph pm n
 
   // Read COMP
   int n=header[cend-1];
   for (int i=0; i<n; ++i) {
-    int type=getc(in);  // component type
+    int type=r.get();  // component type
     if (type==EOF) error("unexpected end of file");
     header[cend++]=type;  // component type
     int size=compsize[type];
     if (size<1) error("Invalid component type");
     if (cend+size>header.size()-8) error("COMP list too big");
     for (int j=1; j<size; ++j)
-      header[cend++]=getc(in);
+      header[cend++]=r.get();
   }
-  if ((header[cend++]=getc(in))!=0) error("missing COMP END");
+  if ((header[cend++]=r.get())!=0) error("missing COMP END");
 
   // Insert a guard gap and read HCOMP
   hbegin=hend=cend+128;
   while (hend<hsize+129) {
     assert(hend<header.size()-8);
-    int op=getc(in);
+    int op=r.get();
     if (op==EOF) error("unexpected end of file");
     header[hend++]=op;
   }
-  if ((header[hend++]=getc(in))!=0) error("missing HCOMP END");
+  if ((header[hend++]=r.get())!=0) error("missing HCOMP END");
 
   assert(cend>=7 && cend<header.size());
   assert(hbegin==cend+128 && hbegin<header.size());
@@ -1552,57 +1465,6 @@ void ZPAQL::write(FILE* out) {
   fwrite(&header[hbegin], 1, hend-hbegin, out);
 }
 
-// Display header contents. Assume it is constructed correctly.
-void ZPAQL::list() {
-  assert(cend>=7 && cend<header.size());
-  assert(hbegin==cend+128 && hbegin<header.size());
-  assert(hend>hbegin && hend<header.size());
-
-  // Display COMP section
-  int hsize=header[0]+256*header[1];
-  printf("comp %d %d %d %d %d (hh hm ph pm n, header size=%d)\n",
-    header[2], header[3], header[4], header[5], header[6], hsize);
-  printf("  (Memory requirement: %1.3f MB)\n", memory()/1000000);
-  int h=7;
-  for (int i=0; i<header[6]; ++i) {
-    int size=compsize[header[h]];
-    assert(size>0);
-    assert(h+size<header.size());
-    printf("  %d %s", i, compname[header[h]]);
-    for (int j=1; j<size; ++j)
-      printf(" %d", header[h+j]);
-    printf("\n");
-    h+=size;
-  }
-  assert(h<header.size() && header[h]==0);
-  ++h;
-  assert(h==cend);
-
-  // Display HCOMP section
-  h+=128;  // skip guard
-  assert(h==hbegin);
-  printf("hcomp\n");
-  while (h<hend-1) {
-    assert(h<header.size()-2);
-    int op=header[h];
-    printf("(%4d) %s", h++-hbegin, opcodelist[op]);
-    if (op==255) { // LJ
-      printf(" %d %d (to %d)", header[h], header[h+1],
-          header[h]+256*header[h+1]);
-      h+=2;
-    }
-    else if ((op&7)==7) {
-      printf(" %d", header[h++]);
-      if (op==39 || op==47 || op==63) // JT, JF, JMP
-        printf(" (to %d) ", h-hbegin+(int(header[h-1])<<24>>24));
-    }
-    printf("\n");
-  }
-  assert(header[h]==0);
-  assert(h+1==hend);
-  printf("post\nend\n");
-}
-
 // Initialize machine state as HCOMP
 void ZPAQL::inith() {
   assert(header.size()>6);
@@ -1615,7 +1477,9 @@ void ZPAQL::initp() {
   init(header[4], header[5]); // ph, pm
 }
 
-// Initialize machine state to run a program
+// Initialize machine state to run a program.
+// Set select to nonzero if header matches anything in the cache
+// or else add it.
 void ZPAQL::init(int hbits, int mbits) {
   assert(header.size()>0);
   assert(h.size()==0);
@@ -1624,25 +1488,32 @@ void ZPAQL::init(int hbits, int mbits) {
   assert(hbegin>=cend+128);
   assert(hend>=hbegin);
   assert(hend<header.size()-130);
+  assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   h.resize(1, hbits);
   m.resize(1, mbits);
   r.resize(256);
   a=b=c=d=pc=f=0;
 }
 
-// Run program on input
-void ZPAQL::run(U32 input) {
+// Run program on input by interpreting header
+void ZPAQL::run0(U32 input) {
   assert(cend>6);
   assert(hbegin>=cend+128);
   assert(hend>=hbegin);
   assert(hend<header.size()-130);
   assert(m.size()>0);
   assert(h.size()>0);
+  assert(header[0]+256*header[1]==cend+hend-hbegin-2);
   pc=hbegin;
   a=input;
+#ifdef OPT
+  error("no model");
+#else
   while (execute()) ;
+#endif
 }
 
+#ifndef OPT
 // Execute program input and show progress
 void ZPAQL::step(U32 input, bool ishex) {
   assert(cend>6);
@@ -1715,44 +1586,6 @@ void ZPAQL::step(U32 input, bool ishex) {
   printf("\n\n");
 }
 
-// Print header as an array initialization in C
-void ZPAQL::prints() {
-  assert(header.size()>=hend);
-  assert(hend>=hbegin);
-  assert(hbegin>=0);
-
-  // If no COMP, print start of POST array for compiled PCOMP section
-  int hsize=hend-hbegin;
-  if (cend<=7) {
-    if (hsize)
-      printf("\n  post_header[%d]={1,%d,%d,\n    ", 
-        hsize+3, hsize&255, hsize>>8);
-    else
-      printf("\n  post_header[1]={0};\n");
-  }
-
-  // Else print COMP, HCOMP arrays
-  else {
-    printf("\n  header=[%d]={ // COMP %d bytes\n    ",
-        cend+hend-hbegin, cend);
-    for (int i=0; i<cend; ++i) {
-      printf("%d,", header[i]);
-      if (i%16==15) printf("\n    ");
-    }
-    printf("\n    // HCOMP %d bytes\n    ", hend-hbegin);
-  }
-
-  // Print PCOMP contents
-  if (hsize) {
-    for (int i=hbegin; i<hend; ++i) {
-      printf("%d", header[i]);
-      if (i<hend-1) printf(",");
-      if ((i-hbegin)%16==15) printf("\n    ");
-    }
-    printf("};\n");
-  }
-}
-
 // Return memory requirement in bytes
 double ZPAQL::memory() {
   double mem=pow(2.0,header[2]+2)+pow(2.0,header[3])  // hh hm
@@ -1775,7 +1608,9 @@ double ZPAQL::memory() {
   }
   return mem;
 }
+#endif
 
+#ifndef OPT
 // Execute one instruction, return 0 after HALT else 1
 inline int ZPAQL::execute() {
 
@@ -2013,22 +1848,22 @@ print"    default: err();\n  }\n";
     case 197: a ^= m(c); break; // A^=*C
     case 198: a ^= h(d); break; // A^=*D
     case 199: a ^= header[pc++]; break; // A^= N
-    case 200: a <<= a; break; // A<<=A
-    case 201: a <<= b; break; // A<<=B
-    case 202: a <<= c; break; // A<<=C
-    case 203: a <<= d; break; // A<<=D
-    case 204: a <<= m(b); break; // A<<=*B
-    case 205: a <<= m(c); break; // A<<=*C
-    case 206: a <<= h(d); break; // A<<=*D
-    case 207: a <<= header[pc++]; break; // A<<= N
-    case 208: a >>= a; break; // A>>=A
-    case 209: a >>= b; break; // A>>=B
-    case 210: a >>= c; break; // A>>=C
-    case 211: a >>= d; break; // A>>=D
-    case 212: a >>= m(b); break; // A>>=*B
-    case 213: a >>= m(c); break; // A>>=*C
-    case 214: a >>= h(d); break; // A>>=*D
-    case 215: a >>= header[pc++]; break; // A>>= N
+    case 200: a <<= (a&31); break; // A<<=A
+    case 201: a <<= (b&31); break; // A<<=B
+    case 202: a <<= (c&31); break; // A<<=C
+    case 203: a <<= (d&31); break; // A<<=D
+    case 204: a <<= (m(b)&31); break; // A<<=*B
+    case 205: a <<= (m(c)&31); break; // A<<=*C
+    case 206: a <<= (h(d)&31); break; // A<<=*D
+    case 207: a <<= (header[pc++]&31); break; // A<<= N
+    case 208: a >>= (a&31); break; // A>>=A
+    case 209: a >>= (b&31); break; // A>>=B
+    case 210: a >>= (c&31); break; // A>>=C
+    case 211: a >>= (d&31); break; // A>>=D
+    case 212: a >>= (m(b)&31); break; // A>>=*B
+    case 213: a >>= (m(c)&31); break; // A>>=*C
+    case 214: a >>= (h(d)&31); break; // A>>=*D
+    case 215: a >>= (header[pc++]&31); break; // A>>= N
     case 216: f = (a == a); break; // A==A
     case 217: f = (a == b); break; // A==B
     case 218: f = (a == c); break; // A==C
@@ -2058,14 +1893,15 @@ print"    default: err();\n  }\n";
   }
   return 1;
 }
+#endif
 
 // Print illegal instruction error message and exit
 void ZPAQL::err() {
   --pc;
   fprintf(stderr, "\nExecution aborted: pc=%d a=%d b=%d->%d c=%d->%d d=%d->%d\n",
     pc-hbegin, a, b, m(b), c, m(c), d, h(d));
-  if (pc>=hbegin && pc<hend) fprintf(stderr, "opcode = %d %s\n",
-    header[pc-hbegin], opcodelist[header[pc-hbegin]]);
+  if (pc>=hbegin && pc<hend) fprintf(stderr, "opcode = %d\n",
+    header[pc-hbegin]);
   else
     fprintf(stderr, "pc out of range. Program size is %d\n", hend-hbegin);
   exit(1);
@@ -2073,21 +1909,8 @@ void ZPAQL::err() {
 
 //////////////////////////////// compile ///////////////////////////
 
+#ifndef OPT
 int args[9]={0};  // global configuration file arguments
-
-// Append string s to array a, enlarging as needed
-void append(Array<char>& a, const char* s) {
-  if (!s) return;
-  if (!a.size()) a.resize(strlen(s)+1);
-  int len=strlen(&a[0])+strlen(s)+1;
-  if (len>a.size()) {
-    Array<char> tmp(a.size());
-    strcpy(&tmp[0], &a[0]);
-    a.resize(len*5/4+64);
-    strcpy(&a[0], &tmp[0]);
-  }
-  strcat(&a[0], s);
-}
 
 // Read a token and return it, or return 0 at EOF. Skip (comments).
 // Convert to lower case. Tokens are separated by white space.
@@ -2402,7 +2225,7 @@ void compile(FILE* in, ZPAQL& z, ZPAQL& pz, Array<char>& pcomp_cmd,
     pz.header.resize(0x10300);
     pz.header[4]=z.header[4]; // copy ph
     pz.header[5]=z.header[5]; // copy pm
-    pz.cend=7;  // empty COMP section
+    pz.cend=8;  // empty COMP section
 
     // get pcomp_cmd ending with ";"
     const char *tok;
@@ -2410,52 +2233,22 @@ void compile(FILE* in, ZPAQL& z, ZPAQL& pz, Array<char>& pcomp_cmd,
       if (pcomp_cmd.size() && pcomp_cmd[0]) append(pcomp_cmd, " ");
       append(pcomp_cmd, tok);
     }
-    pz.hbegin=pz.hend=pz.cend+144;
+    pz.hbegin=pz.hend=pz.cend+128;
     op=compile_comp(in, pz);
     if (op!=END)
       error("Expected END in configuation file");
+
+    // Compute header size
+    int hsize=pz.hend-pz.hbegin+pz.cend-2;
+    pz.header[0]=hsize&255;
+    pz.header[1]=hsize>>8;
   }
 }
+#endif // ifndef OPT
 
 ///////////////////////////// Predictor ///////////////////////////
 
-// A Component is a context model, indirect context model, match model,
-// fixed weight mixer, adaptive 2 input mixer without or with current
-// partial byte as context, adaptive m input mixer (without or with),
-// or SSE (without or with).
-
-struct Component {
-  int limit;      // max count for cm
-  U32 cxt;        // saved context
-  int a, b, c;    // multi-purpose variables
-  Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
-  Array<U8> ht;   // ICM hash table[0..size1][0..15] of bit histories; MATCH buf
-  Array<U16> a16; // multi-use
-  Component();    // initialize to all 0
-};
-
 Component::Component(): limit(0), cxt(0), a(0), b(0), c(0) {}
-
-// Next state table generator
-class StateTable {
-  enum {B=6, N=64}; // sizes of b, t
-  static U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
-  static const int bound[B];  // n0 -> max n1, n1 -> max n0
-  int num_states(int n0, int n1);  // compute t[n0][n1][1]
-  void discount(int& n0);  // set new value of n0 after 1 or n1 after 0
-  void next_state(int& n0, int& n1, int y);  // new (n0,n1) after bit y
-public:
-  int next(int state, int y) {  // next state for bit y
-    assert(state>=0 && state<256);
-    assert(y>=0 && y<4);
-    return ns[state*4+y];
-  }
-  int cminit(int state) {  // initial probability of 1 * 2^23
-    assert(state>=0 && state<256);
-    return ((ns[state*4+3]*2+1)<<22)/(ns[state*4+2]+ns[state*4+3]+1);
-  }
-  StateTable();
-};
 
 U8 StateTable::ns[1024]={0};
 const int StateTable::bound[B]={20,48,15,8,6,5}; // n0 -> max n1, n1 -> max n0
@@ -2542,59 +2335,6 @@ StateTable::StateTable() {
     }
   }
 }
-
-// A predictor guesses the next bit
-class Predictor {
-public:
-  Predictor(ZPAQL&);    // build model
-  int predict();        // probability that next bit is a 1 (0..4095)
-  void update(int y);   // train on bit y (0..1)
-  void stat();          // print statistics
-private:
-
-  // Predictor state
-  int c8;               // last 0...7 bits.
-  int hmap4;            // c8 split into nibbles
-  int p[256];           // predictions
-  ZPAQL& z;             // VM to compute context hashes, includes H, n
-  Component comp[256];  // the model, includes P
-
-  // Modeling support functions
-  void train(Component& cr, int y);  // reduce prediction error in cr.cm
-  int dt[1024];         // division table for cm: dt[i] = 2^16/(i+1.5)
-  U16 squasht[4096];    // squash() lookup table
-  short stretcht[32768];// stretch() lookup table
-  StateTable st;        // next, cminit functions
-
-  // x -> floor(32768/(1+exp(-x/64)))
-  int squash(int x) {
-    assert(x>=-2048 && x<=2047);
-    return squasht[x+2048];
-  }
-
-  // x -> round(64*log((x+0.5)/(32767.5-x))), approx inverse of squash
-  int stretch(int x) {
-    assert(x>=0 && x<=32767);
-    return stretcht[x];
-  }
-
-  // bound x to a 12 bit signed int
-  int clamp2k(int x) {
-    if (x<-2048) return -2048;
-    else if (x>2047) return 2047;
-    else return x;
-  }
-
-  // bound x to a 20 bit signed int
-  int clamp512k(int x) {
-    if (x<-(1<<19)) return -(1<<19);
-    else if (x>=(1<<19)) return (1<<19)-1;
-    else return x;
-  }
-
-  // Get cxt in ht, creating a new row if needed
-  int find(Array<U8>& ht, int sizebits, U32 cxt);
-};
 
 // Print component statistics
 void Predictor::stat() {
@@ -2771,9 +2511,13 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   }
 }
 
-int Predictor::predict() {
+int Predictor::predict0() {
   assert(c8>=1 && c8<=255);
 
+#ifdef OPT
+  error("no model");
+  return 16384;
+#else
   // Predict next bit
   int n=z.header[6];
   assert(n>0 && n<=255);
@@ -2862,10 +2606,14 @@ int Predictor::predict() {
   }
   assert(cp[0]==NONE);
   return squash(p[n-1]);
+#endif
 }
 
 // Update model with decoded bit y (0...1)
-void Predictor::update(int y) {
+void Predictor::update0(int y) {
+#ifdef OPT
+  error("no model");
+#else
   assert(y==0 || y==1);
   assert(c8>=1 && c8<=255);
   assert(hmap4>=1 && hmap4<=511);
@@ -2969,17 +2717,7 @@ void Predictor::update(int y) {
     hmap4=(hmap4&0xf)<<5|y<<4|1;
   else
     hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);
-}
-
-// cr.cm(cr.cxt) has a prediction in the high 22 bits and a count in the
-// low 10 bits.  Reduce the prediction error by error/(count+1.5) and
-// count up to cr.limit. cm.size() must be a power of 2.
-inline void Predictor::train(Component& cr, int y) {
-  assert(y==0 || y==1);
-  U32& pn=cr.cm(cr.cxt);
-  int count=pn&0x3ff;
-  int error=y*32767-(cr.cm(cr.cxt)>>17);
-  pn+=(error*dt[count]&-1024)+(count<cr.limit);
+#endif
 }
 
 // Find cxt row in hash table ht. ht has rows of 16 indexed by the
@@ -3003,6 +2741,701 @@ int Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
     return memset(&ht[h2], 0, 16), ht[h2]=chk, h2;
 }
 
+/////////////////////////// optimize ///////////////////////
+
+// Default run(), predict(), update() ifndef OPT
+#ifndef OPT
+inline void ZPAQL::run(U32 input) {run0(input);}
+inline int Predictor::predict() {return predict0();}
+inline void Predictor::update(int y) {update0(y);}
+
+// Generate one case of predict()
+void opt_predict(FILE *out, ZPAQL& z) {
+  int n=z.header[6];
+  fprintf(out, "      // %d components\n", n);
+
+  // PCOMP should not call predict()
+  if (n==0) {
+    fprintf(out, 
+      "      assert(0);\n"
+      "      return 16384;\n");
+    return;
+  }
+
+  // Code each component
+  const U8* cp=&z.header[7];
+  assert(cp[-1]==n);
+  for (int i=0; i<n; ++i) {
+    assert(cp>&z.header[0] && cp<&z.header[z.header.size()-8]);
+    switch(cp[0]) {
+      case CONST:  // c
+        fprintf(out, "\n      // %d CONST %d\n", i, cp[1]);
+        break;
+      case CM:  // sizebits limit
+        fprintf(out, "\n      // %d CM %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      comp[%d].cxt=z.H(%d)^hmap4;\n"
+          "      p[%d]=stretch(comp[%d].cm(comp[%d].cxt)>>17);\n",
+          i, i, i, i, i);
+        break;
+      case ICM: // sizebits
+        fprintf(out, "\n      // %d ICM %d\n", i, cp[1]);
+        fprintf(out,
+          "      if (c8==1 || (c8&0xf0)==16)\n"
+          "        comp[%d].c=find(comp[%d].ht, %d+2, z.H(%d)+16*c8);\n"
+          "      comp[%d].cxt=comp[%d].ht[comp[%d].c+(hmap4&15)];\n"
+          "      p[%d]=stretch(comp[%d].cm(comp[%d].cxt)>>8);\n",
+          i, i, cp[1], i, i, i, i, i, i, i);
+        break;
+      case MATCH: // sizebits bufbits: a=len, b=offset, c=bit, cxt=256/len,
+                  //                   ht=buf, limit=8*pos+bp
+        fprintf(out, "\n      // %d MATCH %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      if (comp[%d].a==0) p[%d]=0;\n"
+          "      else {\n"
+          "        comp[%d].c=comp[%d].ht((comp[%d].limit>>3)\n"
+          "           -comp[%d].b)>>(7-(comp[%d].limit&7))&1;\n"
+          "        p[%d]=stretch(comp[%d].cxt*(comp[%d].c*-2+1)&32767);\n"
+          "      }\n",
+          i, i, i, i, i, i, i, i, i, i);
+        break;
+      case AVG: // j k wt
+          fprintf(out, "\n      // %d AVG %d %d %d\n", i, cp[1], cp[2], cp[3]);
+          fprintf(out,
+          "      p[%d]=(p[%d]*%d+p[%d]*(256-%d))>>8;\n",
+          i, cp[1], cp[3], cp[2], cp[3]);
+        break;
+      case MIX2:   // sizebits j k rate mask
+                   // c=size cm=wt[size][m] cxt=input
+        fprintf(out, "\n      // %d MIX2 %d %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
+        fprintf(out,
+          "      {\n"
+          "        comp[%d].cxt=((z.H(%d)+(c8&%d))&(comp[%d].c-1));\n"
+          "        int w=comp[%d].a16[comp[%d].cxt];\n"
+          "        p[%d]=(w*p[%d]+(65536-w)*p[%d])>>16;\n"
+          "      }\n",
+          i, i, cp[5], i, i, i, i, cp[2], cp[3]);
+
+        break;
+      case MIX:    // sizebits j m rate mask
+                   // c=size cm=wt[size][m] cxt=index of wt in cm
+        fprintf(out, "\n      // %d MIX %d %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
+        fprintf(out,
+          "      {\n"
+          "        comp[%d].cxt=z.H(%d)+(c8&%d);\n"
+          "        comp[%d].cxt=(comp[%d].cxt&(comp[%d].c-1))*%d;\n"
+          "        int* wt=(int*)&comp[%d].cm[comp[%d].cxt];\n",
+          i, i, cp[5], i, i, i, cp[3], i, i);
+          for (int j=0; j<cp[3]; ++j)  // unrolled for-loop
+            fprintf(out, 
+              "        p[%d]%s=(wt[%d]>>8)*p[%d];\n", 
+              i, j?"+":"", j, cp[2]+j);
+        fprintf(out,
+          "        p[%d]=clamp2k(p[%d]>>8);\n"
+          "      }\n",
+          i, i);
+        break;
+      case ISSE:   // sizebits j -- c=hi, cxt=bh
+        fprintf(out, "\n      // %d ISSE %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      {\n"
+          "        if (c8==1 || (c8&0xf0)==16)\n"
+          "          comp[%d].c=find(comp[%d].ht, %d, z.H(%d)+16*c8);\n"
+          "        comp[%d].cxt=comp[%d].ht[comp[%d].c+(hmap4&15)];\n"
+          "        int *wt=(int*)&comp[%d].cm[comp[%d].cxt*2];\n"
+          "        p[%d]=clamp2k((wt[0]*p[%d]+wt[1]*64)>>16);\n"
+          "      }\n",
+          i, i, cp[1]+2, i, i, i, i, i, i, i, cp[2]);
+        break;
+      case SSE:   // sizebits j start limit
+        fprintf(out, "\n      // %d SSE %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4]);
+        fprintf(out,
+          "      {\n"
+          "        comp[%d].cxt=(z.H(%d)+c8)*32;\n"
+          "        int pq=p[%d]+992;\n"
+          "        if (pq<0) pq=0;\n"
+          "        if (pq>1983) pq=1983;\n"
+          "        int wt=pq&63;\n"
+          "        pq>>=6;\n"
+          "        comp[%d].cxt+=pq;\n"
+          "        p[%d]=stretch(((comp[%d].cm(comp[%d].cxt)>>10)*(64-wt)\n"
+          "           +(comp[%d].cm(comp[%d].cxt+1)>>10)*wt)>>13);\n"
+          "        comp[%d].cxt+=wt>>5;\n"
+          "      }\n",
+          i, i, cp[2], i, i, i, i, i, i, i);
+        break;
+    }
+    cp+=compsize[cp[0]];
+    assert(cp<&z.header[z.cend]);
+  }
+  assert(cp[0]==NONE);
+  fprintf(out,
+    "      return squash(p[%d]);\n", n-1);
+}
+
+void opt_update(FILE *out, ZPAQL& z) {
+  int n=z.header[6];
+  fprintf(out, "      // %d components\n", n);
+
+  // PCOMP should not call update()
+  if (n==0) {
+    fprintf(out, 
+      "      assert(0);\n");
+    return;
+  }
+
+  // Code each component
+  const U8* cp=&z.header[7];
+  assert(cp[-1]==n);
+  for (int i=0; i<n; ++i) {
+    assert(cp>&z.header[0] && cp<&z.header[z.header.size()-8]);
+    switch(cp[0]) {
+      case CONST:  // c
+        fprintf(out, "\n      // %d CONST %d\n", i, cp[1]);
+        break;
+      case CM:  // sizebits limit
+        fprintf(out, "\n      // %d CM %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      train(comp[%d], y);\n",
+          i);
+        break;
+      case ICM:   // sizebits: cxt=ht[b]=bh, ht[c][0..15]=bh row, cxt=bh
+        fprintf(out, "\n      // %d ICM %d\n", i, cp[1]);
+        fprintf(out,
+          "      {\n"
+          "        comp[%d].ht[comp[%d].c+(hmap4&15)]=\n"
+          "            st.next(comp[%d].ht[comp[%d].c+(hmap4&15)], y);\n"
+          "        U32& pn=comp[%d].cm(comp[%d].cxt);\n"
+          "        pn+=int(y*32767-(pn>>8))>>2;\n"
+          "      }\n",
+          i, i, i, i, i, i);
+        break;
+      case MATCH: // sizebits bufbits:
+                  //   a=len, b=offset, c=bit, cm=index, cxt=256/len
+                  //   ht=buf, limit=8*pos+bp
+        fprintf(out, "\n      // %d MATCH %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      {\n"
+          "        if (comp[%d].c!=y) comp[%d].a=0;\n"
+          "        comp[%d].ht(comp[%d].limit>>3)+=comp[%d].ht(comp[%d].limit>>3)+y;\n"
+          "        if ((++comp[%d].limit&7)==0) {\n"
+          "          int pos=comp[%d].limit>>3;\n"
+          "          if (comp[%d].a==0) {\n"
+          "            comp[%d].b=pos-comp[%d].cm(z.H(%d));\n"
+          "            if (comp[%d].b&(comp[%d].ht.size()-1))\n"
+          "              while (comp[%d].a<255 && comp[%d].ht(pos-comp[%d].a-1)\n"
+          "                     ==comp[%d].ht(pos-comp[%d].a-comp[%d].b-1))\n"
+          "                ++comp[%d].a;\n"
+          "          }\n"
+          "          else comp[%d].a+=comp[%d].a<255;\n"
+          "          comp[%d].cm(z.H(%d))=pos;\n"
+          "          if (comp[%d].a>0) comp[%d].cxt=2048/comp[%d].a;\n"
+          "        }\n"
+          "      }\n",
+          i, i, i, i, i, i, i, i, i, i, i, i, i, i,
+          i, i, i, i, i, i, i, i, i, i, i, i, i, i);
+        break;
+      case AVG:  // j k wt
+        fprintf(out, "\n      // %d AVG %d %d %d\n", i, cp[1], cp[2], cp[3]);
+        break;
+      case MIX2:   // sizebits j k rate mask
+                   // cm=input[2],wt[size][2], cxt=weight row
+        fprintf(out, "\n      // %d MIX2 %d %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
+        fprintf(out,
+          "      {\n"
+          "        int err=(y*32767-squash(p[%d]))*%d>>5;\n"
+          "        int w=comp[%d].a16[comp[%d].cxt];\n"
+          "        w+=(err*(p[%d]-p[%d])+(1<<12))>>13;\n"
+          "        if (w<0) w=0;\n"
+          "        if (w>65535) w=65535;\n"
+          "        comp[%d].a16[comp[%d].cxt]=w;\n"
+          "      }\n",
+          i, cp[4], i, i, cp[2], cp[3], i, i);
+        break;
+      case MIX:     // sizebits j m rate mask
+                    // cm=wt[size][m], cxt=input
+        fprintf(out, "\n      // %d MIX %d %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4], cp[5]);
+        fprintf(out,
+          "      {\n"
+          "        int err=(y*32767-squash(p[%d]))*%d>>4;\n"
+          "        int* wt=(int*)&comp[%d].cm[comp[%d].cxt];\n",
+          i, cp[4], i, i);
+        for (int j=0; j<cp[3]; ++j) // unrolled
+          fprintf(out,
+            "          wt[%d]=clamp512k(wt[%d]+((err*p[%d]+(1<<12))>>13));\n",
+            j, j, cp[2]+j);
+        fprintf(out,
+          "      }\n");
+        break;
+      case ISSE:   // sizebits j  -- c=hi, cxt=bh
+        fprintf(out, "\n      // %d ISSE %d %d\n", i, cp[1], cp[2]);
+        fprintf(out,
+          "      {\n"
+          "        int err=y*32767-squash(p[%d]);\n"
+          "        int *wt=(int*)&comp[%d].cm[comp[%d].cxt*2];\n"
+          "        wt[0]=clamp512k(wt[0]+((err*p[%d]+(1<<12))>>13));\n"
+          "        wt[1]=clamp512k(wt[1]+((err+16)>>5));\n"
+          "        comp[%d].ht[comp[%d].c+(hmap4&15)]=st.next(comp[%d].cxt, y);\n"
+          "      }\n",
+          i, i, i, cp[2], i, i, i);
+        break;
+      case SSE:  // sizebits j start limit
+        fprintf(out, "\n      // %d SSE %d %d %d %d\n", 
+                     i, cp[1], cp[2], cp[3], cp[4]);
+        fprintf(out,
+          "      train(comp[%d], y);\n",
+          i);
+        break;
+    }
+    cp+=compsize[cp[0]];
+    assert(cp<&z.header[z.cend]);
+  }
+  assert(cp[0]==NONE);
+}
+
+// Generate optimization code for the HCOMP section of z
+void opt_hcomp(FILE *out, ZPAQL& z, int select) {
+
+  /* Instruction translation table. It was generated from
+  the body of ZPAQL::run0() with the following perl script,
+  then hand editing JT, JF, JMP, and LJ.
+
+  for ($i=0; $i<256; ++$i) {
+    $a[$i]="    \"err();\",";
+  }
+  while (<>) {
+    chomp;
+    if (/case (\d+): (.*) break; *\/\/(.*)/) {
+      $n=$1;
+      $op=$2;
+      $comment=$3;
+      $op=~s/header\[pc\+\+\]/%d/;
+      $op="\"".$op."\",";
+      $a[$n]=sprintf("    %-26s // $n ".$comment, $op);
+    }
+  }
+  for ($i=0; $i<256; ++$i) {
+    print("$a[$i]\n");
+  }
+  */
+  static const char* inst[256]={
+    "err();",                  // 0  ERROR
+    "++a;",                    // 1  A++
+    "--a;",                    // 2  A--
+    "a = ~a;",                 // 3  A!
+    "a = 0;",                  // 4  A=0
+    "err();",
+    "err();",
+    "a = r[%d];",              // 7  A=R N
+    "swap(b);",                // 8  B<>A
+    "++b;",                    // 9  B++
+    "--b;",                    // 10  B--
+    "b = ~b;",                 // 11  B!
+    "b = 0;",                  // 12  B=0
+    "err();",
+    "err();",
+    "b = r[%d];",              // 15  B=R N
+    "swap(c);",                // 16  C<>A
+    "++c;",                    // 17  C++
+    "--c;",                    // 18  C--
+    "c = ~c;",                 // 19  C!
+    "c = 0;",                  // 20  C=0
+    "err();",
+    "err();",
+    "c = r[%d];",              // 23  C=R N
+    "swap(d);",                // 24  D<>A
+    "++d;",                    // 25  D++
+    "--d;",                    // 26  D--
+    "d = ~d;",                 // 27  D!
+    "d = 0;",                  // 28  D=0
+    "err();",
+    "err();",
+    "d = r[%d];",              // 31  D=R N
+    "swap(m(b));",             // 32  *B<>A
+    "++m(b);",                 // 33  *B++
+    "--m(b);",                 // 34  *B--
+    "m(b) = ~m(b);",           // 35  *B!
+    "m(b) = 0;",               // 36  *B=0
+    "err();",
+    "err();",
+    "if (f) goto L%d;",        // 39  JT N
+    "swap(m(c));",             // 40  *C<>A
+    "++m(c);",                 // 41  *C++
+    "--m(c);",                 // 42  *C--
+    "m(c) = ~m(c);",           // 43  *C!
+    "m(c) = 0;",               // 44  *C=0
+    "err();",
+    "err();",
+    "if (!f) goto L%d;",       // 47  JF N
+    "swap(h(d));",             // 48  *D<>A
+    "++h(d);",                 // 49  *D++
+    "--h(d);",                 // 50  *D--
+    "h(d) = ~h(d);",           // 51  *D!
+    "h(d) = 0;",               // 52  *D=0
+    "err();",
+    "err();",
+    "r[%d] = a;",              // 55  R=A N
+    "return;",                 // 56  HALT
+    "if (output) putc(a, output); if (sha1) sha1->put(a);", // 57  OUT
+    "err();",
+    "a = (a+m(b)+512)*773;",   // 59  HASH
+    "h(d) = (h(d)+a+512)*773;",// 60  HASHD
+    "err();",
+    "err();",
+    "goto L%d;",               // 63  JMP N
+    "a = a;",                  // 64  A=A
+    "a = b;",                  // 65  A=B
+    "a = c;",                  // 66  A=C
+    "a = d;",                  // 67  A=D
+    "a = m(b);",               // 68  A=*B
+    "a = m(c);",               // 69  A=*C
+    "a = h(d);",               // 70  A=*D
+    "a = %d;",                 // 71  A= N
+    "b = a;",                  // 72  B=A
+    "b = b;",                  // 73  B=B
+    "b = c;",                  // 74  B=C
+    "b = d;",                  // 75  B=D
+    "b = m(b);",               // 76  B=*B
+    "b = m(c);",               // 77  B=*C
+    "b = h(d);",               // 78  B=*D
+    "b = %d;",                 // 79  B= N
+    "c = a;",                  // 80  C=A
+    "c = b;",                  // 81  C=B
+    "c = c;",                  // 82  C=C
+    "c = d;",                  // 83  C=D
+    "c = m(b);",               // 84  C=*B
+    "c = m(c);",               // 85  C=*C
+    "c = h(d);",               // 86  C=*D
+    "c = %d;",                 // 87  C= N
+    "d = a;",                  // 88  D=A
+    "d = b;",                  // 89  D=B
+    "d = c;",                  // 90  D=C
+    "d = d;",                  // 91  D=D
+    "d = m(b);",               // 92  D=*B
+    "d = m(c);",               // 93  D=*C
+    "d = h(d);",               // 94  D=*D
+    "d = %d;",                 // 95  D= N
+    "m(b) = a;",               // 96  *B=A
+    "m(b) = b;",               // 97  *B=B
+    "m(b) = c;",               // 98  *B=C
+    "m(b) = d;",               // 99  *B=D
+    "m(b) = m(b);",            // 100  *B=*B
+    "m(b) = m(c);",            // 101  *B=*C
+    "m(b) = h(d);",            // 102  *B=*D
+    "m(b) = %d;",              // 103  *B= N
+    "m(c) = a;",               // 104  *C=A
+    "m(c) = b;",               // 105  *C=B
+    "m(c) = c;",               // 106  *C=C
+    "m(c) = d;",               // 107  *C=D
+    "m(c) = m(b);",            // 108  *C=*B
+    "m(c) = m(c);",            // 109  *C=*C
+    "m(c) = h(d);",            // 110  *C=*D
+    "m(c) = %d;",              // 111  *C= N
+    "h(d) = a;",               // 112  *D=A
+    "h(d) = b;",               // 113  *D=B
+    "h(d) = c;",               // 114  *D=C
+    "h(d) = d;",               // 115  *D=D
+    "h(d) = m(b);",            // 116  *D=*B
+    "h(d) = m(c);",            // 117  *D=*C
+    "h(d) = h(d);",            // 118  *D=*D
+    "h(d) = %d;",              // 119  *D= N
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "a += a;",                 // 128  A+=A
+    "a += b;",                 // 129  A+=B
+    "a += c;",                 // 130  A+=C
+    "a += d;",                 // 131  A+=D
+    "a += m(b);",              // 132  A+=*B
+    "a += m(c);",              // 133  A+=*C
+    "a += h(d);",              // 134  A+=*D
+    "a += %d;",                // 135  A+= N
+    "a -= a;",                 // 136  A-=A
+    "a -= b;",                 // 137  A-=B
+    "a -= c;",                 // 138  A-=C
+    "a -= d;",                 // 139  A-=D
+    "a -= m(b);",              // 140  A-=*B
+    "a -= m(c);",              // 141  A-=*C
+    "a -= h(d);",              // 142  A-=*D
+    "a -= %d;",                // 143  A-= N
+    "a *= a;",                 // 144  A*=A
+    "a *= b;",                 // 145  A*=B
+    "a *= c;",                 // 146  A*=C
+    "a *= d;",                 // 147  A*=D
+    "a *= m(b);",              // 148  A*=*B
+    "a *= m(c);",              // 149  A*=*C
+    "a *= h(d);",              // 150  A*=*D
+    "a *= %d;",                // 151  A*= N
+    "div(a);",                 // 152  A/=A
+    "div(b);",                 // 153  A/=B
+    "div(c);",                 // 154  A/=C
+    "div(d);",                 // 155  A/=D
+    "div(m(b));",              // 156  A/=*B
+    "div(m(c));",              // 157  A/=*C
+    "div(h(d));",              // 158  A/=*D
+    "div(%d);",                // 159  A/= N
+    "mod(a);",                 // 160  A=A
+    "mod(b);",                 // 161  A=B
+    "mod(c);",                 // 162  A=C
+    "mod(d);",                 // 163  A=D
+    "mod(m(b));",              // 164  A=*B
+    "mod(m(c));",              // 165  A=*C
+    "mod(h(d));",              // 166  A=*D
+    "mod(%d);",                // 167  A= N
+    "a &= a;",                 // 168  A&=A
+    "a &= b;",                 // 169  A&=B
+    "a &= c;",                 // 170  A&=C
+    "a &= d;",                 // 171  A&=D
+    "a &= m(b);",              // 172  A&=*B
+    "a &= m(c);",              // 173  A&=*C
+    "a &= h(d);",              // 174  A&=*D
+    "a &= %d;",                // 175  A&= N
+    "a &= ~ a;",               // 176  A&~A
+    "a &= ~ b;",               // 177  A&~B
+    "a &= ~ c;",               // 178  A&~C
+    "a &= ~ d;",               // 179  A&~D
+    "a &= ~ m(b);",            // 180  A&~*B
+    "a &= ~ m(c);",            // 181  A&~*C
+    "a &= ~ h(d);",            // 182  A&~*D
+    "a &= ~ %d;",              // 183  A&~ N
+    "a |= a;",                 // 184  A|=A
+    "a |= b;",                 // 185  A|=B
+    "a |= c;",                 // 186  A|=C
+    "a |= d;",                 // 187  A|=D
+    "a |= m(b);",              // 188  A|=*B
+    "a |= m(c);",              // 189  A|=*C
+    "a |= h(d);",              // 190  A|=*D
+    "a |= %d;",                // 191  A|= N
+    "a ^= a;",                 // 192  A^=A
+    "a ^= b;",                 // 193  A^=B
+    "a ^= c;",                 // 194  A^=C
+    "a ^= d;",                 // 195  A^=D
+    "a ^= m(b);",              // 196  A^=*B
+    "a ^= m(c);",              // 197  A^=*C
+    "a ^= h(d);",              // 198  A^=*D
+    "a ^= %d;",                // 199  A^= N
+    "a <<= (a&31);",           // 200  A<<=A
+    "a <<= (b&31);",           // 201  A<<=B
+    "a <<= (c&31);",           // 202  A<<=C
+    "a <<= (d&31);",           // 203  A<<=D
+    "a <<= (m(b)&31);",        // 204  A<<=*B
+    "a <<= (m(c)&31);",        // 205  A<<=*C
+    "a <<= (h(d)&31);",        // 206  A<<=*D
+    "a <<= (%d&31);",          // 207  A<<= N
+    "a >>= (a&31);",           // 208  A>>=A
+    "a >>= (b&31);",           // 209  A>>=B
+    "a >>= (c&31);",           // 210  A>>=C
+    "a >>= (d&31);",           // 211  A>>=D
+    "a >>= (m(b)&31);",        // 212  A>>=*B
+    "a >>= (m(c)&31);",        // 213  A>>=*C
+    "a >>= (h(d)&31);",        // 214  A>>=*D
+    "a >>= (%d&31);",          // 215  A>>= N    
+    "f = (a == a);",           // 216  A==A
+    "f = (a == b);",           // 217  A==B
+    "f = (a == c);",           // 218  A==C
+    "f = (a == d);",           // 219  A==D
+    "f = (a == U32(m(b)));",   // 220  A==*B
+    "f = (a == U32(m(c)));",   // 221  A==*C
+    "f = (a == h(d));",        // 222  A==*D
+    "f = (a == U32(%d));",     // 223  A== N
+    "f = (a < a);",            // 224  A<A
+    "f = (a < b);",            // 225  A<B
+    "f = (a < c);",            // 226  A<C
+    "f = (a < d);",            // 227  A<D
+    "f = (a < U32(m(b)));",    // 228  A<*B
+    "f = (a < U32(m(c)));",    // 229  A<*C
+    "f = (a < h(d));",         // 230  A<*D
+    "f = (a < U32(%d));",      // 231  A< N
+    "f = (a > a);",            // 232  A>A
+    "f = (a > b);",            // 233  A>B
+    "f = (a > c);",            // 234  A>C
+    "f = (a > d);",            // 235  A>D
+    "f = (a > U32(m(b)));",    // 236  A>*B
+    "f = (a > U32(m(c)));",    // 237  A>*C
+    "f = (a > h(d));",         // 238  A>*D
+    "f = (a > U32(%d));",      // 239  A> N
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "err();",
+    "goto L%d;"};              // 255 LJ NN
+
+  // Generate a map of jump targets
+  if (z.hend<=z.hbegin) return;
+  Array<char> targets(0x10000);
+  for (int i=z.hbegin; i<z.hend-1; ++i) {
+    int op=z.header[i];
+    if (op==LJ) targets[z.header[i+1]+256*z.header[i+2]]=1, ++i;
+    if (op==JT || op==JF || op==JMP) {
+      int addr=i+2+(int(z.header[i+1])<<24>>24)-z.hbegin;
+      if (addr>=0 && addr<0x10000) targets[addr]=1;
+      else error("goto target out of range");
+    }
+    if (op%8==7) ++i;  // 2 byte instruction (LJ is 3)
+  }
+
+  // Generate instructions. The output code will not compile
+  // if any ZPAQL instructions jump to the middle of a 2 or 3
+  // byte instruction (legal) or out of range (legal if not executed).
+  fprintf(out, "      a = input;\n");
+  for (int i=z.hbegin; i<z.hend-1; ++i) {
+    int op=z.header[i];
+    if (targets[i-z.hbegin]) {
+      fprintf(out, "L%d:\n", select*100000+(i-z.hbegin)); // goto label
+      targets[i-z.hbegin]=0;
+    }
+    int operand=z.header[i+1];  // numeric operand
+    if (op==JT || op==JF || op==JMP)  // label
+      operand=select*100000+i+2+(int(z.header[i+1])<<24>>24)-z.hbegin;
+    if (op==LJ)
+      operand=select*100000+z.header[i+1]+256*z.header[i+2], ++i; // label
+    if (op%8==7) ++i; // 2 byte instruction
+    fprintf(out, "      ");
+    fprintf(out, inst[op], operand);
+    fprintf(out, "\n");
+  }
+}
+
+// Write z.header as a C++ array of bytes, var
+void dump(FILE *out, ZPAQL& z, const char *var) {
+  int hsize=z.cend+z.hend-z.hbegin;
+  assert(hsize==0 || hsize==z.header[0]+256*z.header[1]+2);
+  if (hsize==0) {
+    fprintf(out, 
+      "const U8 %s_array[2]={0,0};\n", var);
+  }
+  else {
+    fprintf(out, "const U8 %s_array[%d]={ // COMP=%d HCOMP=%d\n  ",
+      var, hsize, z.cend, z.hend-z.hbegin);
+    for (int i=0, j=0; i<hsize; ++i, ++j) {
+      if (j==z.cend) {
+        j=z.hbegin;
+        fprintf(out, "\n  // HCOMP\n  ");
+      }
+      fprintf(out, "%d", z.header[j]);
+      if (i<hsize-1) {
+        fprintf(out, ",");
+        if (i%16==15)
+          fprintf(out, "\n  ");
+      }
+    }
+    fprintf(out, "};\n");
+  }
+  fprintf(out, "const U8 *%s=%s_array;\n\n", var, var);
+}
+
+// Create filename.cpp with the following:
+//   pre_cmd containing preprocessor command
+//   zlist[zlist_size] containing z.header
+//   pzlist[pzlist_size] containing pz header
+//   ZPAQL::run() containing optimized code z, pz when select is 1, 2
+//   Predictor::predict() for z when z.select is 1
+//   Predictor::update() for z when z.select is 1
+void optimize(ZPAQL& z, ZPAQL& pz, const char* filename, const char* pcomp_cmd) {
+
+  // Open output
+  FILE *out=fopen(filename, "w");
+  if (!out) perror(filename), exit(1);
+
+  // Write header
+  fprintf(out, 
+    "// %s generated by ZPAQ\n"
+    "#include <zpaq.h>\n"
+    "\n", filename);
+
+  // Write pre_cmd
+  fprintf(out,
+    "const char *pre_cmd=\"%s\";\n",
+    pcomp_cmd);
+
+  // Write zlist, pzlist
+  dump(out, z, "zlist");
+  dump(out, pz, "pzlist");
+
+  // Write Predictor::predict()
+  fprintf(out,
+    "int Predictor::predict() {\n"
+    "  switch(z.select) {\n"
+    "    case 1: {\n");
+    opt_predict(out, z);
+  fprintf(out,
+    "    }\n"
+    "    default: return predict0();\n"
+    "  }\n"
+    "}\n"
+    "\n");
+
+  // Write Predictor::update()
+  fprintf(out,
+    "void Predictor::update(int y) {\n"
+    "  switch(z.select) {\n"
+    "    case 1: {\n");
+  opt_update(out, z);
+  fprintf(out,
+    "      break;\n"
+    "    }\n"
+    "    default: return update0(y);\n"
+    "  }\n"
+    "  c8+=c8+y;\n"
+    "  if (c8>=256) {\n"
+    "    z.run(c8-256);\n"
+    "    hmap4=1;\n"
+    "    c8=1;\n"
+    "  }\n"
+    "  else if (c8>=16 && c8<32)\n"
+    "    hmap4=(hmap4&0xf)<<5|y<<4|1;\n"
+    "  else\n"
+    "    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);\n"
+    "}\n"
+    "\n");
+
+  // Write ZPAQL::run()
+  fprintf(out,
+    "void ZPAQL::run(U32 input) {\n"
+    "  switch(select) {\n"
+    "    case 1: {\n");
+  opt_hcomp(out, z, 1);
+  fprintf(out,
+    "      break;\n"
+    "    }\n"
+    "    case 2: {\n");
+  opt_hcomp(out, pz, 2);
+  fprintf(out,
+    "      break;\n"
+    "    }\n"
+    "    default: run0(input);\n"
+    "  }\n"
+    "}\n"
+    "\n"
+    "\n");
+
+  // Close file
+  fclose(out);
+  printf("Created %s\n", filename);
+}
+#endif // not OPT
+
 ////////////////////////////// Decoder ////////////////////////////
 
 // Decoder decompresses using an arithmetic code
@@ -3015,6 +3448,7 @@ class Decoder {
 public:
   Decoder(FILE* f, ZPAQL& z);
   int decompress();  // return a byte or EOF
+  int skip();  // skip to the end of the segment, return next byte
 };
 
 Decoder::Decoder(FILE* f, ZPAQL& z):
@@ -3023,11 +3457,7 @@ Decoder::Decoder(FILE* f, ZPAQL& z):
 inline int Decoder::decode(int p) {
   assert(p>=0 && p<65536);
   assert(high>low && low>0);
-  if (curr<low || curr>high) {
-    printf("low=%08X curr=%08X high=%08X at %ld\n",
-     low, curr, high, ftell(in));
-    error("archive corrupted");
-  }
+  if (curr<low || curr>high) error("archive corrupted");
   assert(curr>=low && curr<=high);
   U32 mid=low+((high-low)>>16)*p+((((high-low)&0xffff)*p)>>16); // split range
   assert(high>mid && mid>=low);
@@ -3064,20 +3494,31 @@ int Decoder::decompress() {
   }
 }
 
+// Find end of compressed data and return next byte
+int Decoder::skip() {
+  int c=0;
+  while (curr==0)  // at start?
+    curr=getc(in);
+  while (curr && (c=getc(in))!=EOF)  // find 4 zeros
+    curr=curr<<8|c;
+  while ((c=getc(in))==0) ;  // might be more than 4
+  return c;
+}
+
 /////////////////////////// PostProcessor ////////////////////
 
 class PostProcessor {
   int state;   // input parse state
   int hsize;   // header size
   int ph, pm;  // sizes of H and M in z
-  ZPAQL z;     // holds PCOMP
 public:
+  ZPAQL z;     // holds PCOMP
   PostProcessor(ZPAQL& hz);
   void set(FILE* out, SHA1* p) {z.output=out; z.sha1=p;}  // Set output
-  void write(int c);  // Input a byte
+  int write(int c);  // Input a byte, return state
 };
 
-// Copy ph, pm from block header
+// Copy ph, pm from block header. sel selects ZPAQL::run() version
 PostProcessor::PostProcessor(ZPAQL& hz) {
   state=hsize=0;
   ph=hz.header[4];
@@ -3085,7 +3526,8 @@ PostProcessor::PostProcessor(ZPAQL& hz) {
 }
 
 // (PASS=0 | PROG=1 psize[0..1] pcomp[0..psize-1]) data... EOB=-1
-void PostProcessor::write(int c) {
+// Return state: 1=PASS, 2..4=loading PROG, 5=PROG loaded
+int PostProcessor::write(int c) {
   assert(c>=-1 && c<=255);
   switch (state) {
     case 0:  // initial state
@@ -3107,7 +3549,7 @@ void PostProcessor::write(int c) {
       hsize+=c*256;  // high byte of psize
       z.header.resize(hsize+300);
       z.cend=8;
-      z.hbegin=z.hend=136;
+      z.hbegin=z.hend=z.cend+128;
       z.header[4]=ph;
       z.header[5]=pm;
       state=4;
@@ -3117,7 +3559,9 @@ void PostProcessor::write(int c) {
       assert(z.hend<z.header.size());
       z.header[z.hend++]=c;  // one byte of pcomp
       if (z.hend-z.hbegin==hsize) {  // last byte of pcomp?
-        z.header[z.hend++]=0;
+        hsize=z.cend-2+z.hend-z.hbegin;
+        z.header[0]=hsize&255;  // header size with empty COMP
+        z.header[1]=hsize>>8;
         z.initp();
         state=5;
       }
@@ -3126,7 +3570,94 @@ void PostProcessor::write(int c) {
       z.run(c);
       break;
   }
+  return state;
 }
+
+/////////////////////////// rerun ////////////////////////////
+
+#ifndef OPT
+// Call the optimized ZPAQ with arguments argc, argv. The name of the
+// program is TEMP/zpaq_SHA1(z.header, pz.header, pre_cmd).exe
+// If it doesn't exist then create a .cpp file with the same name
+// and call zpaqmake to compile it first. For compression,
+// the optimize function needs to preprocess with pre_cmd.
+// For decompression, append block to "x" if not 0 and
+// ignore argv[3..skipped_files+2]
+void rerun(int argc, char** argv, ZPAQL& z, ZPAQL& pz,
+           const char* pre_cmd, int block=0, int skipped_files=0) {
+
+  // Get temp directory
+  Array<char> filename;
+  const char *env=getenv("TMPDIR");
+  if (!env) env=getenv("TEMP");
+  if (env) append(filename, env);
+  int len=strlen(&filename[0]);
+  if (len>0 && filename[len-1]!='/' && filename[len-1]!='\\')
+    append(filename, "/");
+
+  // Get name from hash of z, pz, pre_cmd
+  SHA1 sha1;
+  for (int i=0; i<z.cend; ++i)
+    sha1.put(z.header[i]);
+  for (int i=z.hbegin; i<z.hend; ++i)
+    sha1.put(z.header[i]);
+  for (int i=pz.hbegin; i<pz.hend && i<pz.header.size(); ++i)
+    sha1.put(pz.header[i]);
+  if (pre_cmd)
+    for (int i=0; pre_cmd[i]; ++i)
+      sha1.put(pre_cmd[i]);
+  append(filename, "zpaq_");
+  for (int i=0; i<20; ++i) {
+    char s[10];
+    sprintf(s, "%02x", sha1.result(i));
+    append(filename, s);
+  }
+  append(filename, ".exe");
+
+  // Test if file exists. If not, create it
+  FILE *in=fopen(&filename[0], "rb");
+  if (!in) {
+
+    // Generate optimized C++ code
+    int len=strlen(&filename[0]);
+    assert(len>40);
+    filename[len-4]=0;  // chop .exe
+    append(filename, ".cpp");
+    optimize(z, pz, &filename[0], pre_cmd);
+
+    // compile it
+    filename[len-4]=0;  // chop .cpp
+    Array<char> cmd;
+    append(cmd, "zpaqmake ");
+    append(cmd, &filename[0]);
+    printf("%s\n", &cmd[0]);
+    system(&cmd[0]);
+
+    // Test if compile worked
+    append(filename, ".exe");
+    in=fopen(&filename[0], "rb");
+    if (!in) error("optimize: compile failed");
+  }
+  fclose(in);
+
+  // Execute command filename.exe(argc, argv)
+  Array<char> cmd;
+  append(cmd, &filename[0]);
+  for (int i=1; i<argc; ++i) {
+    if (i<3 || i>=skipped_files+3) {  // skip files
+      append(cmd, " ");
+      append(cmd, argv[i]);
+    }
+    if (i==1 && block>0) {  // append block to command if not 0
+      char s[20];
+      sprintf(s, "%d", block);
+      append(cmd, s);
+    }
+  }
+  printf("%s\n", &cmd[0]);
+  system(&cmd[0]);
+}
+#endif
 
 /////////////////////////// Decompress ///////////////////////
 
@@ -3165,12 +3696,14 @@ bool find_start(FILE *in) {
   return false;
 }
 
-// Advance in to start of next block
-void skip_block(FILE *in) {
+// Advance in to start of next block. Return number of segments skipped.
+int skip_block(FILE *in) {
+  assert(in);
+  int segments=0;
 
   // Find start of next block
   int c;
-  if (!find_start(in)) return;  // EOF
+  if (!find_start(in)) return 0;  // EOF
   if ((c=getc(in))>LEVEL || c<1 || getc(in)!=1)
     error("not ZPAQ");
 
@@ -3182,6 +3715,7 @@ void skip_block(FILE *in) {
   
   // Skip segments
   while ((c=getc(in))==1) {
+    ++segments;
     while (getc(in)>0) ; // skip filename
     while (getc(in)>0) ; // skip comment
     if (getc(in)!=0) error("reserved 0 missing");
@@ -3198,6 +3732,7 @@ void skip_block(FILE *in) {
     else if (c!=254) error("missing end of segment marker");
   }
   if (c!=255) error("missing end of block marker");
+  return segments;
 }
 
 // Remove path from filename
@@ -3212,19 +3747,20 @@ const char* strip(const char* filename) {
   return result;
 }
 
-// Decompress: [pnt]xN archive [files...]
-// p=paths, n=unnamed segments as separate files, t=no postprocessing,
+// Decompress: [opnt]xN archive [files...]
+// o=optimize, p=paths, n=extract all to one file, t=no postprocessing,
 // N=block to extract (default all), files...=new names.
 void decompress(int argc, char** argv) {
   assert(argc>=3);
 
   // Get options
-  bool pcmd=false, ncmd=false, tcmd=false;
+  bool ocmd=false, pcmd=false, ncmd=false, tcmd=false;
   int blocknum=0;
   const char* cmd=argv[1];
   assert(cmd);
   while (*cmd) {
-    if (*cmd=='p') pcmd=true;
+    if (*cmd=='o') ocmd=true;
+    else if (*cmd=='p') pcmd=true;
     else if (*cmd=='n') ncmd=true;
     else if (*cmd=='t') tcmd=true;
     else if (*cmd=='x') break;
@@ -3233,20 +3769,24 @@ void decompress(int argc, char** argv) {
   }
   if (cmd[0]!='x') usage();
   if (cmd[1]) blocknum=atoi(cmd+1);
+#ifdef OPT
+  ocmd=false;
+  if (blocknum<1) error("'x' command requires a block number");
+#endif
 
   // Open archive
   FILE* in=fopen(argv[2], "rb");
   if (!in) perror(argv[2]), exit(1);
 
   // Skip to specified block
-  while (blocknum>1) {
+  int block=1;
+  while (blocknum>block) {
     skip_block(in);
-    --blocknum;
+    ++block;
   }
 
   // Read the archive
   int filecount=0;  // number of files extracted
-  FILE *out=0;  // file to extract
   int c;
   while (find_start(in)) {
     if (getc(in)!=LEVEL || getc(in)!=1)
@@ -3254,13 +3794,27 @@ void decompress(int argc, char** argv) {
 
     // Read block header
     ZPAQL z;
-    z.read(in);
+    z.read(Reader(in));
 
     // PostProcessor and Decoder is created and and destroyed for each block
     PostProcessor pp(z);
     Decoder dec(in, z);
 
+#ifdef OPT
+    z.select=1;  // select optimized code
+    pp.z.select=2;
+#else
+    // clear output file
+    if (ncmd && (block==1 || block==blocknum)) {
+      if (argc!=4)
+        error("'nx' requires one output filename");
+      printf("Clearing output file %s\n", argv[3]);
+      remove(argv[3]);
+    }
+#endif
+
     // Read segments
+    bool first=true;  // first segment of block?
     while ((c=getc(in))==1) {
 
       // Read the filename
@@ -3269,7 +3823,15 @@ void decompress(int argc, char** argv) {
       for (i=0; (c=getc(in))>0; ++i)
         if (i<511) filename[i]=c;
       if (i>0 && i<512) filename[i]=0;
-      printf("%s ", filename);
+      if (!ocmd) printf("%s ", filename);
+
+#ifndef OPT
+      // If the user named some but not all output files, then skip the rest
+      if (!ncmd && argc>3 && filecount+3>=argc) {
+        printf("\nSkipping %s and remaining files\n", filename);
+        goto end;
+      }
+#endif
 
       // Get comment
       char comment[20]={0};
@@ -3278,31 +3840,32 @@ void decompress(int argc, char** argv) {
         if (i<19) comment[i]=c;
         ++i;
       }
-      printf("%s -> ", comment);
+      if (!ocmd) printf("%s -> ", comment);
       if (getc(in)) error("reserved");  // reserved 0
 
-      // If a segment is named, or no output file is open, or n option, then
-      // create a new output file.
-      if (ncmd || filename[0] || !out) {
-        if (out) fclose(out), out=0;
+      // If not 'o', open output file
+      FILE *out=0;
+      if (!ocmd) {
 
-        // If the user gave an output file starting at argv[3], use it instead.
-        // If the user doesn't name all the files, then stop after the last
-        // named file.
-        if (argc>3) {
-          if (filecount+3 < argc) {
-            out=fopen(argv[filecount+3], "wb");
-            if (!out) {
-              perror(argv[filecount+3]);
-              goto end;
-            }
-            else
-              printf("%s ", argv[filecount+3]);
-          }
-          else {
-            printf("\nSkipping %s and remaining files\n", filename);
+        // If not 'n', open as argv[3] for append.
+        if (ncmd) {
+          if (argc!=4)
+            error("'nx' command requires one output filename");
+          out=fopen(argv[3], "ab");
+          if (!out) perror(argv[3]), exit(1);
+          printf("%s -> ", argv[3]);
+        }
+
+        // Else if the user gave an output file starting at argv[3], use it instead.
+        else if (argc>3) {
+          assert(filecount+3<argc);
+          out=fopen(argv[filecount+3], "wb");
+          if (!out) {
+            perror(argv[filecount+3]);
             goto end;
           }
+          else
+            printf("%s ", argv[filecount+3]);
         }
 
         // Otherwise, use the names in the archive, but don't clobber
@@ -3318,6 +3881,7 @@ void decompress(int argc, char** argv) {
           }
           out=fopen(newname, "rb");
           if (out) {
+            fclose(out);
             printf("Error: won't overwrite\n");
             goto end;
           }
@@ -3329,34 +3893,59 @@ void decompress(int argc, char** argv) {
             }
           }
         }
-        ++filecount;
       }
 
       // Decompress
       SHA1 sha1;
-      long len=0;
-      if (tcmd) { // don't postprocess
-        while ((c=dec.decompress())!=EOF) {
-          if (out) putc(c, out);
-          sha1.put(c);
-          if (!(len&0xffff))
-            printf("%-12ld\b\b\b\b\b\b\b\b\b\b\b\b", len);
-          ++len;
+      int len0=0, len1=0;
+      pp.set(out, &sha1);
+#ifndef OPT
+      // optimize: Decode PCOMP in first segment and skip the rest of
+      // the block. Call rerun to use external optimized program to
+      // extract the current block.
+      if (ocmd) {
+        if (first) {
+          first=false;
+          while ((c=dec.decompress())!=EOF) {
+            c=pp.write(c);
+            if (c==1 || c==5) {  // 1=no PCOMP, 5=PCOMP
+              c=dec.skip();
+              rerun(argc, argv, z, pp.z, "", blocknum?0:block, 
+                    ncmd?0:filecount);
+              break;
+            }
+          }
         }
+        else
+          c=dec.skip();
       }
-      else {
-        pp.set(out, &sha1);
+      else 
+#endif
+      // Extract the current segment
+      {
         while ((c=dec.decompress())!=EOF) {
-          pp.write(c);
-          if (!(len&0xffff))
-            printf("%-12ld\b\b\b\b\b\b\b\b\b\b\b\b", len);
-          ++len;
+          if (!ocmd && tcmd) { // don't preprocess
+            if (out) putc(c, out);
+            sha1.put(c);
+          }
+          else
+            pp.write(c);
+          if (!ocmd && ++len0==100000) {
+            ++len1;
+            len0=0;
+            printf("%7d00000\b\b\b\b\b\b\b\b\b\b\b\b", len1);
+          }
         }
-        pp.write(-1);
+        if (!tcmd)
+          pp.write(-1);
+        if (out) fclose(out);
       }
+      ++filecount;
 
       // Check for end of segment and block markers
-      int eos=getc(in);  // 253=SHA1 follows, 254=EOS
+      int eos=c;
+      if (!ocmd)
+        eos=getc(in);  // 253=SHA1 follows, 254=EOS
       if (eos==253) {
         U8 hash[20];
         bool match=true;
@@ -3365,30 +3954,32 @@ void decompress(int argc, char** argv) {
           if (hash[i]!=sha1.result(i))
             match=false;
         }
-        if (match)
-          printf("Checksum OK ");
-        else {
-          printf("CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
-          for (int i=0; i<20; ++i)
-            printf("%02x", hash[i]);
-          printf("\n  File SHA1:    ");
-          for (int i=0; i<20; ++i)
-            printf("%02x", sha1.result(i));
+        if (!ocmd) {
+          if (match)
+            printf("Checksum OK ");
+          else {
+            printf("CHECKSUM FAILED: FILE IS NOT IDENTICAL\n  Archive SHA1: ");
+            for (int i=0; i<20; ++i)
+              printf("%02x", hash[i]);
+            printf("\n  File SHA1:    ");
+            for (int i=0; i<20; ++i)
+              printf("%02x", sha1.result(i));
+          }
         }
       }
       else if (eos!=254)
         error("missing end of segment marker");
       else
         printf("OK, no checksum");
-      printf("\n");
+      if (!ocmd) printf("\n");
     }
     if (c!=255) error("missing end of block marker");
     if (blocknum) goto end;
+    ++block;
   }
 
   // Close the archive
 end:
-  if (out) fclose(out);
   printf("%d file(s) extracted\n", filecount);
   fclose(in);
 }
@@ -3451,6 +4042,7 @@ void Encoder::compress(int c) {
 
 //////////////////////////// Compress ////////////////////////////
 
+#ifndef OPT
 // Parse up to 9 comma separated numeric arguments appended to
 // cmd and put in global args[0..8]. Replace commas with 0 in cmd.
 void get_args(char *cmd) {
@@ -3464,14 +4056,15 @@ void get_args(char *cmd) {
     }
   }
 }
+#endif
 
-// Compress files: [pnsiv]c|a[F[,N...]] archive files...
+// Compress files: [pnsivo]c|a[F][,N...]] archive files...
 void compress(int argc, char** argv) {
   assert(argc>=3);
 
   // Get command options
   bool pcmd=false, ncmd=false, scmd=false, icmd=false, // options
-       tcmd=false, acmd=false, ccmd=false;
+       tcmd=false, ocmd=false, acmd=false, ccmd=false;
   char *cmd=argv[1];
   while (cmd && cmd[0]) {
     if (cmd[0]=='p') pcmd=true, ncmd=false;
@@ -3480,6 +4073,7 @@ void compress(int argc, char** argv) {
     else if (cmd[0]=='i') icmd=true;
     else if (cmd[0]=='v') verbose=true;
     else if (cmd[0]=='t') tcmd=true;
+    else if (cmd[0]=='o') ocmd=true;
     else if (cmd[0]=='a') {acmd=true; break;}
     else if (cmd[0]=='c') {ccmd=true; break;}
     else usage();
@@ -3488,12 +4082,26 @@ void compress(int argc, char** argv) {
   ++cmd;
   if (acmd==ccmd) usage();
 
+#ifndef OPT
   // Parse comma separated arguments after config file (now in cmd)
   get_args(cmd);
+#endif
 
-  // Compile config file F now in cmd
   ZPAQL z, pz; // compression and postprocessing models
-  Array<char> pcomp_cmd;  // name of external preprocessor
+  Array<char> pcomp_cmd(64);  // name of external preprocessor
+
+  // Initialize from optimization code
+#ifdef OPT
+  z.read(Reader(zlist, 0x10002));
+  z.select=1;
+  if (pzlist[0] || pzlist[1]) {  // hsize>0 ?
+    pz.read(Reader(pzlist, 0x10002));
+    pz.select=2;
+  }
+  append(pcomp_cmd, pre_cmd);
+
+  // Initialize from config file or use default
+#else
   if (cmd[0]) {  // config file name?
     FILE* cfg=fopen(cmd, "rb");
     if (!cfg) perror(cmd), exit(1);
@@ -3510,8 +4118,14 @@ void compress(int argc, char** argv) {
       17,104,74,4,95,1,59,112,10,25,59,112,10,25,59,112,
       10,25,59,112,10,25,59,112,10,25,59,10,59,112,25,69,
       207,8,112,56,0};
-    z.load(34, 37, header);
+    z.read(Reader(header, 71));
   }
+  if (ocmd) {
+    rerun(argc, argv, z, pz, &pcomp_cmd[0]);
+    return;
+  }
+#endif
+
   if (pz.hend>pz.hbegin)
     pz.initp();
 
@@ -3642,7 +4256,7 @@ void compress(int argc, char** argv) {
     long j=0;
     while ((c=getc(in))!=EOF) {
       enc.compress(c);
-      if (!(++j&0xffff)) {
+      if (!(++j&0x1ffff)) {
         printf("%12ld -> %-12ld"
           "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b",
           j, ftell(out)-mark);
@@ -3682,12 +4296,10 @@ void compress(int argc, char** argv) {
 
 ////////////////////////// list //////////////////////////
 
-// List archive contents: [v]l archive
+#ifndef OPT
+// List archive contents: l archive
 void list(int argc, char** argv) {
   assert(argc>2 && argv[2]);
-
-  // Verbose?
-  verbose=strchr(argv[1], 'v')!=0;
 
   // Open archive
   FILE* in=fopen(argv[2], "rb");
@@ -3707,8 +4319,6 @@ void list(int argc, char** argv) {
     z.read(in);
     printf("Block %d: requires %1.3f MB memory\n",
      ++blocks, z.memory()/1000000);
-    if (verbose)
-      z.list();
 
     // Read segments
     while ((c=getc(in))==1) {
@@ -3726,15 +4336,12 @@ void list(int argc, char** argv) {
       if (c==EOF) error("unexpected end of file");
       while ((c=getc(in))==0) ;
       if (c==253) {  // print SHA1 in verbose mode
-        if (verbose) {
-          printf(" SHA1=");
-          for (int i=0; i<20; ++i)
-            printf("%02x", getc(in));
+        printf(" SHA1=");
+        for (int i=0; i<20; ++i) {
+          int c=getc(in);
+          if (i<4) printf("%02x", c);
         }
-        else {
-          for (int i=0; i<20; ++i)  // skip SHA1
-            getc(in);
-        }
+        printf("...");
       }
       else if (c!=254) error("missing end of segment marker");
       printf(" -> %ld\n", 1+ftell(in)-mark);
@@ -3743,13 +4350,15 @@ void list(int argc, char** argv) {
     if (c!=255) error("missing end of block marker");
   }
 }
+#endif
 
 //////////////////////////// run ///////////////////////////
 
-// Debug config file: [pvt]rF [args...]
+#ifndef OPT
+// Debug config file: [pvth]rF[,N...] [args...]
 // p=run PCOMP, v=verbose, t=trace once per numeric arg
 // otherwise args are output, input (default stdout, stdin),
-// h=trace in hexadecimal
+// h=trace in hexadecimal, o=generate zpaqopt.h.
 void run(int argc, char** argv) {
   assert(argc>=2);
 
@@ -3782,10 +4391,6 @@ void run(int argc, char** argv) {
   if (z.hend<=z.hbegin) error("no program to run");
   if (pcmd) z.initp();
   else z.inith();
-  if (verbose) {
-    hz.prints();
-    pz.prints();
-  }
 
   // Run the program
   if (tcmd) {  // trace with numeric args
@@ -3809,43 +4414,53 @@ void run(int argc, char** argv) {
     z.run(U32(-1));
   }
 }
+#endif
 
 ///////////////////////////// Main ///////////////////////////
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v1.07 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v1.08 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
-    "To compress to new archive: zpaq [pnsivt]c[F[,N...]] archive files...\n"
-    "To append to archive:       zpaq [pnsivt]a[F[,N...]] archive files...\n"
+    "To compress to new archive: zpaq [opnsitv]c[F[,N...]] archive files...\n"
+    "To append to archive:       zpaq [opnsitv]a[F[,N...]] archive files...\n"
     "Optional modifiers:\n"
+#ifndef OPT
+    "  o = compress faster (requires C++ compiler)\n"
+#endif
     "  p = store filename paths in archive\n"
-    "  n = don't store filenames (extractor will append to last named file)\n"
+    "  n = don't store filenames (names will be needed to decompress)\n"
     "  s = don't store SHA1 checksums (saves 20 bytes)\n"
     "  i = don't store file sizes as comments (saves a few bytes)\n"
-    "  v = verbose\n"
     "  t = append locator tag to non-ZPAQ data\n"
+#ifndef OPT
+    "  v = verbose (show F as it compiles)\n"
     "  F = use options in configuration file F (min.cfg, max.cfg)\n"
-    "  ,N = pass numeric arguments to configuration file\n"
-    "To list contents: zpaq [v]l archive\n"
-    "  v = verbose\n"
-    "To extract: zpaq [pnt]x[N] archive [files...]\n"
+    "  ,N = pass numeric arguments to F\n"
+    "To list contents: zpaq l archive\n"
+#endif
+    "To extract: zpaq [opnt]x[N] archive [files...]\n"
+#ifndef OPT
+    "  o = extract faster (requires C++ compiler)\n"
+#endif
     "  p = extract to stored paths instead of current directory\n"
-    "  n = extract unnamed segments as separate files (for debugging)\n"
+    "  n = decompress all to one file\n"
     "  t = don't post-process (for debugging)\n"
     "  N = extract only block N (1, 2, 3...)\n"
     "  files... = rename extracted files (clobbers)\n"
     "      otherwise use stored names (does not clobber)\n"
-    "To debug configuration file F: zpaq [pvt]rF[,N...] [args...]\n"
+#ifndef OPT
+    "To debug configuration file F: zpaq [pthv]rF[,N...] [args...]\n"
     "  p = run PCOMP (default is to run HCOMP)\n"
-    "  v = verbose compile and show initialization lists\n"
     "  t = trace (single step), args are numeric inputs\n"
     "      otherwise args are input, output (default stdin, stdout)\n"
     "  h = trace display in hexadecimal\n"
-    "  ,N = numeric config file arguments\n"
-    "To make self extracting archive: append to a copy of zpaqsfx.exe\n");
+    "  v = verbose compile\n"
+    "  ,N = pass numeric arguments to F\n"
+#endif
+    );
   exit(0);
 }
 
@@ -3871,10 +4486,12 @@ int main(int argc, char** argv) {
     decompress(argc, argv);
     printf("Used %1.2f seconds\n", clock()/double(CLOCKS_PER_SEC));
   }
+#ifndef OPT
   else if (argc>=3 && cmd=='l')
     list(argc, argv);
   else if (cmd=='r')
     run(argc, argv);
+#endif
   else
     usage();
   return 0;
