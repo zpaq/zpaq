@@ -1,14 +1,14 @@
-README for ZPAQ v0.01.
-Matt Mahoney - Feb. 15, 2009.
+README for ZPAQ v0.02.
+Matt Mahoney - Feb. 19, 2009, matmahoney (at) yahoo (dot) com.
 
 ZPAQ is a configurable file compressor and archiver. Its goal
 is a high compression ratio in an open format without loss of
 compatibility between versions as advanced compression techniques
 are discovered.
 
-ZPAQ v. 0.01 is an experimental pre-release (level 0) implementation
+ZPAQ v. 0.02 is an experimental pre-release (level 0) implementation
 of the proposed ZPAQ open standard for highly compressed data.
-It implements version 0.29 of the ZPAQ standard, dated Feb. 15, 2009.
+It implements version 0.31 of the ZPAQ standard, dated Feb. 19, 2009.
 It is not intended to be compatible with other versions of ZPAQ
 or the upcoming level 1 standard. When the level 1 standard
 is released, all versions will be compatible with one another.
@@ -19,9 +19,6 @@ will be obsolete.
 
 The current version of ZPAQ can be found at
 http://cs.fit.edu/~mmahoney/compression/
-
-Version 0.01 does not support post-processing as described
-in the specification.
 
 Compression requires a configuration file. Two examples are
 supplied:
@@ -42,25 +39,25 @@ example:
   zpaq cmax.cfg calgary.zpaq calgary/*
 
 will display the contents of max.cfg and then
-compress the Calgary corpus (14 files) to 660,575 bytes
-in 38 seconds on a 2 GHz Pentium T3200. The file names are
+compress the Calgary corpus (14 files) to 660,576 bytes
+in 36 seconds on a 2 GHz Pentium T3200. The file names are
 stored in the archive as given on the command line.
 
-  calgary/BIB 111261 -> 23361
-  calgary/BOOK1 768771 -> 202943
-  calgary/BOOK2 610856 -> 127307
-  calgary/GEO 102400 -> 47532
-  calgary/NEWS 377109 -> 92596
-  calgary/OBJ1 21504 -> 9035
-  calgary/OBJ2 246814 -> 58183
-  calgary/PAPER1 53161 -> 11534
-  calgary/PAPER2 82199 -> 17666
-  calgary/PIC 513216 -> 29383
-  calgary/PROGC 39611 -> 9357
-  calgary/PROGL 71646 -> 11316
-  calgary/PROGP 49379 -> 8238
-  calgary/TRANS 93695 -> 12124
-  Used 38.58 seconds
+calgary\BIB 111261 -> 23362
+calgary\BOOK1 768771 -> 202943
+calgary\BOOK2 610856 -> 127307
+calgary\GEO 102400 -> 47532
+calgary\NEWS 377109 -> 92596
+calgary\OBJ1 21504 -> 9035
+calgary\OBJ2 246814 -> 58183
+calgary\PAPER1 53161 -> 11534
+calgary\PAPER2 82199 -> 17666
+calgary\PIC 513216 -> 29383
+calgary\PROGC 39611 -> 9357
+calgary\PROGL 71646 -> 11316
+calgary\PROGP 49379 -> 8238
+calgary\TRANS 93695 -> 12124
+Used 36.00 seconds
 
 To append to an existing archive:
 
@@ -125,8 +122,14 @@ screen.
 
 Runs config as a postprocessing program. The program is run
 once for each byte of input, with output redirected to the
-named output file. The defaults are standard input and standard
-output.
+named output file. At the end of input, the program is run
+with input 2^32-1 to signal EOF. The defaults are standard
+input and standard output.
+
+  zpaq sconfig
+
+Compiles config and outputs HCOMP as a list of numbers suitable
+for initializing an array in C/C++
 
 A config file has the format:
 
@@ -142,14 +145,25 @@ The file is case-insensitive, and free-format (all whitespace
 is equivalent). Comments may be written in parenthesis and
 may be nested. See min.cfg and max.cfg for examples. See the
 ZPAQ specification for descriptions of components and ZPAQL
-instructions.
+instructions. Notes:
+
+- Operands of 2 byte instructions must be separated by a space.
+  For example, "A=0" is one byte, "A= 0" is 2 bytes. "A=1" is
+  not valid because there is no 1 byte opcode for it. It must
+  be written "A= 1".
+- JT, JF, and JMP accept operands in the range (-128...127).
+- LJ (long jump) accepts an operand in the range (0...65535).
+  It is coded as 2 bytes, LSB first. This is the only 3 byte
+  instruction.
+- All other numeric operands must be in the range (0...255).
 
 The hconfig command runs the program in the HCOMP section using
 arrays H and M with sizes 2^hh and 2^hm respectively. The pconfig
 command uses 2^ph and 2^pm respectively.
 
-The only POST command currently implemented is PASS, which does
-no post-processing.
+The only POST commands currently implemented are 0, which does
+no post-processing, and x, which performs an E8E9 transform
+to improve compression of x86 .exe and .dll files.
 
 When developing a config file, it is useful to run with the
 hconfig command without arguments to check for compilation
@@ -160,8 +174,8 @@ is behaving correctly.
 
 Contents:
 
-  zpaq029.pdf -Version 0.29 of the ZPAQ specification, valid only
-               for zpaq v0.01.
+  zpaq032.pdf -Version 0.32 of the ZPAQ specification, valid only
+               for zpaq v0.02.
 
   zpaq.cpp -   Source code.
 
@@ -181,4 +195,17 @@ Contents:
 
   readme.txt - This file
 
-  
+Changes:
+
+v0.01 - Feb. 15, 2009. Original release. Conforms to v0.29 of spec.
+        except does not support postprocessing.
+
+v0.02 - Feb. 18, 2009. Adds R=X, X=R, and LJ
+        instructions and R[256] register. Removes .= instruction.
+        Spaces are required before ZPAQL operands. Adds end of segment
+        signal to decoder. Adds "x" transform (E8E9). PASS transform
+        is changed to "0". Adds a header byte to describe HCOMP
+        language. Not compatible with v0.01. Conforms to v0.32 of spec.
+        Current max.cfg does poorly with maximumcompression.com.
+        Expect more changes.
+
