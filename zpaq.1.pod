@@ -1,0 +1,1271 @@
+#   Copyright
+#
+#      Copyright (C) 2010 Matt Mahoney <matmahoney@yahoo.com>
+#      Copyright (C) 2009-2010 Jari Aalto <jari.aalto@cante.net>
+#
+#   License
+#
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 3 of the License, or
+#       (at your option) any later version.
+#
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#       GNU General Public License for more details.
+#
+#       You should have received a copy of the GNU General Public License
+#       along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+#   Description
+#
+#	To learn what TOP LEVEL section to use in manual pages,
+#	see POSIX/Susv standard and "Utility Description Defaults" at
+#	http://www.opengroup.org/onlinepubs/009695399/utilities/xcu_chap01.html#tag_01_11
+#
+#	This is manual page in Perl POD format. Read more at
+#	http://perldoc.perl.org/perlpod.html or run command:
+#
+#	    perldoc perlpod | less
+#
+#	To check the syntax:
+#
+#	    podchecker *.pod
+#
+#	Create manual page with command:
+#
+#	    pod2man PAGE.N.pod > PAGE.N
+
+=pod
+
+=head1 NAME
+
+zpaq - Programmable file compressor and archiver
+
+=head1 SYNOPSIS
+
+  compress: zpaq [iknopstv]c<config>[,N...] archive [directory/] [file ...]
+  append  : zpaq [iknopstv]a<config>[,N...] archive [directory/] file ...
+  list    : zpaq [kov]l archive
+  extract : zpaq [ko]x[block] archive
+  debug   : zpaq [koptv]r<config>[,N...] [args...]
+
+=head1 DESCRIPTION
+
+=head2 General
+
+PAQ is a series of open source data compression archivers that have
+evolved through collaborative development to top rankings on several
+benchmarks measuring compression ratio although at the expense of
+speed and memory usage.
+
+ZPAQ ia a proposed standard format for highly compressed data that
+allows new compression algorithms to be developed without breaking
+compatibility with older programs. ZPAQ is based on PAQ-like context
+mixing algorithms which are top ranked on many benchmarks. The format
+supports archivers, single file compressors, and memory to memory
+compression.
+
+Program I<zpaq> is a programmable file compressor and archiver
+that uses the ZPAQ format.
+It allows the user to specify custom compression algorithms
+(configurations) which can be tuned to the data. The instructions for
+decompression are stored in the archive so that any ZPAQ level 1
+compliant program such as zp(1), zpipe(1), I<unzpaq> (the reference
+decoder) or other versions of this program can read the archive.
+
+There are three built-in configurations called B<fast>, B<mid>, and
+B<max>. Usually these are sufficient for good compression. For
+example, the following table shows the compressed size of calgary.tar
+(the 14 file Calgary corpus as a tar file), compression and
+decompression times (2 GHz T3200) and memory requirements for the
+built-in models. Some popular formats are shown for comparison.
+
+    Format            Size     Time (sec)    Memory
+    -----------     ---------  -----------   ------
+    Uncompresed     3,152,896
+    compress        1,319,521    1.6   0.2    .1 MB
+    gzip -9         1,022,810    0.7   0.1    .1 MB
+    bzip2 -9          860,097    0.6   0.4     5 MB
+    p7zip (7z)        824,573    1.5   0.1   195 MB
+    zpaq c1 (fast)    806,959    2     2      38 MB
+    zpaq c2 (mid)     699,191    8     8     112 MB
+    zpaq c3 (max)     644,190   20    20     246 MB
+
+The archive is stored in a streaming (one pass) format divided into
+blocks which can be decompressed independently. Each block is divided
+into segments representing files or parts of files which must be
+decompressed in sequence from the beginning of the block. It is only
+possible to update an archive by appending to it. It is only possible
+to extract files from an archive by first extracting earlier files in
+the same block. It is possible to create archives that allow files to
+be extracted independently by compressing each file to a separate
+block, but better compression can often be achieved by compressing
+similar files into the same block.
+
+User specified compression algorithms are written in a language called
+ZPAQL and stored in configuration (config) files. I<zpaq> includes
+tools to assist in developing and debugging config files and to
+produce self extracting archives.
+
+A config file specifies a context model which is the same for
+compression and decompression, and an optional preprocessor and
+postprocessor, which in general are different. If used, then the
+preprocessor is a separate program (in any language) supplied by the
+user and only the postprocessor code (in ZPAQL) is stored in the
+archive. Prior to compression, I<zpaq> preprocesses each input file to
+a temporary file C<archive.zpaq.pre> in the current directory and
+postprocesses it to verify that it reproduces the same SHA-1 checksum
+as the original input. If the test passes, then the temporary file is
+compressed and deleted. This test is not needed for the default
+configurations I<fast>, I<mid>, or I<max>, because they do no pre- or
+postprocessing.
+
+NOTE: in extract mode, if the FILES are listed the files are renamed
+when written out.
+
+=head2 Commands
+
+The first argument to I<zpaq> is a command containing one of the
+letters B<a>, B<c>, B<l>, B<r> or B<x> with optional modifiers before
+and optional arguments after, all written without spaces. Modifiers
+preceding the command are single letters in any order. Arguments after
+the command are separated by commas without spaces. Subsequent
+arguments are separated by spaces. Usually the first argument after
+the command is the archive name written without the default C<.zpaq>
+extension.
+
+If run with no arguments or with incorrect syntax, I<zpaq> displays
+a summary of commands.
+
+=over 4
+
+=item B<aI<config>[,I<arg> ...] I<archive> [I<directory/>] I<file> ...>
+
+Append to archive. Behaves like command B<c> except that if the
+archive exists, it is appended rather than overwritten. I<archive>
+need not end with C<.zpaq> if it exists. If not, then C<.zpaq> is
+assumed.
+
+=item B<cI<config>[,I<arg> ...] I<archive> [I<directory/>] [I<file>] ...>
+
+Create a new archive archive. The C<.zpaq> extension may be omitted,
+in which case it is assumed. If the archive exists then it will be
+overwritten.
+
+Each of the I<files> is compressed according to the model selected 
+by I<config> and placed in a separate segment within a single
+block. The model is stored in the block header to allow decompression
+later.
+
+If I<config> does not begin with a digit then it means to use a custom
+compression algorithm described in
+C<config.cfg>. Some config files can take up to 9 numeric arguments.
+The meanings of these arguments depend on the code in the config file.
+
+If I<config> is 1, 2, and 3 then no C<config.cfg> file needs to be
+present and the built-in model corresponding to I<fast>, I<mid>, or
+I<max> respectively is selected. These are also available as
+separate configuration files. Higher numbers compress smaller but take
+longer and require more memory. Note that the same amount of time and
+memory will be required to extract.
+
+Each segment contains a filename field, a comment field, the
+compressed file, and the 20 byte SHA-1 checksum of the input file. The
+file name I<file> is stored without a path. The comment field contains
+the input size as a decimal string.
+
+If C<directory/> is present, then each filename field will be stored so
+that the path is replaced by C<directory/>, e.g. C<directory/file>. In
+neither case is the original path part of I<file> stored. The directory
+must be the first argument after the archive and end with a forward
+slash or backslash (for compatibility with Windows) to distinguish it
+from a file name.
+
+If no I<file> is given, then I<archive> will be compressed to
+C<archive.zpaq>.
+
+=item B<l> I<archive>
+
+List the contents of archive. If not found and if I<archive> does not
+end with C<.zpaq>, then list from I<archive>B<.zpaq>. A listing shows
+the contents of each block, the memory required to extract it, and the
+list of segments it contains. For each segment, the file name, comment
+(normally the original file size), and compressed size is shown.
+
+=item B<x[I<block>] I<archive> [I<directory/>] [I<file>] ...>
+
+Extract from an existing I<archive>. If not found and if I<archive>
+does not end with C<.zpaq>, then extract from C<archive.zpaq>.
+
+If I<block> is given, then only that block is extracted. The first
+block is 1 (as in I<x1>). The default is to extract all blocks.
+
+Files are extracted and named according to the stored names in each
+segment. If a segment is not named, then the contents are appended to
+the previously named segment. If the file to be extracted already
+exists, then the program exits with an error rather than clobber it.
+If the stored filename specifies a relative path, then any needed
+directories (relative to the current directory) are created. Filenames
+cannot contain absolute paths or paths that go up a directory (i.e.
+containing C<../>). Paths may be stored with either backslashes
+or forward slashed and will be converted as appropriate for the
+target operating system.
+
+If one or more I<files> are specified on the command line, then any
+named segments are replaced with the corresponding arguments in the
+same order, and only one file is extracted for each filename argument.
+If I<file> specifies an existing file, then it is clobbered. Absolute
+paths are allowed. If the first segment is not named, then the file
+name is assumed to be I<archive>.
+
+If I<directory/> is specified, then it is appended to the front of all
+file names, whether specified in I<files> or read from the archive.
+The effect is to place the files in I<directory>. The directory is
+created if needed. The directory name must end with C</> or C<\>.
+
+=back
+
+=head2 Debug and Development Options
+
+To run C<I<config>.cfg> file as a stand-alone program, use:
+
+  zpaq [kopv]rI<config>[,I<arg> ...] [I<input> [I<output>]]
+
+Or to trace execution, use:
+
+  zpaq [pv]trI<config>[,I<arg> ...] [I<arg> ...]
+
+The B<r> command runs C<config.cfg> (with possible numeric I<arg>s) as
+a stand-alone program. This is useful for debugging config files. In
+the first form (without modifier B<t>), the
+command takes arguments I<input>, defaulting to stdin,
+and I<output>, defaulting to stdout. Specifically, the HCOMP
+section (PCOMP if modified with B<p>) is run once for each byte of input
+(and once more with -1 with B<p>).
+
+In the second form, the program is run once for each numeric argument
+with that value as input. As the program is run, each ZPAQL instruction
+and the contents of the virtual machine registers are displayed. Input
+arguments can be either decimal or hexadecimal numbers. The contents
+are displayed in the same base. When the program executes HALT, any
+nonzero memory contents are displayed. Other modifiers are explained
+below.
+
+=head2 Modifiers
+
+=over 4
+
+=item i
+
+Before command B<c> or B<a>, don't store the file size as a comment.
+This saves a few bytes and does not affect decompression, but the B<l>
+command will not be able to show the original file size.
+
+=item k
+
+With command B<o>, don't delete F<zpaqopt.cpp> and F<zpaqopt.exe>.
+This option is useful because the code can be used with libzpaq(3) to
+develop custom compressors or optimized self extracting archives with
+zpsfx(1). In particular, B<okl> will generate optimized code for a
+particular archive but not execute it.
+
+F<zpaqopt.exe> works like I<zpaq> with two exceptions. First, it ignores
+the B<o> modifier (to avoid infinite recursion when called with the same
+arguments), and second, the built-in models are those from C<config.cfg>
+or I<archive>B<.zpaq> in the order that they are encountered, rather than
+I<fast>, I<mid>, and I<max>, so that a command like B<c1> or B<a3>
+will not compress with the model you expect.
+
+=item n
+
+Before commands B<c> or B<a>, don't store a file name in the segment
+filename field. This has the effect that upon extraction the data will
+be appended to the last named segment (in an earlier block). If the
+first segment of the first block is not named, then I<zpaq> will
+assume that the name is I<archive>. (Other ZPAQ compliant programs
+might require that the output file be named explicitly).
+
+=item o
+
+Optimize the compression code in
+I<config> or the decompression code in the archive block headers.
+The contents are translated
+into C++, compiled, linked to a copy of F<zpaq>, and run. This typically
+doubles speed. In order for B<o> to work, there must be
+a C++ compiler installed (typically g++(1)), and the current directory
+must be writable so that two temporary files F<zpaqopt.cpp> and
+F<zpaqopt.exe> can be created, run, and deleted.
+
+B<o> has no effect on speed when using the default models (1, 2, 3),
+because the needed optimizations are already built in.
+
+=item p
+
+Before command B<c> or B<a>, store filenames with the path as given on
+the command line. By default, the filename is stored without a path.
+
+Before command B<r>, run the PCOMP section of I<config>B<.cfg> rather
+than the HCOMP section. The optional PCOMP section specifies the
+post-processing code rather than the code to compute contexts for the
+model. The code is executed once for each byte of I<input> and once
+more with input -1 to indicate end of file.
+
+=item s
+
+Before commands B<c> or B<a>, don't store a SHA-1 checksum. This saves
+20 bytes per file, but the decompresser will not be able to verify
+that the archive contents are not corrupted.
+
+=item t
+
+Before commands B<c> or B<a>, append a locator tag to the start of the
+block. This makes it possible for the decompresser to decompress the
+block if it is appended to non-ZPAQ data (such as a self extracting
+archive stub). It increases the archive size by 13 bytes but is
+otherwise harmless.
+
+Before command B<r>, trace (single step) I<config> rather than run it.
+The arguments are numbers instead of I<input> and I<output>. The
+program is run once for each input. As the program is run, the
+register contents are displayed after each instruction is executed. On
+return (executing HALT), any nonzero memory contents are displayed.
+The arguments may either be decimal numbers or hexadecimal numbers
+preceeded with B<x> as in B<255> or B<xff>. Values are displayed in
+the same base as the input.
+
+=item v
+
+When used with I<config> in any command, compile verbosely by
+displaying the contents of I<config>B<.cfg> as it is read. This is
+helpful in locating errors.
+
+Before B<l>, display a verbose listing. The archive contents will also
+include the decompression code in each block header in a format
+suitable for inserting into a config file. (If a preprocessor is used,
+this information will be missing). Also, the SHA-1 checksum of each
+segment will be displayed if it is stored.
+
+=back
+
+=head1 OPTIONS
+
+None
+
+=head1 EXIT STATUS
+
+Returns 0 if successful or 1 in case of an error.
+
+=head1 EXAMPLES
+
+Compress F<BOOK1> and F<BOOK2> to block 1 of F<foo.zpaq> using
+fast compression, and append F<OBJ1> and F<OBJ2> to block 2
+using max compression.
+
+    zpaq c1 foo calgary/BOOK*
+    zpaq a3 foo calgary/OBJ*
+
+List the contents of F<foo.zpaq>:
+
+    zpaq l foo
+
+The contents are displayed with their original and compressed sizes.
+The filename is stored without a path.
+
+    Reading from archive foo.zpaq
+    Block 1 needs 37.752 MB memory
+      BOOK1 768771 -> 226461
+      BOOK2 610856 -> 150689
+    Block 2 needs 246.227 MB memory
+      OBJ1 21504 -> 8925
+      OBJ2 246814 -> 56030
+
+Extract all 4 files to subdirectory F<tmp>. It will be created if
+needed:
+
+    zpaq x foo tmp/
+
+Extract F<OBJ2>. This is the second file in block 2.
+It is necessary to extract all earlier files in the same block, so
+we skip F<OBJ1> by extracting it to F</dev/null>
+
+    zpaq x2 foo /dev/null OBJ2
+
+Compress F<OBJ2> to F<OBJ2.zpaq> using configuration file F<uncap.cfg>.
+Optimize for better speed. Don't store the filename.
+
+    zpaq oncuncap OBJ2
+
+Extract F<OBJ2.zpaq> to F<OBJ2>. Optimize for better speed.
+
+    zpaq ox OBJ2
+
+The above will fail of F<OBJ2> already exists because I<zpaq> will
+read from F<OBJ2> instead of F<OBJ2.zpaq> and will not clobber F<OBJ2>.
+Instead, specify the F<.zpaq> extension and give the output file name.
+
+    zpaq ox OBJ2.zpaq OBJ2
+
+Test that the optimized postprocessor code in F<uncap.cfg> is the inverse
+of its corresponding preprocessor F<cap> using OBJ2 as a test file.
+
+    cap OBJ2 tmp1
+    zpaq opruncap tmp1 tmp2
+    diff OBJ2 tmp2
+
+=head1 CONFIGURATION FILES
+
+=head2 Context Mixing Theory
+
+All ZPAQ compliant programs use a configurable compression algorithm
+based on the PAQ model of bitwise context modeling plus optional pre-
+and post-processing. The ZPAQ standard defines the model precisely.
+
+A model treats the data as a stream of bits which are predicted and
+arithmetic coded one at a time. The compression ratio depends on the
+accuracy of the predictions or probability assignments. When the next
+bit is assigned a probability I<p> that it will be a 1, it means that
+if the bit is actually 1, it will be coded at a cost of log2(1/p)
+bits, and if it is a 0 it will be coded at a cost of log2(1/(1-p)).
+ZPAQ codes bits in MSB (most significant bit) to LSB (least
+significant bit) order, although either order would work.
+
+During decompression, a model makes an identical series of predictions
+based on the previously decoded output. Thus, the same model is used
+for both compression and decompression, and only needs to be specified
+once. This differs from preprocessing and postprocessing, which should
+be inverses of each other. A ZPAQ archive only saves the
+postprocessing code. It is up to the compressor to verify its
+correctness.
+
+ZPAQ (and PAQ) achieve a high compression ratio by using many
+independent context models to estimate I<p> and then combining the
+estimates by weighted averaging and possibly applying further
+context-sensitive refinements. These components can be put together
+like building blocks. Generally there is a 3 way tradeoff between
+compression ratio, speed, and memory. Using more components usually
+results in better compression but takes longer to execute. Allocating
+more memory to components allows more statistics to be collected,
+which improves compression.
+
+A context model component takes a context as input and outputs a
+prediction. After the predicted bit is learned, the model is adjusted
+to reduce the prediction error. It is up to the model to select useful
+contexts. For example, for text compression, the useful contexts are
+order-n (the last n whole bytes) and the last whole word or two. For
+images, a useful context might be the high order bits of some
+neighboring pixels.
+
+Compression can sometimes be improved by preprocessing and
+postprocessing. For example, text can sometimes be compressed better
+by using a dictionary to encode common words using 1 or 2 byte codes
+before compression. The postprocessor would expand the codes back into
+words. An image preprocessor might predict pixels using some weighted
+average of earlier nearby pixels (perhaps dynamically tuning the
+weights to reduce prediction errors) and then compress the differences
+with a simple order-0 model. The postprocessor would make an identical
+set of predictions and add them to the decompressed differences.
+
+The user is responsible for making sure that preprocessing followed by
+postprocessing will restore the original data exactly, but I<zpaq>
+will still check before compressing.
+
+=head3 Types of components
+
+A simple context model (CM) computes a prediction by counting bits.
+For example, a sequence "00001" in some context would assign p = about
+1/5 (or more precisely, 1.5/6 by starting both counts at 0.5). The
+prediction is achieved indirectly by starting with a prediction of p =
+1/2 and a count of 0, and then adjusting p to reduce the error in
+inverse proportion to the count.
+
+However, such a prediction might not be correct because the bits in
+the sequence might not be independent. A direct context map
+effectively gives higher weights to more recent history (so p > 1/5)
+by placing an upper bound on the count. A smaller bound makes the
+model more adaptive, but could also make compression worse if the
+input data has uniform statistics so that the bits really are
+independent.
+
+A more general solution is to use an indirect context model (ICM) to
+predict based on what happened when the same bit sequence occurred in
+other contexts. This is achieved by mapping a context to a bit history
+table, and then mapping the bit history to a prediction. The bit
+history is updated by appending the next bit, and the prediction is
+updated to reduce the prediction error, usually at a small, constant
+rate (like 0.001 times the error). To save space, the bit history is
+represented as an 8 bit state representing a count, a ratio of zeros
+to ones, and the value of the last bit. The count is bounded to a
+small value. The initial prediction is set to the ratio.
+
+A mixer takes a set of predictions from other components and combines
+them by weighted averaging. On update, the mixer reduces its output
+error by adjusting the weights to favor the input models that made
+better predictions. Weighted averaging occurs in the logistic domain,
+log(p/(1-p)), which gives greater weight to high confidence
+predictions, which are those near 0 or 1. The initial weights for an
+n-input mixer are 1/n.
+
+It is sometimes advantageous to select from a set of weights using a
+low order context. Compression can often be improved further (at a
+cost in speed) by using a hierarchy of mixers taking different
+contexts.
+
+A prediction from a mixer (or the last mixer in a hierarchy) can be
+further refined using secondary symbol estimation (SSE). An SSE picks
+the output prediction from an array of 32 simple context models (CM)
+by interpolating between the two nearest quantized input prediction
+values.
+
+An indirect SSE (ISSE) works like an SSE except that it uses bit histories
+as contexts like an ICM to save memory. This makes it appropriate for
+higher order contexts. It is possible to model directly using a chain
+of ISSE in increasing order starting with an order CM or ICM as the
+first component in the chain. Unline an SSE, and ISSE adjusts the input
+probability by mixing it with a fixed constant using the bit history
+to select the pair of mixing weights. Initially it assigns a weight of 1
+to the input prediction and 0 to the constant.
+
+A MATCH component predicts bits by looking for the most recent
+occurrence of the current (usually high order) context and predicting
+the next bit following the match. The weight of the prediction is
+proportional to the length of the match, i.e. directly proportional in
+the logistic domain, and negative if the predicted bit is 0. Matches
+are found by saving past data in a history buffer and using a hash
+table of pointers into the buffer indexed by a context hash. If no
+match is found, then the prediction is 1/2, or 0 in the logistic
+domain.
+
+=head3 Context computation
+
+ZPAQ configuration uses a ZPAQL program to compute contexts or context
+hashes and save them in an array. Each array element then becomes the
+context for one component. As an optimization, the program is called
+only once per byte rather than once per bit, with the last data byte
+as input. For bit predictions, the saved context is combined with the
+previous 0 to 7 bits of the current byte being modeled before input to
+the component. Only the low bits of the resulting context are used,
+depending on the component size.
+
+The method of combining the computed and bitwise contexts depends on
+the component. For indirect models (ICM and ISSE), bit histories are
+stored in a hash table that is looked up on nibble (4 bit) boundaries.
+Each table element contains an 8 bit checksum confirmation to detect
+(most) hash collisions, and an array of 15 bytes representing bit
+histories for each of the 15 bitwise contexts that result from
+appending 0 to 3 more bits of context. Thus, the table is looked up
+twice per byte. The first lookup uses the low bits of the computed
+hash and the next higher 8 bits as a hash confirmation. The second
+lookup adds 16 x (16 + nibble) to it. The hash table looks up 3
+adjacent values within the same 64 byte cache line and uses least
+frequeny used (LFU) replacement based on the count represented by the
+nibble boundary bit history if a matching checksum is not found.
+
+For a mixer or SSE, a 1 is appended to the beginning of the partial
+byte context to create an 8 bit value, which is added to the computed
+context. For example, if the first 5 bits of the current byte are
+xxxxx, then the binary number 1xxxxx is added to the context to
+predict the next bit.
+
+For a CM, the bitwise context is expanded to a 9 bit value by
+splitting it into two nibbles, appending a 1 bit to the partial low
+nibble, and setting the first bit to indicate that the context
+includes two nibbles. For example, xx is expanded to 0000001xx, and
+xxxxxx is expanded to 1xxxx01xx. Then this context is XORed with the
+computed context. This expansion reduces cache misses to improve speed
+by causing four consecutive contexts to fall within the same 64 byte
+cache line.
+
+=head3 Built-in configurations
+
+None of the three built-in configurations use preprocessing or
+postprocessing.
+
+=over
+
+=item 1
+
+B<fast> has two components, an order 2 ICM and an order 4 ISSE. The
+ISSE output is arithmetic coded. The ICM uses 4 MB memory, i.e. stores
+up to 4 million bit histories for order-2 bitwise contexts (2 bytes
+plus 0 to 7 bits). The ISSE uses 32 MB memory.
+
+=item 2
+
+B<mid> has 8 components: an order 0 through 5 ICM-ISSE chain, an order
+7 MATCH, and a final order 1 mixer that combines all 7 other
+predictions.
+
+=item 3
+
+B<max> has 22 components. It has an order 0..5, 7 ICM-ISSE chain for
+general purpose compression, a MATCH, a whole word order 0-1 ICM-ISSE
+chain for modeling text, three order 1 ICM sparse models with gaps of
+1 to 3 bytes, one ICM with a gap of 216 (one scan line) for modeling
+binary FAX images, and one fixed prediction for mixer bias. The two
+word contexts compute hashes of whole words by considering only
+sequences of the letters B<a> through B<z>, ignoring case. These
+predictions are mixed with a hierarchy of 3 mixers: one order 0, one
+order 1, and one context free 2 input mixer to combine them. This
+prediction is passed through two SSE stages (order 0 and 1) with an
+order 0 mixer and a context free mixer of the SSE inputs and outputs
+to allow the SSE to be partially bypassed adaptively.
+
+=back
+
+=head2 Config file format
+
+The compression and decompression algorithm is described in a
+configuration file, which must have a B<.cfg> extension. The
+decompression algorithm is stored in the ZPAQ archive. The
+configuration file is only needed during compression. It has 3 parts:
+
+COMP - a description of a sequence of bit predictors. Each component
+takes a context and earlier predictions as input, and outputs a
+prediction for the next bit. The last component's prediction is output
+to the arithmetic coder.
+
+HCOMP - a program that is called once for each byte of uncompressed
+data with that byte as input, and outputs an array of 32-bit contexts,
+one for each component in the COMP section. The program is written in
+ZPAQL.
+
+POST/PCOMP - an optional pair of programs to preprocess the input
+before compression and postprocess the output after decoding for
+decompression. POST indicates no pre- or postprocessing. The model
+described by COMP and HCOMP sees a 0 byte followed by a concatenation
+of the uncompressed files. During decompression, the leading 0
+indicates no postprocessing.
+
+PCOMP describes an external program to preprocess the input files
+during compression, and a ZPAQL program to perform the reverse
+conversion to restore the original input. The compression model
+described in the COMP and HCOMP sections sees a 1 as the first byte to
+indicate that the decoded data should be postprocessed before output.
+This is followed by a 2 byte program length (LSB first), the ZPAQL
+postprocessor code, and a concatenation of the preprocessed input
+files. The PCOMP code sees just the preprocessed files as input, each
+ending with EOS (-1).
+
+The preprocessor is an external program. It is not needed for
+decompression so it is not saved in the archive. It expects to be
+called with an input filename and output filename as its last 2
+arguments.
+
+The postprocessor is a ZPAQL program that is called once for each
+input byte and once with input EOS (-1) at the end of each segment.
+The program is initialized at the beginning of a block but maintains
+state information between segments within the same block. Its input is
+from I<archive>B<.zpaq.pre> in the current directory during
+compression testing and from the decoder during decompression.
+
+The configuration file has the following format:
+
+    COMP hh hm ph pm n
+      (n numbered component descriptions)
+    HCOMP
+      (program to generate contexts, memory size = hh, hm)
+    POST (for no pre/post procesing)
+      0
+    END
+
+Or (for custom pre/post processing):
+
+    COMP hh hm ph pm n
+      (...)
+    HCOMP
+      (...)
+    PCOMP preprocessor-command ;
+      (postprocessor program, memory size = ph, pm)
+    END
+
+Configuration files are free format (all white space is the same) and
+mostly not case sensitive. They may contain comments in ((nested)
+parenthesis).
+
+=head2 Components
+
+The COMP section has 5 arguments (hh, hm, ph, pm, n) followed by a
+list of n components numbered consecutively from 0 through n-1. hh,
+hm, ph, and pm describe the sizes of the arrays used by the HCOMP and
+PCOMP virtual machines as described later. Each machine has two
+arrays, H and M. Their sizes are 2^hh and 2^hm respectively in HCOMP,
+and 2^ph and 2^pm in PCOMP. The HCOMP program computes the context for
+the n components by placing them in H[0] through H[n-1] as 32-bit
+numbers. Thus, hh should be set so that 2^hh >= n. In mid.cfg, n = 8
+and hh = 3, allowing up to 8 contexts. Larger values would work but
+waste memory. Memory usage is 2^(hh+2) + 2^hm + 2^(ph+2) + 2^pm bytes.
+
+mid.cfg does not use pre/post processing. Thus, there is no PCOMP
+virtual machine, so ph and pm are set to 0.
+
+Each component outputs a "stretched" probability in the form
+ln(p(1)/p(0)). where p(1) and p(0) are the model's estimated
+probabilities that the next bit will be a 1 or 0, respectively. Thus,
+negative numbers predict a 0 and positive predict 1. The magnitude is
+the confidence of the prediction. The output is a number in the range
+-32 to 32 with precision 1/64 (a 12 bit signed number). Components are
+as follows:
+
+The 9 possible component types are shown below. All component
+parameters are numbers in the range 0..255. The component numbers I<i>
+must be consecutive from 0 to n-1.
+
+=over
+
+=item I<i> CONST I<c> (constant)
+
+Output is a constant (I<c>-128)/16. Thus, numbers larger than 128
+predict 1 and smaller predict 0, regardless of context. CONST is very
+fast and uses no memory.
+
+=item I<i> CM I<s> I<limit> (context model)
+
+Outputs a prediction by looking up the context in a table of size 2^s
+using the s low bits of the H[i] (for component i) XORed with a 9 bit
+expansion of the previously coded (high order) bits of the current
+byte. (Recall that H[i] is updated once per byte). Each table entry
+contains a prediction p(1) and a count in the range 0..I<limit>*4 (max
+1020). The prediction is updated in proportion to the prediction error
+and inversely proportional to the count. A large limit (max 255) is
+best for stationary sources. A smaller value makes the model more
+adaptive to changing statistics. Memory usage is 2^(s+2) bytes.
+
+=item I<i> ICM I<s> (indirect context model)
+
+Outputs a prediction by looking up the context in a hash table of size
+64 * 2^s bit histores (1 byte states). The histories index a second
+table of size 256 that outputs a prediction. The table is updated by
+adjusting the prediction to reduce the prediction error (at a slow,
+fixed rate) and updating the bit history. The hash table is indexed by
+the low s+10 bits of H[i] and the previous bits of the current byte,
+with highest 8 bits (s+9..s+2) used to detect hash collisions. An ICM
+works best on nonstationary sources or where memory efficiency is
+important. It uses 2^(s+6) bytes.
+
+=item I<i> MATCH I<s> I<b>
+
+Outputs a prediction by searching for the previous occurrence of the
+current context in a history buffer of size 2^b bytes, and predicting
+whatever bit came next, with a confidence proportional to the length
+of the match. Matches are found using an index of 2^s pointers into
+the history buffer, each of which points to the previous occurrence of
+the current context. A MATCH is useful for any data that has repeat
+occurrences of strings longer than about 6-8 bytes within a window of
+size 2^b. Generally, larger b (up to the file size) gives better
+compression, and s = b-2 gives adequate indexing. The context should
+be a high order hash. Memory usage is 4*2^s + 2^b bytes.
+
+=item I<i> AVG I<j> I<k> I<wt> (fixed weight 2 input mixer)
+
+Averages the predictions of components j and k (which must precede i,
+the current component). The average is weighted by I<wt>/256 for
+component j and 1 - I<wt>/256 for component k. Often, averaging two
+predictions gives better results than either prediction by itself. wt
+should be selected to favor the more accurate component. AVG is very
+fast and uses no memory.
+
+=item I<i> MIX2 I<s> I<j> I<k> I<rate> I<mask> (2 input mixer)
+
+Averages the predictions of components j and k (which must precede i,
+the current component) adaptively. The weight is selected from a table
+of size 2^s by the low s bits of H[i] added to the masked, previously
+coded bits of the current byte (an 8 bit value). A I<mask> of 255
+includes the current byte, and a mask of 0 excludes it. (Other masks
+are rarely useful). The adaptation I<rate> is selectable. Typical
+values are around 8 to 32. Lower values are best for stationary
+sources. Higher rates are more adaptive. A MIX2 generally gives better
+compression than AVG but at a cost in speed and memory. Uses 2^(s+1)
+bytes of memory.
+
+=item I<i> MIX I<s> I<j> I<m> I<rate> I<mask> (m-input mixer)
+
+A MIX works like a MIX2 but with m inputs over a range of components
+j..j+m-1, all of which must precede i. A typical use is as the final
+component, taking all other components as input with a low order
+context. A MIX with 2 inputs is different than a MIX2 in that the
+weights are not constrained to add to 1. This sometimes gives better
+compression, sometimes worse. Memory usage is m*2^(s+2) bytes.
+Execution time is proportional to m.
+
+=item I<i> ISSE s j (indirect secondary symbol estimator)
+
+An ISSE takes a prediction and a context as input and outputs an
+adjusted prediction. The low s+10 bits of H[i] and the previous bits
+of the current byte index a hash table of size 2^(s+6) bit histories
+as with an ICM. The bit history is used as an 8 bit context to select
+a pair of weights for a 2 input MIX (not a MIX2) with component j
+(preceding i) as one input and a CONST 144 as the other. The effect is
+to adjust the previous prediction using a (typically longer) context.
+A typical use is a chain of ISSE after a low order CM or ICM working
+up to higher order contexts as in mid.cfg. (This architecture is also
+used in the PAQ9A compressor). Uses 2^(s+6) bytes.
+
+=item I<i> SSE I<s> I<j> I<start> I<limit> (secondary symbol estimator)
+
+An SSE takes a predicion and context as input (like an ISSE) and
+outputs an adjusted prediction. The mapping is direct, however. The
+input from component j and the context are mapped to a 2^s by 64 CM
+table by quantizing the prediction to 64 levels and interpolating
+between the two nearest values. The context is formed by adding the
+partial current byte to the low s bits of H[i]. The table is updated
+in proportion to the prediction error and inversely proportional to a
+count as with a CM. The count is initialized to I<start> and has the
+range (I<start>..I<limit>*4). A large limit is best for stationary
+sources. A smaller limit is more adaptive. The starting count does not
+start at 0 because the table is initialized so that output predictions
+are the same as input predictions regardless of context. If the
+initial guess is close, then a higher start value works better.
+
+An SSE sometimes gives better compression than an ISSE, especially on
+stationary sources where a CM works better than an ICM. But it uses
+2^12 times more memory for the same context size, so it is useful
+mostly for low order contexts. A typical use is to adjust the output
+of a MIX. It is sometimes followed by an AVG to average its input and
+output, typically weighted 75% to 90% in favor of the output.
+Sometimes more than one SSE or SSE-AVG pair is used in series with
+progressively higher order contexts, or may be used in parallel and
+mixed. An SSE uses 2^(s+8) bytes.
+
+=back
+
+All components are designed to work with context hashes that are
+uniformly distributed over the low order bits (depending on the s
+parameter for that component). A CM, MIX2, MIX, or SSE may also be
+used effectively with direct context lookup for low orders. In this
+case, the low 9 bits of a CM or low 8 bits of the other components
+should be cleared to leave space to combine with the bits of the
+current byte. This is summarized:
+
+    Component              Context size    Memory
+    -------------------    ------------    ------
+    CONST c                0               0
+    CM s limit             s               2^(s+2)
+    ICM s                  s+10            2^(s+6)
+    MATCH s b              s               2^(s+2) + 2^b
+    AVG j k wt             0               0
+    MIX2 s j k rate mask   s               2^(s+1)
+    MIX s j m rate mask    s               m*2^(s+2)
+    ISSE s j               s+10            2^(s+6)
+    SSE s j start limit    s               2^(s+8)
+
+Although the ZPAQ standard does not specify a maximum for s, this
+program will not create arrays 2GB (2^31) or larger.
+
+=head2 ZPAQL
+
+There are one or two ZPAQL programs in a configuration file. The
+first, HCOMP, describes a program that computes the context hashes.
+The second, PCOMP, is optional. It describes the code that inverts any
+preprocessing performed by an external program prior to compression.
+The COMP and HCOMP sections are stored in the block headers
+uncompressed. PCOMP, if used, is appended to the start of the input
+data and compressed along with it.
+
+Each virtual machine has the following state:
+
+    4 general purpose 32 bit registers, A, B, C, D.
+    A 1 bit flag register F.
+    A 16 bit program counter, PC.
+    256 32-bit registers R0 through R255.
+    An array of 32 bit elements, H, of size 2^hh (HCOMP) or 2^ph (PCOMP).
+    An array of 8 bit elements, M, of size 2^hm (HCOMP) or 2^pm (PCOMP).
+
+Recall that the first line of a configuration file is:
+
+    COMP hh hm ph pm n
+
+HCOMP is called once per byte of input to be compressed or
+decompressed with that byte in the A register. It returns with context
+hashes for the n components in H[0] through H[n-1].
+
+PCOMP is called once per decompressed byte with that byte in the A
+register. At the end of a segment, it is called with EOS (-1) in A.
+Output is by the OUT instruction. The output should be the
+uncompressed data exactly as it was originally input prior to
+preprocessing. H has no special meaning.
+
+All state variables are initialized to 0 at the beginning of a block.
+State is maintained between calls (and across segment boundaries)
+except for A (used for input) and PC, which is reset to 0 (the first
+instruction).
+
+The A register is used as the destination of most arithmetic or
+logical operations. B and C may be used as pointers into M. D points
+into H. F stores the result of comparisons and is used to decide
+conditional jumps. R0 through R255 are used for auxilary storage. All
+operations are modulo 2^32. All array index operations are modulo the
+size of the array (i.e. using the low bits of the pointer). The
+instruction set is as follows:
+
+    - Y=Z (assignment)
+      - where Y is A B C D *B *C *D
+      - where Z is A B C D *B *C *D (0...255)
+    - AxZ (binary operations)
+      - where x is += -= *= /= %= &= &~ |= ^= <<= >>= == < >
+      - where Z is as above.
+    - Yx (unary operations)
+      - where Y is as above
+      - where x is <>A ++ -- ! =0
+      - except A<>A is not valid.
+    - J N (conditional jumps)
+      - where J is JT JF JMP
+      - where N is a number in (-128...127).
+    - LJ NN (long jump)
+      - where NN is in (0...65535).
+    - X=R N (read R array)
+      - where X is A B C D
+      - where N is in (0...255).
+    - R=A N (write R array)
+      - where N is in (0...255).
+    - ERROR
+    - HALT
+    - OUT
+    - HASH
+    - HASHD
+
+All instructions except LJ are 1 or 2 bytes, where the second byte is
+a number in the range 0..255 (-128..127 for jumps). A 2 byte
+instruction must be written as 2 tokens separated by a space, e.g. "A=
+3", not "A=3" or "A = 3". The exception is assigning 0, which has a 1
+byte form, "A=0".
+
+The notation *B, *C, and *D mean M[B], M[C], and H[D] respectively,
+modulo the array sizes. For example "*B=*D" assigns M[B]=H[D]
+(discarding the high 24 bits of H[D] because M[B] is a byte).
+
+Binary operations always put the result in A.
+
++=, -=, *=, &=, |=, ^=, = have the same meanings as in C/C++.
+
+/=, %= have the result 0 if the right operand is 0.
+
+A&~B means A &= ~B;
+
+AE<lt>E<lt>=B, A>>=B mean the same as in C/C++ but are explicitly
+defined when B > 31 to mean the low 5 bits of B.
+
+E<lt>, >, == compare and put the result in F as 1 (true) or 0 (false).
+Comparison is unsigned. Thus PCOMP would test for EOS (-1) as "A>
+255". There are no !=, <=, or <= operators.
+
+BE<lt>>A means swap B with A. A must be the right operand. "AE<lt>>B"
+is not valid. When 32 and 8 bit values are swapped as in "*BE<lt>>A",
+the high bits are unchanged.
+
+++ and -- increment and decrement as in C/C++ but must be written in
+postfix form. "++A" is not valid. Note that "*B++" increments *B, not
+B.
+
+! means to complement all bits. Thus, "A!" means A = ~A;
+
+JT (jump if true), JF (jump if false), and JMP (jump) operands are
+relative to the next instruction in the range -128..127. Thus "A> 255
+JT 1 A++" increments A not to exceed 256. A jump outside the range of
+the program is a run time error.
+
+LJ is a long jump. It is 3 bytes but the operand is written as a
+number in the range 0..65535 but not exceeding the size of the
+program. Thus, "A> 255 JT 3 LJ 0" jumps to the beginning of the
+program if A <= 255.
+
+The R registers can only be read or written, as in "R=A 3 B=R 3" which
+assigns A to R3, then R3 to B. These registers can only be assigned
+from A or to A, B, C, or D.
+
+ERROR causes an error like an undefined instruction, but is not
+reserved for future use (possibly in ZPAQ level 2) like other
+undefined instructions.
+
+HALT causes the program to end (and compression to resume). A program
+should always execute HALT.
+
+OUT in PCOMP outputs the low 8 bits of A as one byte to the file being
+extracted. In HCOMP it has no effect.
+
+HASH is equivalent to A = (A + *B + 512) * 773; HASHD is equivalent to
+*D = (*D + A + 512) * 773; These are convenient for computing context
+hashes that work well with the COMP components. They are not required,
+however. For example, "A+=*D A*= 12 *D=A" updates a rolling order s/2
+context hash for an s-bit wide component pointed to by D. In general,
+an order ceil(s/k) hash can be updated by using a multiplier which is
+an odd multiple of 2^k. HASH and HASHD are not rolling hashes. They
+must be computed completely for each context. HASH is convenient when
+M is used as a history buffer.
+
+In most programs it is not necessary to code jump instructions. ZPAQL
+supports the following structured programming constructs:
+
+    IF ... ENDIF              (execute ... if F is true)
+    IF ... ELSE ... ENDIF     (execute 1st part if true, 2nd if false)
+    IFNOT ... ENDIF           (execute ... if F is false)
+    IFNOT ... ELSE ... ENDIF  (execute 1st part if false, 2nd if true)
+    DO ... WHILE              (loop while true (test F at end))
+    DO ... UNTIL              (loop while false)
+    DO ... FOREVER            (loop forever)
+
+These constructs may be nested 1000 deep. However IF statements and DO
+loops nest independently and may be crossed. For example, the
+following loop outputs a 0 terminated string pointed to by *B by
+breaking out when it finds a 0.
+
+    DO
+      A=*B A> 0 IF (JF endif)
+	OUT B++
+      FOREVER (JMP do)
+    ENDIF
+
+IF, IFNOT, and ELSE are coded as JF, JT and JMP respectively. They can
+only jump over at most 127 instructions. If the code in these sections
+are longer, then use the long forms IFL, IFNOTL, or ELSEL. These
+behave the same but are coded using LJ instead. There are no special
+forms for WHILE, UNTIL, or FOREVER. The compiler will automatically
+use the long forms when needed.
+
+=head2 Parameters
+
+In a config file, paramaters may be passed as $1, $2, ..., $9. These
+are replaced with numeric values passed on the command line. For
+example:
+
+C<zpaq cmax.cfg,3,4 archive files...> would have the effect of
+replacing $1 with 3 and $2 with 4. The default value is 0, i.e. $3
+through $9 are replaced with 0.
+
+In addition, a parameter may have the form $N+M, where N is 1 through
+9 and M is a number. The effect is to add M. For example, $2+10 would
+be replaced with 14. Parameters may be used anywhere in the config
+file where a number is allowed.
+
+=head2 Pre/Post processing
+
+The PCOMP/POST section has the form:
+
+    POST 0 END
+
+to indicate no preprocessing or postprocessing, or
+
+    PCOMP preprocessor-command ;
+      (postprocessing code)
+    END
+
+to preprocess with an external program and to invert the transform
+with postprocessing code written in ZPAQL. The preprocessing command
+must end with a space followed by a semicolon. The command may contain
+spaces or options. The program is expected to take as two additional
+arguments an input file and an output file. ZPAQ will call the program
+by passing it the input file and a temporary file
+I<archive>B<.zpaq.pre>. Then it will run the temporary file through
+the postprocessing code and verify that its SHA-1 checksum matches the
+input. If so, then it compresses the temporary file in a second pass.
+
+=head2 Example
+
+Text compression can sometimes (not always) be improved by converting
+uppercase letters to lowercase equivalents and inserting a special
+byte to tell the postprocessor to do the reverse conversion. Because
+the preprocessed text does not contain any uppercase letters, we may
+use "A" to indicate this. For example, "Hello World" would be encoded
+as "Ahello Aworld". The following program F<cap.cpp> does this
+conversion:
+
+    // cap.cpp
+
+    #include <stdio.h>
+
+    int main(int argc, char** argv) {
+        FILE* in=fopen(argv[1], "rb");
+        FILE* out=fopen(argv[2], "wb");
+        int c;
+
+        while ( (c = getc(in)) != EOF ) {
+            if ( c >= 'A'  &&  c <= 'Z' )
+                fprintf(out, "A%c", c+32);
+            else
+                putc(c, out);
+        }
+
+        return 0;
+    }
+
+The PCOMP section of F<uncap.cfg> calls F<cap> to do this conversion
+and contains ZPAQL code to do the reverse conversion. The COMP and
+HCOMP sections are from F<fast.cfg>.
+
+    (uncap.cfg)
+    (modified from fast.cfg. Adds a pre/post processor to
+    encode uppercase as "A" followed by lowercase, e.g. X -> Ax)
+    comp 1 2 0 0 2 (hh hm ph pm n)
+      0 icm 16    (order 2)
+      1 isse 19 0 (order 4)
+    hcomp (same as fast.cfg)
+      *b=a a=0 (save in rotating buffer M)
+      d=0 hash b-- hash *d=a
+      d++ b-- hash b-- hash *d=a
+      halt
+    pcomp cap ; (decode "Ax" as "X")
+      a> 255 ifnot (ignore EOS)
+        b<>a  (b contains previous byte)
+        a== 65 if ('A'?)
+          a=b a-= 32 out (convert to upper case)
+        else
+          a=b a== 65 ifnot (output unless 'A')
+            out
+          endif
+        endif
+      endif
+      halt
+    end
+
+In the PCOMP section, the input byte is in the A register. We use B to
+save the previous byte. We first check if A is EOS (0xffffffff) and
+ignore it if so. Otherwise we swap A with B and check if the previous
+byte (now in A) is 'A' (65). If so we copy the current byte back from
+B to A, convert it to upper case by subtracting 32, and printing it.
+Otherwise we retrieve the current byte from B, and if it is not 'A'
+(65), we output it. In either case, a copy of the current byte is left
+in B for the next call to PCOMP. The code returns at HALT.
+
+The PCOMP section has two memory arrays H and M available, but since
+these are not used, we set ph and pm to 0 in the COMP arguments.
+
+The following may be helpful in developing and debugging this code:
+
+    zpaq tpruncap 65 98
+
+traces the execution with input "Ab". It should show an OUT
+instruction with 66 ('B') in the A register.
+
+    cap input tmp
+    zpaq pruncap tmp output
+    sha1sum input output
+
+should show identical checksums for F<input> and F<output>. I<zpaq>
+will do this test automatically before compressing.
+
+The COMP and HCOMP sections are from F<fast.cfg>. It has 2 components
+numbered from 0 to 1. Thus, the fifth argument to COMP is n = 2. The
+two components are an order 2 ICM chained with an order 4 ISSE. The
+ICM maps its context to a bit history hash table and then to a 256
+entry table of probabilities, one for each possible history. On
+update, the prediction is adjusted by a small fraction of the error,
+and the bit history is appended with the next bit. The argument 16 to
+the ICM indicates that it takes a 16+10 bit context hash to index a
+table with 2^(16+6) bit histories at 1 byte each. Thus, it uses 4 MB
+memory.
+
+The ISSE takes as input the prediction from the ICM (indicated by it's
+second argument 0) and a context. The argument 19 indicates the size
+of the context (29 bits) and hash table (32 MB) as with an ICM. The
+argument n=2 in COMP indicates there are 2 components. The components
+must be numbered consecutively from 0 to n-1. The ISSE is the last
+component so its output is arithmetic coded.
+
+The HCOMP section computes the order 2 and 4 context hashes for the
+two components. It puts the order 2 context in H[0] and order 4 in
+H[1]. The COMP argument hh=1 allocates H to 2^1 = 2 elements. Each
+element is a 32 bit unsigned integer. The low bits of the D register
+serve as a pointer into H so these elements can be accessed.
+
+The contexts are computed by saving the last 4 bytes in the rotating
+buffer M[0..3]. It uses B as a pointer to the last saved byte. (It
+could also use C). The COMP argument hm=2 allocates this array to 2^2
+= 4 elements. Each element is an unsigned 8 bit integer.
+
+COMP is called once for each preprocessed byte, but not for EOS like
+PCOMP is. The decoded byte is passed in A with a value in the range
+0..255. The first step is to save it in M (*B=A) and clear A. Then A
+is used to compute the order 2 and order 4 context hashes. The HASH
+instruction computes
+
+    A = (A + *B + 512) * 773
+
+which computes a hash in the low bits of A and extends the hash by 8
+bits. Thus, the code:
+
+    D=0 HASH B-- HASH *D=A
+
+computes a hash of the current and previous bytes and stores it in *D
+or H[0]. The next line
+
+    D++ B-- HASH B-- HASH *D=A
+
+increments D, updates the hash in A with the next two previous bytes
+and stores it in H[1]. B is decremented a total of 3 times,
+effectively incrementing it once in the 4 byte rotating buffer.
+Execution returns at HALT.
+
+=head1 ENVIRONMENT
+
+None.
+
+=head1 FILES
+
+Compression commands B<c> and B<a> need a configuration file. See
+examples in directory C</usr/share/doc/zpaq>.
+
+=head1 STANDARDS
+
+See zpaq*.pdf (ZPAQ Level 1 and later) in section AVAILABILITY . It is
+anticipated that future levels (ZPAQ-2, ZPAQ-3, etc.) will be backward
+compatible, such that newer levels can read archives produced by older
+programs.
+
+=head1 AVAILABILITY
+
+http://mattmahoney.net/dc
+
+=head1 BUGS
+
+There is no GUI.
+
+There ought to be a way to remove, update, or reorder blocks in an archive.
+
+Recursive directory compression is not supported.
+
+Timestamps and other file attributes are not preserved. If you need this,
+make a B<.tar.zpaq> file.
+
+A file may be appended to an archive more than once. Extraction of subsequent
+copies will fail without renaming on the command line.
+
+Running two copies of I<zpaq> with the B<o> modifier in the same directory
+can cause temporary files to collide.
+
+ZPAQL is not very user friendly as a language.
+
+The B<o> modifier is a hack. It would be better to use JIT compilation
+transparent to the user.
+
+Multithreaded extraction of blocks in parallel is not supported.
+
+=head1 SEE ALSO
+
+See especially lrzip(1) which uses ZPAQ algorithm (although in
+an incompatible archive format).
+
+C<bzip2(1)>
+C<gzip(1)>
+C<lrzip(1)>
+C<lzop(1)>
+C<lzma(1)>
+C<p7zip(1)>
+C<rzip(1)>
+C<unace(1)>
+C<unrar(1)>
+C<unzip(1)>
+C<unzaq(1)>
+C<zip(1)>
+
+=head1 AUTHORS
+
+Program was written by Matt Mahoney <matmahoney@yahoo.com>
+
+This manual page was originally put together by Jari Aalto
+<jari.aalto@cante.net>. Later updated by Matt Mahoney. under license
+GNU GPL version 3 or (at your option) any later version. For more
+information about license, visit
+<http://www.gnu.org/copyleft/gpl.html>.
+
+=cut
