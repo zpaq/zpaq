@@ -1,4 +1,4 @@
-/* libzpaq.cpp - Part of LIBZPAQ Version 4.01
+/* libzpaq.cpp - Part of LIBZPAQ Version 5.00
 
   Copyright (C) 2011, Dell Inc. Written by Matt Mahoney.
 
@@ -11,8 +11,10 @@
   This Software is provided "as is" without warranty.
 
 LIBZPAQ is a C++ library for compression and decompression of data
-conforming to the ZPAQ level 1 standard. See http://mattmahoney.net/zpaq/
+conforming to the ZPAQ level 2 standard. See http://mattmahoney.net/zpaq/
 */
+
+#include <stdio.h>  // debug
 
 #include "libzpaq.h"
 #include <stdlib.h>
@@ -42,6 +44,19 @@ double pow(double x, double y) {return ::pow(x, y);}
 // Read 16 bit little-endian number
 int toU16(const char* p) {
   return (p[0]&255)+256*(p[1]&255);
+}
+
+// Default read() and write()
+int Reader::read(char* buf, int n) {
+  int i=0, c;
+  while (i<n && (c=get())>=0)
+    buf[i++]=c;
+  return i;
+}
+
+void Writer::write(const char* buf, int n) {
+  for (int i=0; i<n; ++i)
+    put(U8(buf[i]));
 }
 
 ///////////////////////// allocx //////////////////////
@@ -270,15 +285,16 @@ StateTable::StateTable() {
 
 /////////////////////////// ZPAQL //////////////////////////
 
-// Write header to out2, return true if HCOMP/PCOMP section is present
-bool ZPAQL::write(Writer* out2) {
+// Write header to out2, return true if HCOMP/PCOMP section is present.
+// If pp is true, then write only the postprocessor code.
+bool ZPAQL::write(Writer* out2, bool pp) {
   if (header.size()<=6) return false;
   assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   assert(cend>=7);
   assert(hbegin>=cend);
   assert(hend>=hbegin);
   assert(out2);
-  if (header[6]>0) {  // if any components then write COMP
+  if (!pp) {  // if not a postprocessor then write COMP
     for (int i=0; i<cend; ++i)
       out2->put(header[i]);
   }
@@ -353,6 +369,8 @@ ZPAQL::ZPAQL() {
   rcode=0;
   rcode_size=0;
   clear();
+  outbuf.resize(1<<14);
+  bufptr=0;
 }
 
 ZPAQL::~ZPAQL() {
@@ -371,6 +389,13 @@ void ZPAQL::inith() {
 void ZPAQL::initp() {
   assert(header.isize()>6);
   init(header[4], header[5]); // ph, pm
+}
+
+// Flush pending output
+void ZPAQL::flush() {
+  if (output) output->write(&outbuf[0], bufptr);
+  if (sha1) for (int i=0; i<bufptr; ++i) sha1->put(U8(outbuf[i]));
+  bufptr=0;
 }
 
 // Return memory requirement in bytes
@@ -404,6 +429,8 @@ void ZPAQL::init(int hbits, int mbits) {
   assert(hend>=hbegin);
   assert(hend<header.isize()-130);
   assert(header[0]+256*header[1]==cend-2+hend-hbegin);
+  assert(bufptr==0);
+  assert(outbuf.isize()>0);
   h.resize(1, hbits);
   m.resize(1, mbits);
   r.resize(256);
@@ -470,7 +497,7 @@ int ZPAQL::execute() {
     case 52: h(d) = 0; break; // *D=0
     case 55: r[header[pc++]] = a; break; // R=A N
     case 56: return 0  ; // HALT
-    case 57: if (output) output->put(a); if (sha1) sha1->put(a); break; // OUT
+    case 57: outc(a&255); break; // OUT
     case 59: a = (a+m(b)+512)*773; break; // HASH
     case 60: h(d) = (h(d)+a+512)*773; break; // HASHD
     case 63: pc+=((header[pc]+128)&255)-127; break; // JMP N
@@ -709,7 +736,6 @@ void Predictor::init() {
   for (int i=0; i<256; ++i)  // clear old model
     comp[i].init();
   int n=z.header[6]; // hsize[0..1] hh hm ph pm n (comp)[n] END 0[128] (hcomp) END
-  if (n<1 || n>255) error("n must be 1..255 components");
   const U8* cp=&z.header[7];  // start of component list
   for (int i=0; i<n; ++i) {
     assert(cp<&z.header[z.cend]);
@@ -1029,7 +1055,33 @@ size_t Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
 /////////////////////// Decoder ///////////////////////
 
 Decoder::Decoder(ZPAQL& z):
-  in(0), low(1), high(0xFFFFFFFF), curr(0), pr(z) {}
+    in(0), low(1), high(0xFFFFFFFF), curr(0), pr(z), buf(BUFSIZE) {
+}
+
+void Decoder::init() {
+  pr.init();
+  if (pr.isModeled()) low=1, high=0xFFFFFFFF, curr=0;
+  else low=high=curr=0;
+}
+
+// Read un-modeled input into buf[low=0..high-1]
+// with curr remaining in subblock to read.
+void Decoder::loadbuf() {
+  assert(!pr.isModeled());
+  assert(low==high);
+  if (curr==0) {
+    for (int i=0; i<4; ++i) {
+      int c=in->get();
+      if (c<0) error("unexpected end of input");
+      curr=curr<<8|c;
+    }
+  }
+  U32 n=buf.size();
+  if (n>curr) n=curr;
+  high=in->read(&buf[0], n);
+  curr-=high;
+  low=0;
+}
 
 // Return next bit of decoded input, which has 16 bit probability p of being 1
 int Decoder::decode(int p) {
@@ -1054,34 +1106,58 @@ int Decoder::decode(int p) {
 
 // Decompress 1 byte or -1 at end of input
 int Decoder::decompress() {
-  if (curr==0) {  // segment initialization
-    for (int i=0; i<4; ++i)
-      curr=curr<<8|in->get();
-  }
-  if (decode(0)) {
-    if (curr!=0) error("decoding end of stream");
-    return -1;
+  if (pr.isModeled()) {  // n>0 components?
+    if (curr==0) {  // segment initialization
+      for (int i=0; i<4; ++i)
+        curr=curr<<8|in->get();
+    }
+    if (decode(0)) {
+      if (curr!=0) error("decoding end of stream");
+      return -1;
+    }
+    else {
+      int c=1;
+      while (c<256) {  // get 8 bits
+        int p=pr.predict()*2+1;
+        c+=c+decode(p);
+        pr.update(c&1);
+      }
+      return c-256;
+    }
   }
   else {
-    int c=1;
-    while (c<256) {  // get 8 bits
-      int p=pr.predict()*2+1;
-      c+=c+decode(p);
-      pr.update(c&1);
-    }
-    return c-256;
+    if (low==high) loadbuf();
+    if (low==high) return -1;
+    return buf[low++]&255;
   }
 }
 
 // Find end of compressed data and return next byte
 int Decoder::skip() {
-  int c;
-  while (curr==0)  // at start?
-    curr=in->get();
-  while (curr && (c=in->get())>=0)  // find 4 zeros
-    curr=curr<<8|c;
-  while ((c=in->get())==0) ;  // might be more than 4
-  return c;
+  int c=-1;
+  if (pr.isModeled()) {
+    while (curr==0)  // at start?
+      curr=in->get();
+    while (curr && (c=in->get())>=0)  // find 4 zeros
+      curr=curr<<8|c;
+    while ((c=in->get())==0) ;  // might be more than 4
+    return c;
+  }
+  else {
+    if (curr==0)  // at start?
+      for (int i=0; i<4 && (c=in->get())>=0; ++i) curr=curr<<8|c;
+    while (curr>0) {
+      U32 n=BUFSIZE;
+      if (n>curr) n=curr;
+      U32 n1=in->read(&buf[0], n);
+      curr-=n1;
+      if (n1!=n) return -1;
+      if (curr==0)
+        for (int i=0; i<4 && (c=in->get())>=0; ++i) curr=curr<<8|c;
+    }
+    if (c>=0) c=in->get();
+    return c;
+  }
 }
 
 ////////////////////// PostProcessor //////////////////////
@@ -1106,8 +1182,7 @@ int PostProcessor::write(int c) {
       if (state==1) z.clear();
       break;
     case 1:  // PASS
-      if (z.output && c>=0) z.output->put(c);  // data
-      if (z.sha1 && c>=0) z.sha1->put(c);
+      z.outc(c);
       break;
     case 2: // PROG
       if (c<0) error("Unexpected EOS");
@@ -1138,211 +1213,10 @@ int PostProcessor::write(int c) {
       break;
     case 5:  // PROG ... data
       z.run(c);
+      if (c<0) z.flush();
       break;
   }
   return state;
-}
-
-////////////////////// Encoder ////////////////////
-
-// Initialize for start of block
-void Encoder::init() {
-  low=1;
-  high=0xFFFFFFFF;
-  pr.init();
-}
-
-// compress bit y having probability p/64K
-void Encoder::encode(int y, int p) {
-  assert(out);
-  assert(p>=0 && p<65536);
-  assert(y==0 || y==1);
-  assert(high>low && low>0);
-  U32 mid=low+U32(((high-low)*U64(U32(p)))>>16);  // split range
-  assert(high>mid && mid>=low);
-  if (y) high=mid; else low=mid+1; // pick half
-  while ((high^low)<0x1000000) { // write identical leading bytes
-    out->put(high>>24);  // same as low>>24
-    high=high<<8|255;
-    low=low<<8;
-    low+=(low==0); // so we don't code 4 0 bytes in a row
-  }
-}
-
-// compress byte c (0..255 or -1=EOS)
-void Encoder::compress(int c) {
-  assert(out);
-  if (c==-1)
-    encode(1, 0);
-  else {
-    assert(c>=0 && c<=255);
-    encode(0, 0);
-    for (int i=7; i>=0; --i) {
-      int p=pr.predict()*2+1;
-      assert(p>0 && p<65536);
-      int y=c>>i&1;
-      encode(y, p);
-      pr.update(y);
-    }
-  }
-}
-
-///////////////////// Compressor //////////////////////
-
-// Write 13 byte start tag
-// "\x37\x6B\x53\x74\xA0\x31\x83\xD3\x8C\xB2\x28\xB0\xD3"
-void Compressor::writeTag() {
-  assert(state==INIT);
-  enc.out->put(0x37);
-  enc.out->put(0x6b);
-  enc.out->put(0x53);
-  enc.out->put(0x74);
-  enc.out->put(0xa0);
-  enc.out->put(0x31);
-  enc.out->put(0x83);
-  enc.out->put(0xd3);
-  enc.out->put(0x8c);
-  enc.out->put(0xb2);
-  enc.out->put(0x28);
-  enc.out->put(0xb0);
-  enc.out->put(0xd3);
-}
-
-void Compressor::startBlock(int level) {
-
-  // Model 1 - min.cfg
-  static const char models[]={
-  26,0,1,2,0,0,2,3,16,8,19,0,0,96,4,28,
-  59,10,59,112,25,10,59,10,59,112,56,0,
-
-  // Model 2 - mid.cfg
-  69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
-  18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
-  -1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
-  59,112,10,25,59,112,10,25,59,112,10,25,59,10,59,112,
-  25,69,-49,8,112,56,0,
-
-  // Model 3 - max.cfg
-  -60,0,5,9,0,0,22,1,-96,3,5,8,13,1,8,16,
-  2,8,18,3,8,19,4,8,19,5,8,20,6,4,22,24,
-  3,17,8,19,9,3,13,3,13,3,13,3,14,7,16,0,
-  15,24,-1,7,8,0,16,10,-1,6,0,15,16,24,0,9,
-  8,17,32,-1,6,8,17,18,16,-1,9,16,19,32,-1,6,
-  0,19,20,16,0,0,17,104,74,4,95,2,59,112,10,25,
-  59,112,10,25,59,112,10,25,59,112,10,25,59,112,10,25,
-  59,10,59,112,10,25,59,112,10,25,69,-73,32,-17,64,47,
-  14,-25,91,47,10,25,60,26,48,-122,-105,20,112,63,9,70,
-  -33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
-  10,4,59,112,25,10,4,59,112,25,65,-113,-44,72,4,59,
-  112,8,-113,-40,8,68,-81,60,60,25,69,-49,9,112,25,25,
-  25,25,25,112,56,0,
-
-  0,0}; // 0,0 = end of list
-
-  if (level<1) error("compression level must be at least 1");
-  const char* p=models;
-  int i;
-  for (i=1; i<level && toU16(p); ++i)
-    p+=toU16(p)+2;
-  if (toU16(p)<1) error("compression level too high");
-  startBlock(p);
-}
-
-// Memory reader
-class MemoryReader: public Reader {
-  const char* p;
-public:
-  MemoryReader(const char* p_): p(p_) {}
-  int get() {return *p++&255;}
-};
-
-// Write a block header
-void Compressor::startBlock(const char* hcomp) {
-  assert(state==INIT);
-  assert(hcomp);
-  int len=toU16(hcomp)+2;
-  enc.out->put('z');
-  enc.out->put('P');
-  enc.out->put('Q');
-  enc.out->put(1);  // level
-  enc.out->put(1);
-  for (int i=0; i<len; ++i)  // write compression model hcomp
-    enc.out->put(hcomp[i]);
-  MemoryReader m(hcomp);
-  z.read(&m);
-  state=BLOCK1;
-}
-
-// Write a segment header
-void Compressor::startSegment(const char* filename, const char* comment) {
-  assert(state==BLOCK1 || state==BLOCK2);
-  enc.out->put(1);
-  while (filename && *filename)
-    enc.out->put(*filename++);
-  enc.out->put(0);
-  while (comment && *comment)
-    enc.out->put(*comment++);
-  enc.out->put(0);
-  enc.out->put(0);
-  if (state==BLOCK1) state=SEG1;
-  if (state==BLOCK2) state=SEG2;
-}
-
-// Initialize encoding and write pcomp to first segment
-// If len is 0 then length is encoded in pcomp[0..1]
-void Compressor::postProcess(const char* pcomp, int len) {
-  assert(state==SEG1);
-  enc.init();
-  if (pcomp) {
-    enc.compress(1);
-    if (len<=0) {
-      len=toU16(pcomp);
-      pcomp+=2;
-    }
-    enc.compress(len&255);
-    enc.compress((len>>8)&255);
-    for (int i=0; i<len; ++i)
-      enc.compress(pcomp[i]&255);
-  }
-  else
-    enc.compress(0);
-  state=SEG2;
-}
-
-// Compress n bytes, or to EOF if n <= 0
-bool Compressor::compress(int n) {
-  assert(state==SEG2);
-  int ch=0;
-  while (n && (ch=in->get())>=0) {
-    enc.compress(ch);
-    if (n>0) --n;
-  }
-  return ch>=0;
-}
-
-// End segment, write sha1string if present
-void Compressor::endSegment(const char* sha1string) {
-  assert(state==SEG2);
-  enc.compress(-1);
-  enc.out->put(0);
-  enc.out->put(0);
-  enc.out->put(0);
-  enc.out->put(0);
-  if (sha1string) {
-    enc.out->put(253);
-    for (int i=0; i<20; ++i)
-      enc.out->put(sha1string[i]);
-  }
-  else
-    enc.out->put(254);
-  state=BLOCK2;
-}
-
-// End block
-void Compressor::endBlock() {
-  assert(state==BLOCK2);
-  enc.out->put(255);
-  state=INIT;
 }
 
 /////////////////////// Decompresser /////////////////////
@@ -1367,9 +1241,11 @@ bool Decompresser::findBlock(double* memptr) {
   if (c==-1) return false;
 
   // Read header
-  if (dec.in->get()!=1) error("unsupported ZPAQ level");
+  if ((c=dec.in->get())!=1 && c!=2) error("unsupported ZPAQ level");
   if (dec.in->get()!=1) error("unsupported ZPAQL type");
   z.read(dec.in);
+  if (c==1 && z.header.isize()>6 && z.header[6]==0)
+    error("ZPAQ level 1 requires at least 1 component");
   if (memptr) *memptr=z.memory();
   state=FILENAME;
   decode_state=FIRSTSEG;
@@ -1475,21 +1351,6 @@ void Decompresser::readSegmentEnd(char* sha1string) {
     error("missing end of segment marker");
 }
 
-/////////////////////////// compress() ///////////////////////
-
-void compress(Reader* in, Writer* out, int level) {
-  assert(level>=1);
-  Compressor c;
-  c.setInput(in);
-  c.setOutput(out);
-  c.startBlock(level);
-  c.startSegment();
-  c.postProcess();
-  c.compress();
-  c.endSegment();
-  c.endBlock();
-}
-
 /////////////////////////// decompress() /////////////////////
 
 void decompress(Reader* in, Writer* out) {
@@ -1505,6 +1366,237 @@ void decompress(Reader* in, Writer* out) {
   }
 }
 
+////////////////////// Encoder ////////////////////
+
+// Initialize for start of block
+void Encoder::init() {
+  low=1;
+  high=0xFFFFFFFF;
+  pr.init();
+  if (!pr.isModeled()) low=0, buf.resize(1<<16);
+}
+
+// compress bit y having probability p/64K
+void Encoder::encode(int y, int p) {
+  assert(out);
+  assert(p>=0 && p<65536);
+  assert(y==0 || y==1);
+  assert(high>low && low>0);
+  U32 mid=low+U32(((high-low)*U64(U32(p)))>>16);  // split range
+  assert(high>mid && mid>=low);
+  if (y) high=mid; else low=mid+1; // pick half
+  while ((high^low)<0x1000000) { // write identical leading bytes
+    out->put(high>>24);  // same as low>>24
+    high=high<<8|255;
+    low=low<<8;
+    low+=(low==0); // so we don't code 4 0 bytes in a row
+  }
+}
+
+// compress byte c (0..255 or -1=EOS)
+void Encoder::compress(int c) {
+  assert(out);
+  if (pr.isModeled()) {
+    if (c==-1)
+      encode(1, 0);
+    else {
+      assert(c>=0 && c<=255);
+      encode(0, 0);
+      for (int i=7; i>=0; --i) {
+        int p=pr.predict()*2+1;
+        assert(p>0 && p<65536);
+        int y=c>>i&1;
+        encode(y, p);
+        pr.update(y);
+      }
+    }
+  }
+  else {
+    if (c<0 || low==buf.size()) {
+      out->put((low>>24)&255);
+      out->put((low>>16)&255);
+      out->put((low>>8)&255);
+      out->put(low&255);
+      out->write(&buf[0], low);
+      low=0;
+    }
+    if (c>=0) buf[low++]=c;
+  }
+}
+
+///////////////////// Compressor //////////////////////
+
+// Write 13 byte start tag
+// "\x37\x6B\x53\x74\xA0\x31\x83\xD3\x8C\xB2\x28\xB0\xD3"
+void Compressor::writeTag() {
+  assert(state==INIT);
+  enc.out->put(0x37);
+  enc.out->put(0x6b);
+  enc.out->put(0x53);
+  enc.out->put(0x74);
+  enc.out->put(0xa0);
+  enc.out->put(0x31);
+  enc.out->put(0x83);
+  enc.out->put(0xd3);
+  enc.out->put(0x8c);
+  enc.out->put(0xb2);
+  enc.out->put(0x28);
+  enc.out->put(0xb0);
+  enc.out->put(0xd3);
+}
+
+void Compressor::startBlock(int level) {
+
+  // Model 1 - min.cfg
+  static const char models[]={
+  26,0,1,2,0,0,2,3,16,8,19,0,0,96,4,28,
+  59,10,59,112,25,10,59,10,59,112,56,0,
+
+  // Model 2 - mid.cfg
+  69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
+  18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
+  -1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
+  59,112,10,25,59,112,10,25,59,112,10,25,59,10,59,112,
+  25,69,-49,8,112,56,0,
+
+  // Model 3 - max.cfg
+  -60,0,5,9,0,0,22,1,-96,3,5,8,13,1,8,16,
+  2,8,18,3,8,19,4,8,19,5,8,20,6,4,22,24,
+  3,17,8,19,9,3,13,3,13,3,13,3,14,7,16,0,
+  15,24,-1,7,8,0,16,10,-1,6,0,15,16,24,0,9,
+  8,17,32,-1,6,8,17,18,16,-1,9,16,19,32,-1,6,
+  0,19,20,16,0,0,17,104,74,4,95,2,59,112,10,25,
+  59,112,10,25,59,112,10,25,59,112,10,25,59,112,10,25,
+  59,10,59,112,10,25,59,112,10,25,69,-73,32,-17,64,47,
+  14,-25,91,47,10,25,60,26,48,-122,-105,20,112,63,9,70,
+  -33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
+  10,4,59,112,25,10,4,59,112,25,65,-113,-44,72,4,59,
+  112,8,-113,-40,8,68,-81,60,60,25,69,-49,9,112,25,25,
+  25,25,25,112,56,0,
+
+  0,0}; // 0,0 = end of list
+
+  if (level<1) error("compression level must be at least 1");
+  const char* p=models;
+  int i;
+  for (i=1; i<level && toU16(p); ++i)
+    p+=toU16(p)+2;
+  if (toU16(p)<1) error("compression level too high");
+  startBlock(p);
+}
+
+// Memory reader
+class MemoryReader: public Reader {
+  const char* p;
+public:
+  MemoryReader(const char* p_): p(p_) {}
+  int get() {return *p++&255;}
+};
+
+// Write a block header
+void Compressor::startBlock(const char* hcomp) {
+  assert(state==INIT);
+  assert(hcomp);
+  int len=toU16(hcomp)+2;
+  enc.out->put('z');
+  enc.out->put('P');
+  enc.out->put('Q');
+  enc.out->put(1+(len>6 && hcomp[6]==0));  // level 1 or 2
+  enc.out->put(1);
+  for (int i=0; i<len; ++i)  // write compression model hcomp
+    enc.out->put(hcomp[i]);
+  MemoryReader m(hcomp);
+  z.read(&m);
+  state=BLOCK1;
+}
+
+// Write a segment header
+void Compressor::startSegment(const char* filename, const char* comment) {
+  assert(state==BLOCK1 || state==BLOCK2);
+  enc.out->put(1);
+  while (filename && *filename)
+    enc.out->put(*filename++);
+  enc.out->put(0);
+  while (comment && *comment)
+    enc.out->put(*comment++);
+  enc.out->put(0);
+  enc.out->put(0);
+  if (state==BLOCK1) state=SEG1;
+  if (state==BLOCK2) state=SEG2;
+}
+
+// Initialize encoding and write pcomp to first segment
+// If len is 0 then length is encoded in pcomp[0..1]
+void Compressor::postProcess(const char* pcomp, int len) {
+  assert(state==SEG1);
+  enc.init();
+  if (pcomp) {
+    enc.compress(1);
+    if (len<=0) {
+      len=toU16(pcomp);
+      pcomp+=2;
+    }
+    enc.compress(len&255);
+    enc.compress((len>>8)&255);
+    for (int i=0; i<len; ++i)
+      enc.compress(pcomp[i]&255);
+  }
+  else
+    enc.compress(0);
+  state=SEG2;
+}
+
+// Compress n bytes, or to EOF if n <= 0
+bool Compressor::compress(int n) {
+  assert(state==SEG2);
+  int ch=0;
+  while (n && (ch=in->get())>=0) {
+    enc.compress(ch);
+    if (n>0) --n;
+  }
+  return ch>=0;
+}
+
+// End segment, write sha1string if present
+void Compressor::endSegment(const char* sha1string) {
+  assert(state==SEG2);
+  enc.compress(-1);
+  enc.out->put(0);
+  enc.out->put(0);
+  enc.out->put(0);
+  enc.out->put(0);
+  if (sha1string) {
+    enc.out->put(253);
+    for (int i=0; i<20; ++i)
+      enc.out->put(sha1string[i]);
+  }
+  else
+    enc.out->put(254);
+  state=BLOCK2;
+}
+
+// End block
+void Compressor::endBlock() {
+  assert(state==BLOCK2);
+  enc.out->put(255);
+  state=INIT;
+}
+
+/////////////////////////// compress() ///////////////////////
+
+void compress(Reader* in, Writer* out, int level) {
+  assert(level>=1);
+  Compressor c;
+  c.setInput(in);
+  c.setOutput(out);
+  c.startBlock(level);
+  c.startSegment();
+  c.postProcess();
+  c.compress();
+  c.endSegment();
+  c.endBlock();
+}
+
 //////////////////////// ZPAQL::assemble() ////////////////////
 
 #ifndef NOJIT
@@ -1512,7 +1604,7 @@ void decompress(Reader* in, Writer* out) {
 assemble();
 
 Assembles the ZPAQL code in hcomp[0..hlen-1] and stores x86-32 or x86-64
-code in the Array<U8> rcode. Execution begins at rcode[0]. It will not
+code in rcode[0..rcode_size-1]. Execution begins at rcode[0]. It will not
 write beyond the end of rcode, but in any case it returns the number of
 bytes that would have been written. It returns 0 in case of error.
 
@@ -1626,16 +1718,14 @@ of the ZPAQL code call libzpaq::error().
 In 64 bit mode, the following additional registers are used:
 
   r12 = h
-  r13 = &outputc (called by out)
   r14 = r
   r15 = m
 
 */
 
 // Called by out
-static void outputc(int c, Writer* out, SHA1* sha1) {
-  if (out) out->put(c);
-  if (sha1) sha1->put(c);
+static void flush1(ZPAQL* z) {
+  z->flush();
 }
 
 // return true if op is an undefined ZPAQL instruction
@@ -1733,41 +1823,54 @@ int ZPAQL::assemble() {
   put1(0x5e);                 // pop esi
   put1(0xc3);                 // ret
 
-  // Code for the out instruction
+  // Code for the out instruction.
+  // Store a=edx at outbuf[bufptr++]. If full, call flush1().
   const int outlabel=o;
   if (S==8) {
-    put4(0x4883ec38);         // sub esp, 56
+    put2l(0x48b8, &outbuf[0]);// mov rax, outbuf.p
+    put2l(0x49ba, &bufptr);   // mov r10, &bufptr
+    put3(0x418b0a);           // mov ecx, [r10]
+    put3(0x891408);           // mov [rax+rcx], edx
+    put2(0xffc1);             // inc ecx
+    put3(0x41890a);           // mov [r10], ecx
+    put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
+    put2(0x7401);             // jz L1
+    put1(0xc3);               // ret
+    put4(0x4883ec30);         // L1: sub esp, 48  ; call flush1(this)
     put4(0x48893c24);         // mov [rsp], rdi
     put5(0x48897424,8);       // mov [rsp+8], rsi
     put5(0x48895424,16);      // mov [rsp+16], rdx
     put5(0x48894c24,24);      // mov [rsp+24], rcx
 #ifdef unix
-    put2(0x89d7);             // mov edi, edx
-    put2l(0x48be, output);    // mov rsi, output
-    put2l(0x48ba, sha1);      // mov rdx, sha1
+    put2l(0x48bf, this);      // mov rdi, this
 #else  // Windows
-    put2(0x89d1);             // mov ecx, edx
-    put2l(0x48ba, output);    // mov rdx, output
-    put2l(0x49b8, sha1);      // mov r8, sha1
+    put2l(0x48b9, this);      // mov rcx, this
 #endif
-    put3(0x41ffd5);           // call r13
+    put2l(0x49bb, &flush1);   // mov r11, &flush1
+    put3(0x41ffd3);           // call r11
     put5(0x488b4c24,24);      // mov rcx, [rsp+24]
     put5(0x488b5424,16);      // mov rdx, [rsp+16]
     put5(0x488b7424,8);       // mov rsi, [rsp+8]
     put4(0x488b3c24);         // mov rdi, [rsp]
-    put4(0x4883c438);         // add esp, 56
+    put4(0x4883c430);         // add esp, 48
     put1(0xc3);               // ret
   }
   else {
-    put3(0x83ec3c);           // sub esp, 60
-    put3(0x891424);           // mov [esp], edx
-    put4a(0xc7442404, output);// mov dword [esp+4], offset output
-    put4a(0xc7442408, sha1);  // mov dword [esp+8], offset sha1
-    put2a(0x8915, &a);        // mov [a], edx
-    put1a(0xb8, (void*)&outputc);  // mov eax, &outputc);
+    put1a(0xb8, &outbuf[0]);  // mov eax, outbuf.p
+    put2a(0x8b0d, &bufptr);   // mov ecx, [bufptr]
+    put3(0x891408);           // mov [eax+ecx], edx
+    put2(0xffc1);             // inc ecx
+    put2a(0x890d, &bufptr);   // mov [bufptr], ecx
+    put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
+    put2(0x7401);             // jz L1
+    put1(0xc3);               // ret
+    put3(0x83ec08);           // L1: sub esp, 8
+    put4(0x89542404);         // mov [esp+4], edx
+    put3a(0xc70424, this);    // mov [esp], this
+    put1a(0xb8, &flush1);     // mov eax, &flush1
     put2(0xffd0);             // call eax
-    put2a(0x8b15, &a);        // mov edx, [a]
-    put3(0x83c43c);           // add esp, 60
+    put4(0x8b542404);         // mov edx, [esp+4]
+    put3(0x83c408);           // add esp, 8
     put1(0xc3);               // ret
   }
 
@@ -1854,7 +1957,7 @@ int ZPAQL::assemble() {
     put2l(0x48b8, &f); // mov rax, f
     put2(0x8b18);      // mov ebx, [rax]
     put2l(0x49bc, &h[0]);   // mov r12, h
-    put2l(0x49bd, &outputc);// mov r13, &outputc
+    put2l(0x49bd, &outbuf[0]); // mov r13, outbuf.p
     put2l(0x49be, &r[0]);   // mov r14, r
     put2l(0x49bf, &m[0]);   // mov r15, m
   }
@@ -2240,6 +2343,12 @@ int ZPAQL::assemble() {
   // Jump to start
   o=0;
   put1a(0xe9, start-5);  // jmp near start
+
+  // debug
+  FILE* obj=fopen("obj", "wb");
+  for (int i=0; i<rsize && i<rcode_size; ++i)
+    putc(rcode[i], obj);
+  fclose(obj);
 
   return rsize;
 }
