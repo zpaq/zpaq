@@ -1,7 +1,7 @@
-/*  unzpaq1 v1.01 ZPAQ reference decompressor
+/*  unzpaq1 v1.02 ZPAQ reference decompressor
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Apr. 27, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, June 14, 2009.
 
     LICENSE
 
@@ -42,6 +42,9 @@ History:
 
 1.01 - Apr. 27, 2009. Fixed VS2005 compiler issues. Updated comments
 and help message. No functional changes.
+
+1.02 - June 14, 2009. Closes output files immediately instead of
+when program exits. Fixed g++ 4.4 warnings.
 
 */
 
@@ -84,8 +87,8 @@ public:
   void resize(int sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
   int size() {return n+1;}  // get size
-  T& operator[](int i) {assert(n>=0 && i>=0 && i<=n); return data[i];}
-  T& operator()(int i) {assert(n>=0 && (n&n+1)==0); return data[i&n];}
+  T& operator[](int i) {assert(n>=0 && i>=0 && U32(i)<=U32(n)); return data[i];}
+  T& operator()(int i) {assert(n>=0 && (n&(n+1))==0); return data[i&n];}
 };
 
 template<class T>
@@ -620,7 +623,7 @@ void ZPAQL::run(U32 input) {
   assert(h.size()>0);
   pc=hbegin;
   a=input;
-  while (execute());
+  while (execute()) ;
 }
 
 // Return memory requirement in bytes
@@ -678,13 +681,13 @@ inline int ZPAQL::execute() {
     case 34: --m(b); break; // *B--
     case 35: m(b) = ~m(b); break; // *B!
     case 36: m(b) = 0; break; // *B=0
-    case 39: if (f) pc+=(header[pc]+128&255)-127; else ++pc; break; // JT N
+    case 39: if (f) pc+=((header[pc]+128)&255)-127; else ++pc; break; // JT N
     case 40: swap(m(c)); break; // *C<>A
     case 41: ++m(c); break; // *C++
     case 42: --m(c); break; // *C--
     case 43: m(c) = ~m(c); break; // *C!
     case 44: m(c) = 0; break; // *C=0
-    case 47: if (!f) pc+=(header[pc]+128&255)-127; else ++pc; break; // JF N
+    case 47: if (!f) pc+=((header[pc]+128)&255)-127; else ++pc; break; // JF N
     case 48: swap(h(d)); break; // *D<>A
     case 49: ++h(d); break; // *D++
     case 50: --h(d); break; // *D--
@@ -695,7 +698,7 @@ inline int ZPAQL::execute() {
     case 57: if (output) putc(a, output); if (sha1) sha1->put(a); break; // OUT
     case 59: a = (a+m(b)+512)*773; break; // HASH
     case 60: h(d) = (h(d)+a+512)*773; break; // HASHD
-    case 63: pc+=(header[pc]+128&255)-127; break; // JMP N
+    case 63: pc+=((header[pc]+128)&255)-127; break; // JMP N
     case 64: a = a; break; // A=A
     case 65: a = b; break; // A=B
     case 66: a = c; break; // A=C
@@ -844,26 +847,26 @@ inline int ZPAQL::execute() {
     case 217: f = (a == b); break; // A==B
     case 218: f = (a == c); break; // A==C
     case 219: f = (a == d); break; // A==D
-    case 220: f = (a == m(b)); break; // A==*B
-    case 221: f = (a == m(c)); break; // A==*C
+    case 220: f = (a == U32(m(b))); break; // A==*B
+    case 221: f = (a == U32(m(c))); break; // A==*C
     case 222: f = (a == h(d)); break; // A==*D
-    case 223: f = (a == header[pc++]); break; // A== N
+    case 223: f = (a == U32(header[pc++])); break; // A== N
     case 224: f = (a < a); break; // A<A
     case 225: f = (a < b); break; // A<B
     case 226: f = (a < c); break; // A<C
     case 227: f = (a < d); break; // A<D
-    case 228: f = (a < m(b)); break; // A<*B
-    case 229: f = (a < m(c)); break; // A<*C
+    case 228: f = (a < U32(m(b))); break; // A<*B
+    case 229: f = (a < U32(m(c))); break; // A<*C
     case 230: f = (a < h(d)); break; // A<*D
-    case 231: f = (a < header[pc++]); break; // A< N
+    case 231: f = (a < U32(header[pc++])); break; // A< N
     case 232: f = (a > a); break; // A>A
     case 233: f = (a > b); break; // A>B
     case 234: f = (a > c); break; // A>C
     case 235: f = (a > d); break; // A>D
-    case 236: f = (a > m(b)); break; // A>*B
-    case 237: f = (a > m(c)); break; // A>*C
+    case 236: f = (a > U32(m(b))); break; // A>*B
+    case 237: f = (a > U32(m(c))); break; // A>*C
     case 238: f = (a > h(d)); break; // A>*D
-    case 239: f = (a > header[pc++]); break; // A> N
+    case 239: f = (a > U32(header[pc++])); break; // A> N
     case 255: if((pc=hbegin+header[pc]+256*header[pc+1])>=hend)err();break;//LJ
     default: err();
   }
@@ -917,7 +920,7 @@ public:
   }
   int cminit(int state) {  // initial probability of 1 * 2^23
     assert(state>=0 && state<256);
-    return (ns[state*4+3]*2+1<<22)/(ns[state*4+2]+ns[state*4+3]+1);
+    return ((ns[state*4+3]*2+1)<<22)/(ns[state*4+2]+ns[state*4+3]+1);
   }
   StateTable();
 };
@@ -1205,7 +1208,7 @@ int Predictor::predict() {
         assert(cr.a>=0 && cr.a<=255);
         if (cr.a==0) p[i]=0;
         else {
-          cr.c=cr.ht((cr.limit>>3)-cr.b)>>7-(cr.limit&7)&1; // predicted bit
+          cr.c=cr.ht((cr.limit>>3)-cr.b)>>(7-(cr.limit&7))&1; // predicted bit
           p[i]=stretch(cr.cxt*(cr.c*-2+1)&32767);
         }
         break;
@@ -1214,11 +1217,11 @@ int Predictor::predict() {
         break;
       case MIX2: { // sizebits j k rate mask
                    // c=size cm=wt[size][m] cxt=input
-        cr.cxt=(z.h(i)+(c8&cp[5])&cr.c-1);
+        cr.cxt=((z.h(i)+(c8&cp[5]))&(cr.c-1));
         assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
         int w=cr.a16[cr.cxt];
         assert(w>=0 && w<65536);
-        p[i]=w*p[cp[2]]+(65536-w)*p[cp[3]]>>16;
+        p[i]=(w*p[cp[2]]+(65536-w)*p[cp[3]])>>16;
         assert(p[i]>=-2048 && p[i]<2048);
       }
         break;
@@ -1227,7 +1230,7 @@ int Predictor::predict() {
         int m=cp[3];
         assert(m>=1 && m<=i);
         cr.cxt=z.h(i)+(c8&cp[5]);
-        cr.cxt=(cr.cxt&cr.c-1)*m; // pointer to row of weights
+        cr.cxt=(cr.cxt&(cr.c-1))*m; // pointer to row of weights
         assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-m);
         int* wt=(int*)&cr.cm[cr.cxt];
         p[i]=0;
@@ -1242,7 +1245,7 @@ int Predictor::predict() {
           cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];  // bit history
         int *wt=(int*)&cr.cm[cr.cxt*2];
-        p[i]=clamp2k(wt[0]*p[cp[2]]+wt[1]*64>>16);
+        p[i]=clamp2k((wt[0]*p[cp[2]]+wt[1]*64)>>16);
       }
         break;
       case SSE: { // sizebits j start limit
@@ -1254,7 +1257,7 @@ int Predictor::predict() {
         pq>>=6;
         assert(pq>=0 && pq<=30);
         cr.cxt+=pq;
-        p[i]=stretch((cr.cm(cr.cxt)>>10)*(64-wt)+(cr.cm(cr.cxt+1)>>10)*wt>>13);
+        p[i]=stretch(((cr.cm(cr.cxt)>>10)*(64-wt)+(cr.cm(cr.cxt+1)>>10)*wt)>>13);
         cr.cxt+=wt>>5;
       }
         break;
@@ -1306,7 +1309,7 @@ void Predictor::update(int y) {
           int pos=cr.limit>>3;
           if (cr.a==0) {  // look for a match
             cr.b=pos-cr.cm(z.h(i));
-            if (cr.b&cr.ht.size()-1)
+            if (cr.b&(cr.ht.size()-1))
               while (cr.a<255 && cr.ht(pos-cr.a-1)==cr.ht(pos-cr.a-cr.b-1))
                 ++cr.a;
           }
@@ -1324,7 +1327,7 @@ void Predictor::update(int y) {
         assert(int(cr.cxt)>=0 && int(cr.cxt)<cr.a16.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>5;
         int w=cr.a16[cr.cxt];
-        w+=err*(p[cp[2]]-p[cp[3]])+(1<<12)>>13;
+        w+=(err*(p[cp[2]]-p[cp[3]])+(1<<12))>>13;
         if (w<0) w=0;
         if (w>65535) w=65535;
         cr.a16[cr.cxt]=w;
@@ -1339,15 +1342,15 @@ void Predictor::update(int y) {
         int err=(y*32767-squash(p[i]))*cp[4]>>4;
         int* wt=(int*)&cr.cm[cr.cxt];
         for (int j=0; j<m; ++j)
-          wt[j]=clamp512k(wt[j]+(err*p[cp[2]+j]+(1<<12)>>13));
+          wt[j]=clamp512k(wt[j]+((err*p[cp[2]+j]+(1<<12))>>13));
       }
         break;
       case ISSE: { // sizebits j  -- c=hi, cxt=bh
         assert(cr.cxt==cr.ht[cr.c+(hmap4&15)]);
         int err=y*32767-squash(p[i]);
         int *wt=(int*)&cr.cm[cr.cxt*2];
-        wt[0]=clamp512k(wt[0]+(err*p[cp[2]]+(1<<12)>>13));
-        wt[1]=clamp512k(wt[1]+(err+16>>5));
+        wt[0]=clamp512k(wt[0]+((err*p[cp[2]]+(1<<12))>>13));
+        wt[1]=clamp512k(wt[1]+((err+16)>>5));
         cr.ht[cr.c+(hmap4&15)]=st.next(cr.cxt, y);
       }
         break;
@@ -1373,7 +1376,7 @@ void Predictor::update(int y) {
   else if (c8>=16 && c8<32)
     hmap4=(hmap4&0xf)<<5|y<<4|1;
   else
-    hmap4=hmap4&0x1f0|(hmap4&0xf)*2+y&0xf;
+    hmap4=(hmap4&0x1f0)|(((hmap4&0xf)*2+y)&0xf);
 }
 
 // cr.cm(cr.cxt) has a prediction in the high 22 bits and a count in the
@@ -1394,7 +1397,7 @@ inline void Predictor::train(Component& cr, int y) {
 int Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
   assert(ht.size()==16<<sizebits);
   int chk=cxt>>sizebits&255;
-  int h0=cxt*16&ht.size()-16;
+  int h0=(cxt*16)&(ht.size()-16);
   if (ht[h0]==chk) return h0;
   int h1=h0^16;
   if (ht[h1]==chk) return h1;
@@ -1437,7 +1440,7 @@ inline int Decoder::decode(int p) {
   assert(p>=0 && p<65536);
   assert(high>low && low>0);
   assert(curr>=low && curr<=high);
-  U32 mid=low+(high-low>>16)*p+((high-low&0xffff)*p>>16); // split range here
+  U32 mid=low+((high-low)>>16)*p+((((high-low)&0xffff)*p)>>16); // split range
   assert(high>mid && mid>=low);
   int y=curr<=mid;
   if (y) high=mid; else low=mid+1; // pick half
@@ -1584,7 +1587,7 @@ void decompress(int argc, char** argv) {
       if (i>0 && i<512) filename[i]=0;
 
       // Skip comment
-      while ((c=getc(in))!=EOF && c!=0);
+      while ((c=getc(in))!=EOF && c!=0) ;
       if (getc(in)) error("reserved");  // reserved 0
 
       // If the user gave an output file starting at argv[3], use it instead.
@@ -1633,6 +1636,7 @@ void decompress(int argc, char** argv) {
         pp.write(c);
       pp.write(-1);
       ++filecount;
+      if (out) fclose(out);
 
       // Check for end of segment and block markers
       int eos=getc(in);  // 253=SHA1 follows, 254=EOS
@@ -1708,9 +1712,9 @@ void list(int argc, char** argv) {
       
       // Skip to end of data
       U32 c4=0xFFFFFFFF;  // last 4 bytes will be all 0
-      while ((c=getc(in))!=EOF && (c4=c4<<8|c)!=0);
+      while ((c=getc(in))!=EOF && (c4=c4<<8|c)!=0) ;
       if (c==EOF) error("unexpected end of file");
-      while ((c=getc(in))==0);
+      while ((c=getc(in))==0) ;
       if (c==253) {  // print SHA1 in verbose mode
         for (int i=0; i<20; ++i)  // skip SHA1
           getc(in);
@@ -1728,20 +1732,20 @@ void list(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("UNZPAQ1 v1.01 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
+  printf("UNZPAQ v1.02 reference decoder, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
     "This program is an integral part of ZPAQ Level 1 standard for highly\n"
     "compressed data.\n"
     "\n"
-    "To list contents: unzpaq1 l archive\n"
-    "To extract files: unzpaq1 x archive  (does not clobber)\n"
+    "To list contents: unzpaq l archive\n"
+    "To extract files: unzpaq x archive  (does not clobber)\n"
     "To extract with new file names: unzpaq1 x archive files...  (clobbers)\n");
   exit(0);
 }
 
-// Command syntax: unzpaq1 (x|l) archive [files...]
+// Command syntax: unzpaq (x|l) archive [files...]
 int main(int argc, char** argv) {
   if (argc<3) 
     usage();
