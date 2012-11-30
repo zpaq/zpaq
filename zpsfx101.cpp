@@ -1,5 +1,6 @@
-/* zpsfx.cpp v1.00 - ZPAQ self extracting stub.
-   Written by Matt Mahoney, Oct. 20, 2010.
+/* zpsfx.cpp v1.01 - ZPAQ self extracting stub.
+   Written by Matt Mahoney. Modified by Klaus Post on Apr. 4, 2012
+   to create directories in Windows as needed.
 
 zpsfx is placed in the public domain. It may be used without
 restriction. It is provided "as is" with no warranty.
@@ -8,8 +9,8 @@ This program is intended to be as simple as possible to illustrate how
 to create self extracting ZPAQ archives. You can customize it.
 To compile this program:
 
-  g++ -O2 -s zpsfx.cpp libzpaq.cpp libzpaqo.cpp -DNDEBUG
-  upx a.exe
+  g++ -O2 -s zpsfx.cpp libzpaq.cpp -DNDEBUG
+  upx --best a.exe -o zpsfx.exe
 
 Or use appropriate optimization options. -s and upx can be used to make
 the executable smaller. -DNDEBUG turns off run time checks.
@@ -34,7 +35,7 @@ the current folder then you need to specify the path. The PATH environment
 variable won't be used to find it.
 
 Files will be extracted and named according to the stored filenames. It will
-overwrite existing files without warning. It will not create directories.
+overwrite existing files without warning. It will create directories.
 It will exit if any errors occur, such as the first segment not having a
 stored filename. SHA-1 checksums are not verified.
 */
@@ -42,6 +43,8 @@ stored filename. SHA-1 checksums are not verified.
 #include "libzpaq.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
+#include <windows.h>
 
 // An error handler is required as shown in this example. libzpaq will
 // call it with an English language message in case of a fatal error.
@@ -91,6 +94,24 @@ struct Buf: public libzpaq::Writer {
   void put(int c) {if (len<SIZE) s[len]=c, s[++len]=0;}
 };
 
+// Return '/' in Linux or '\' in Windows
+char slash() {
+  return '\\';
+}
+
+// Create directories as needed. For example if path="/tmp/foo/bar"
+// then create directories /, /tmp, and /tmp/foo unless they exist.
+// Convert slashes to / in Linux or \ in Windows.
+void makepath(std::string& path) {
+  for (int i=0; i<path.size(); ++i) {
+    if (path[i]=='\\' || path[i]=='/') {
+      path[i]=0;
+      int ok=CreateDirectory(path.c_str(), 0);
+      path[i]=slash();
+    }
+  }
+}
+
 // Extract ZPAQ compressed data appended to this program executable
 int main(int argc, char** argv) {
 
@@ -118,6 +139,8 @@ int main(int argc, char** argv) {
       // If the segment is named then open a new output file.
       if (filename.len) {  // segment is named?
         if (out.f) fclose(out.f);
+				std::string filenameS(filename.s);
+				makepath(filenameS);
         out.f=fopen(filename.s, "wb");
       }
       if (!out.f) perror(filename.s), exit(1);
