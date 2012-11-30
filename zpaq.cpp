@@ -1,7 +1,7 @@
-/*  zpaq v0.02 archiver and file compressor.
+/*  zpaq v0.03 archiver and file compressor.
 
 (C) 2009, Ocarina Networks, Inc.
-    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 17, 2009.
+    Written by Matt Mahoney, matmahoney@yahoo.com, Feb. 19, 2009.
 
     LICENSE
 
@@ -1054,8 +1054,6 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
   for (int i=0; i<4096; ++i) {
     squasht[i]=int(0.5+4095.5/(1+exp((i-2048)*(-1.0/256))));
     stretcht[i]=int(log((i+0.5)/(4095.5-i))*256+0.5+10000)-10000;
-    if (stretcht[i]>2047) stretcht[i]=2047;
-    if (stretcht[i]<-2048) stretcht[i]=-2048;
   }
 
   // Verify floating point math for squash() and stretch()
@@ -1064,7 +1062,7 @@ Predictor::Predictor(ZPAQL& zr): c8(1), hmap4(1), z(zr) {
     st=st*3+stretch(i);
     sq=sq*3+squash(i-2048);
   }
-  assert(st==2467703605u);
+  assert(st==1625980894u);
   assert(sq==1032925551u);
 
   // Initialize context hash function
@@ -1186,7 +1184,9 @@ int Predictor::predict() {
         cr.cxt=(z.h(i)+(c8&cp[5])&cr.c-1)*2;
         assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-2);
         int* wt=(int*)&cr.cm[cr.cxt];
-        p[i]=wt[0]*p[cp[2]]+wt[1]*p[cp[3]]>>16;
+        p[i]=(wt[0]+128>>8)*p[cp[2]];
+        p[i]+=(wt[1]+128>>8)*p[cp[3]]+128;
+        p[i]>>=8;
       }
         break;
       case MIX: {  // sizebits j m rate mask
@@ -1199,15 +1199,16 @@ int Predictor::predict() {
         int* wt=(int*)&cr.cm[cr.cxt];
         p[i]=0;
         for (int j=0; j<m; ++j)
-          p[i]+=wt[j]*p[cp[2]+j]>>8;
-        p[i]>>=8;
+          p[i]+=(wt[j]+128>>8)*p[cp[2]+j];
+        p[i]=p[i]+128>>8;
       }
         break;
       case IMIX2:  // sizebits j k wt rate -- c=hi, cxt=bh
         assert((hmap4&15)>0);
         if (c8==1 || (c8&0xf0)==16) cr.c=find(cr.ht, cp[1]+2, z.h(i)+16*c8);
         cr.cxt=cr.ht[cr.c+(hmap4&15)];  // bit history
-        p[i]=int(cr.cm[cr.cxt*2])*p[cp[2]]+int(cr.cm[cr.cxt*2+1])*p[cp[3]]>>16;
+        p[i]=(int(cr.cm[cr.cxt*2])+128>>8)*p[cp[2]]
+            +(int(cr.cm[cr.cxt*2+1])+128>>8)*p[cp[3]]+128>>8;
         break;
       case SSE: { // sizebits j start limit mask
         cr.cxt=(z.h(i)+(c8&cp[5]))*32;
@@ -1322,7 +1323,7 @@ static const U8 next[256][2]={
                    // cm=input[2],wt[size][2], cxt=weight row
         assert(cr.cm.size()==2*cr.c);
         assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-2);
-        int err=((y<<12)-squash(p[i]))*cp[4];
+        int err=(y*4095-squash(p[i]))*cp[4];
         int* wt=(int*)&cr.cm[cr.cxt];
         wt[0]+=((1<<15)+err*p[cp[2]])>>16;
         wt[1]+=((1<<15)+err*p[cp[3]])>>16;
@@ -1334,7 +1335,7 @@ static const U8 next[256][2]={
         assert(m>0 && m<=i);
         assert(cr.cm.size()==m*cr.c);
         assert(int(cr.cxt)>=0 && int(cr.cxt)<=cr.cm.size()-m);
-        int err=((y<<12)-squash(p[i]))*cp[4];
+        int err=(y*4095-squash(p[i]))*cp[4];
         int* wt=(int*)&cr.cm[cr.cxt];
         for (int j=0; j<m; ++j)
           wt[j]+=((1<<15)+err*p[cp[2]+j])>>16;
@@ -1343,7 +1344,7 @@ static const U8 next[256][2]={
       case IMIX2: { // sizebits j k wt rate -- c=hi, cxt=bh
         assert(cr.cxt==cr.ht[cr.c+(hmap4&15)]);
         cr.ht[cr.c+(hmap4&15)]=next[cr.cxt][y];
-        int err=((y<<12)-squash(p[i]))*cp[5];
+        int err=(y*4095-squash(p[i]))*cp[5];
         cr.cm[cr.cxt*2]+=(1<<15)+err*p[cp[2]]>>16;
         cr.cm[cr.cxt*2+1]+=(1<<15)+err*p[cp[3]]>>16;
       }
@@ -1804,6 +1805,7 @@ void compress(int argc, char** argv) {
   if (argv[1][1]) {
     cfg=fopen(argv[1]+1, "rb");
     if (!cfg) perror(argv[1]+1), exit(1);
+    z.verbose=false;
     cmd=z.compile(cfg);
   }
   else
@@ -1850,9 +1852,11 @@ void compress(int argc, char** argv) {
     }
   }
   putc(255, out);  // block trailer
+  printf("-> %ld\n", ftell(out));
+  fclose(out);
 }
 
-////////////////////////// List //////////////////////////
+////////////////////////// Misc. commands //////////////////////////
 
 // List archive contents
 void list(int argc, char** argv) {
@@ -1953,7 +1957,7 @@ void scompile(int argc, char** argv) {
 
 // Print help message and exit
 void usage() {
-  printf("ZPAQ v0.02 archiver, (C) 2009, Ocarina Networks Inc.\n"
+  printf("ZPAQ v0.03 archiver, (C) 2009, Ocarina Networks Inc.\n"
     "Written by Matt Mahoney, " __DATE__ ".\n"
     "This is free software under GPL v3, http://www.gnu.org/copyleft/gpl.html\n"
     "\n"
