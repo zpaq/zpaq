@@ -1,4 +1,4 @@
-/* zpaq.cpp v4.03 - Archiver and compression development tool.
+/* zpaq.cpp v4.04 - Archiver and compression development tool.
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -97,7 +97,7 @@ void run();  // do r and t commands
 
 void usage() {
   fprintf(stderr, 
-  "zpaq v4.03 - ZPAQ archiver and compression algorithm development tool.\n"
+  "zpaq v4.04 - ZPAQ archiver and compression algorithm development tool.\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney. Compiled " __DATE__ ".\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -263,7 +263,7 @@ struct File: public libzpaq::Reader, public libzpaq::Writer {
   int get() {return getc(f);}
   void put(int c) {putc(c, f);}
   File(FILE* f_=0): f(f_) {}
-  ~File() {if (f) fclose(f);}
+  ~File() {if (f && f!=stdin && f!=stdout) fclose(f);}
 };
 
 // To count bytes read or written
@@ -271,7 +271,7 @@ struct FileCount: public libzpaq::Reader, public libzpaq::Writer {
   FILE* f;
   int64_t count;
   FileCount(FILE* f_): f(f_), count(0) {}
-  ~FileCount() {if (f) fclose(f);}
+  ~FileCount() {if (f && f!=stdin && f!=stdout) fclose(f);}
   int get() {int c=getc(f); count+=(c!=EOF); return c;}
   void put(int c) {putc(c, f); count+=1;}
 };
@@ -631,7 +631,7 @@ int FileToCompress::get() {
 
 // Close files, delete temporaries, and free memory
 FileToCompress::~FileToCompress() {
-  if (in) fclose(in);
+  if (in && in!=stdin) fclose(in);
   if (tmp_out!="") delete_file(tmp_out.c_str());
 }
 
@@ -1807,6 +1807,7 @@ void run() {
     while ((c=getc(in))!=EOF)
       z.run(c);
     if (!hopt) z.run(-1);
+    z.flush();
   }
 }
 
