@@ -46,7 +46,7 @@ pzpaq - Parallel ZPAQ file compressor and archiver
 =head1 SYNOPSIS
 
 pzpaq [-123cdehklvx] [-bI<blocksize>] [-mI<memory>]
-[-sI<suffix>] [-tI<threads>] [I<files>] ...
+[-tI<threads>] [I<files>] ...
 
 =head1 GENERAL
 
@@ -154,20 +154,6 @@ the permitted range. If any input file has an unknown size, such
 as when compressing from standard input, then the default is
 B<-b0>.
 
-If a file is split across blocks, then each input
-block after the first is compressed to separate temporary archive
-and then concatenated.
-The temporary files are named I<file>C<.zpaq.tmp1>, I<file>C<.zpaq.tmp2>,
-etc. for the second and subsequent blocks.
-Likewise, when it is decompressed, temporary files are created by adding
-the extensions C<.tmp1>, C<.tmp2>, etc. to the output file name.
-If writing to standard output with B<-c>, then temporary files are
-named as above where I<file> is the empty string. Any existing file
-by the same name as a temporary file is overwritten and deleted.
-If reading from standard input or B<-b0> is used,
-then no temporary files are created. The temporary filename
-extension can be changed with B<-s>.
-
 Note that a small block size generally makes compression worse,
 but a large block size can be slower because there cannot be
 more threads running at once than there are blocks.
@@ -178,18 +164,22 @@ The default balances the load among threads.
 Compress or decompress to standard output and do not delete the input
 files when done (implies B<-k>).
 This often compresses better than compressing files individually.
+The output is concatenated in the order specified on the command line.
+For decompression, saved filenames are ignored.
 
 =item -d
 
-Decompress and replace each I<file>C<.zpaq> with I<file>,
-ignoring any saved filenames.
+Decompress and replace each I<file>C<.zpaq> with I<file>.
+If I<file> does not have a
+C<.zpaq> extension, then the output is named I<file>C<.out>.
+Saved filenames are ignored.
 
 =item -e
 
-Extract the contents I<file>C<.zpaq> to the current directory
-using the saved filenames, ignoring any saved path. Any unnamed
-data is extracted to I<file>. Existing files are overwritten.
-Keep I<file>C<.zpaq> (implies B<-k>).
+Extract the contents of archive I<file> to the current directory
+using the saved filenames, ignoring any saved path. Existing files
+are overwritten. If no filename is saved, then the output is
+named like B<-d>. Keep I<file> (implies B<-k>).
 
 =item -h
 
@@ -220,11 +210,6 @@ The default is B<-b500>, which is sufficient for B<-3 -t2>.
 If any single block still requires more than N MB, then it
 will still attempt to run.
 
-=item -sI<suffix>
-
-Specify the extension for temporary files created when a file
-is split into blocks. The default is B<-s.tmp>
-
 =item -tI<N>
 
 Use up to N threads. The default is B<-t2>. The effect
@@ -238,6 +223,9 @@ Specifying N greater than the number of
 available cores or processors or greater than the number of
 input blocks does not increase speed.
 
+The Windows version is limited to 64 threads. Larger values
+will be interpreted as B<-t64>.
+
 =item -v
 
 Verbose. Report progress to standard error. Normally there
@@ -246,12 +234,13 @@ are always printed to standard error in either case.
 
 =item -x
 
-Extract the contents of I<file>C<.zpaq>  using the saved
+Extract the contents of archive I<file> using the saved
 filenames like B<-e> but including the saved path.
-Interpret backslashes (\) in the path as forward slashes (/).
+Interpret both backslashes (\) and forward slashes (/)
+in the saved path as equivalent directory separator characters.
 Existing files are overwritten. It is an error if the
 path specifies a directory that does not exist. If no filename
-is saved then extract to I<file>. Keep I<file>C<.zpaq>
+is saved then the output is named as with B<-d>. Keep I<file>
 (implies B<-k>).
 
 =back
@@ -262,11 +251,23 @@ Returns 1 if there is an error or 0 otherwise.
 
 =head1 ENVIRONMENT
 
-None.
+=over
+
+=item TMPDIR
+
+=item TEMP
+
+The first of these which is set specifies the directory in
+which temporary files will be placed. If neither is set, then
+the default is F</tmp>. B<TMPDIR> is the POSIX recommendation
+for the temporary directory, but not all systems set it automatically.
+B<TEMP> is normally set in Windows to the user's temporary directory.
+
+=back
 
 =head1 FILES
 
-None.
+See I<Decompression Optimization> below.
 
 =head1 CONFORMING TO
 
@@ -275,55 +276,214 @@ I<pzpaq> reads and writes archives in ZPAQ level 1 format
 
 =head1 NOTES
 
-The ZPAQ level 1 standard defines a ZPAQ archive as a sequence
-of one or more blocks possibly mixed with other data. If
-a block is preceded by any non-ZPAQ data, then a 13 byte marker
-tag must immediately precede the block. Otherwise the tag is
-optional.
+=head2 Archive Format
 
-Each block contains a description of the decompression algorithm
-followed by one or more segments. Blocks are independent, but
-segments must be compressed or decompressed in order from the
-beginning of the block.
+The ZPAQ level 1 standard defines a ZPAQ archive format.
+The format is designed to be read or written in a single pass.
+It consists of one or more blocks that can be read and decompressed
+independently. Each block contains one or more segments
+that must be decompressed in sequence from the start of the
+block. Each block header contains a description of the decompression
+algorithm. Each segment consists of an optional filename, an
+optional comment, compressed data, an end of data marker (4 to 7
+zero bytes) and an optional 20 byte SHA-1 checksum
+of the uncompressed data it represents. Segments without a
+filename are considered to be appended to the previous segment,
+which might be in the previous block. Blocks may be embedded in
+arbitrary non-ZPAQ data if they are preceded with an optional
+13 byte marker tag. A tag is optional for blocks that
+start at the beginning of a file or immediately after another block.
+The filename and comment are NUL terminated strings with no
+length limit.
 
-Each segment contains an optional filename, an optional comment,
-compressed data, and an optional 20 byte SHA-1 checksum. If the
-filename field is empty, it denotes that the data should be
-concatenated to the previous segment, which might be in the
-previous block.
+The decompression algorithm in the block header
+is described by two strings,
+a decoding model and an optional postprocessor, each with a maximum
+length of 65535 bytes. The first string is stored. The second
+string, if present, is compressed using the described model
+at the beginning of the first segment. The first byte string is
+a program in an interpreted, sandboxed, virtual machine language called
+ZPAQL that describes a context model and a program to compute contexts.
+The second string is also a ZPAQL program that inputs the decoded
+data and outputs the final data. If absent, the decoded data is
+output directly.
 
-The archive format is such that block and segment headers and
-trailers can be read quickly in a single pass without decompressing.
-The memory required to decompress can be calculated from the block header
+I<pzpaq> always produces archives such that the first block
+of each file (but not subsequent blocks)
+is preceded by a marker tag. Compression levels B<-1>, B<-2>,
+and B<-3> describe different models, none of which have a
+postprocessor. Filenames are stored exactly as specified on the command
+line after wildcard expansion.
+The comment is stored as a decimal string representing
+the size of the file. The checksum is always computed and saved
+and checked upon decompression. When compressing from standard
+input, the filename and comment fields are left empty.
 
-The default format for a ZPAQ archive produced by I<pzpaq> is one
-or more blocks with a marker tag before the first block. Each block
-contains one segment per file or file fragment if the whole file
-would not fit in the block. The checksum
-is always computed and saved, and verified during decompression
-if present. The filename is saved as specified on the command line
-unless compressing from standard input. The comment is saved
-with the original file size as a decimal string unless compressing
-from standard input. If a file is split into blocks then the comment
-has the form "size+offset" where the size is for the portion in the
-current block and the offset is the starting point in the original
-file if greater than 0. If the size is unknown then it is saved as "-1".
+When compressing with a block size other than infinite (B<-b0>),
+files may be split into separate blocks. The filename will be
+stored only for the first block. The comment will be the size
+of the block after decompression, not the total file size.
+For subsequent blocks, the comment will have the form I<size+start>
+where I<start> is the offset from the start of the file as
+a decimal number. Comments have no effect on decompression but
+are shown by B<-l>.
 
-I<pzpaq> will read any valid ZPAQ archive, including compression
-models other than those produced by B<-1>, B<-2> or B<-3>,
-such as those produced using zpaq(1) configuration files.
-I<pzpaq> contains speed optimizations for the default levels, however.
-Other models will take about twice as long to decompress as they
-would with optimization. You can sometimes decompress such archives
-faster with zpaq(1), which automatically optimizes by translating the
-decompression algorithm description into C++ source code and
-recompiling itself. However, I<pzpaq> is faster for the built in
-models because zpaq(1) is not multithreaded.
+When compressing with B<-c>, a block may contain more than one
+file. For example, if each input file has size 10000 then:
 
-Speedup with B<-t> is typically not linear due to the need to share
-memory, cache, and CPU units, or because some processors
-reduce clock speed in response to temperature or the number of
-cores in use.
+    pzpaq -t2 file1 file2 file3 -c >archive.zpaq
+    pzpaq -l archive.zpaq
+
+will show two blocks of 15000 bytes each with F<file2> split between
+the two blocks with the second segment unnamed.
+
+    Block 1
+      file1 10000
+      file2 5000
+    Block 2
+            5000+5000
+      file3 10000
+
+Without B<-c>, then the result would be F<file1.zpaq>, F<file2.zpaq>,
+and F<file3.zpaq> each as a single block, because each file is small
+enough to fit in the default block size of 15000. However with B<-t4>
+and a default block size of 7500, each file would contain two blocks
+with one segment each of size 7500 and 2500 respectively.
+
+=head2 Decompression Optimization
+
+I<pzpaq> has a feature like the C<zpaq ox> command that speeds up
+decompression of archives compressed with other ZPAQ compatible
+programs (like I<zpaq> or future versions of I<pzpaq>). For the
+built in compression levels, B<-1>, B<-2>, and B<-3>,
+I<pzpaq> will recognize the compression level from the block header
+and execute optimized code rather than interpret the instructions.
+This is typically twice as fast.
+
+Depending on a compile time option, I<pzpaq> will either interpret the
+ZPAQL code from the archive block header of nonstandard compression
+levels or will generate and execute new
+optimized code to improve speed. The latter option generates
+C++ code and requires an external C++ compiler to compile it before
+it can be run.
+
+If optimized decompression is enabled, then the following files
+will typically be installed under Linux:
+
+    /usr/bin/pzpaq
+    /usr/lib/zpaq/pzpaq.o
+    /usr/lib/zpaq/libzpaq.o
+    /usr/include/libzpaq.h
+
+A Windows installation might be as follows, assuming F<c:\bin> were
+in one's PATH:
+
+    c:\bin\pzpaq.exe
+    c:\bin\zpaq\pzpaq.o
+    c:\bin\zpaq\libzpaq.o
+    c:\bin\zpaq\libzpaq.h
+
+The exact locations of these files will depend on a compile time
+option during installation. F<libzpaq.h> and F<pzpaqopt.o>
+are from libzpaq(3). F<pzpaq.o> is from I<pzpaq> with optimization
+disabled. F<pzpaq> optimization is enabled by compiling with B<-DOPT>
+set to a command to compile C<$1.cpp> to C<$1.exe> such that it includes the
+given header file and links to the two object files.
+
+    g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp -lpthread -o pzpaq \
+      -DOPT="\"g++ -O3 \$1.cpp /usr/lib/zpaq/pzpaq.o /usr/lib/zpaq/libzpaq.o -lpthread -o \$1.exe\""
+    g++ -O3 -DNDEBUG -c libzpaq.cpp
+    g++ -O3 -DNDEBUG -c pzpaq.cpp
+
+Note that pzpaq is I<not> built from F<pzpaq.o>.
+
+The Windows version might be built:
+
+    -DOPT="\"g++ -O3 $1.cpp c:\\bin\\zpaq\\pzpaq.o c:\\bin\\zpaq\\libzpaq.o -Ic:\\bin\\zpaq -o $1.exe\""
+
+In either case, all instances of B<-O3> should be replaced with
+appropriate local optimizations. The following are usually appropriate:
+
+    -O3 -march=native -fomit-frame-pointer -s
+
+B<-DNDEBUG> turns off run time checks for better speed, but this has
+no effect on B<$1.cpp> so it may be omitted in B<-DOPT>.
+
+The B<-h> option will show whether decompression optimization is
+enabled, and if so, the value of B<OPT>. When enabled and the decompressor
+detects an archive compressed with a nonstandard level, it will
+generate a source code file F<$1.cpp> where each instance of
+F<$1> in B<OPT> is replaced with a temporary filename,
+delete F<$1.exe>, execute B<OPT> as a shell command, then test
+whether F<$1.exe> exists, indicating that compilation succeeded.
+If so, then F<$1.exe> is a program that decompresses equivalently
+to I<pzpaq> except faster. I<pzpaq> then passes its arguments
+to F<$1.exe>, executes it, and deletes the two files F<$1.cpp>
+and F<$1.exe>. If compilation fails, then I<pzpaq> falls back
+to decompressing the archive by the slower method of interpreting
+the archive header. The source file is not deleted in this
+case.
+
+The temporary file base B<$1> has the form C<pzpaqtmp>I<pid>C<_0>
+where I<pid> is the process ID. This prevents file collisions
+if more than one instance of I<pzpaq> is run at the same time.
+The files are placed in the temporary directory depending on
+the environment variables B<TMPDIR> and then B<TEMP>, or F</tmp>
+if neither is set.
+
+=head2 Parallel Compression
+
+I<pzpaq> compresses and decompresses in parallel by dividing
+the input into independent blocks. For each output file,
+the first block is output directly and all other blocks
+are written to temporary files. When all threads have finished,
+the temporary files are concatenated to the appropriately named
+output files and deleted.
+
+Temporary filenames have the form C<pzpaqtmp>I<pid>C<_>I<n>
+where I<pid> is the process ID and I<n> is the file number,
+1 or higher. They are placed in the temporary directory
+determined by B<TMPDIR>, then B<TEMP>, or F</tmp> if neither
+is set.
+
+Specifying more threads with B<-t> than there are processor
+cores does not run any faster. Speedup may be less than linear
+because threads compete for cache and memory even if they run
+on separate processors. Also, some processors may reduce clock
+speed depending on the number of cores in use
+to regulate temperature or power consumption.
+
+Specifying more threads with B<-t> increases memory consumption.
+The B<-m> option limits memory usage by limiting the number of threads.
+When compressing with level B<-3>, each thread requires 247 MB.
+The default B<-m500> allows 2 threads. However, archives
+produced with other programs could require arbitrarily large
+memory. If a single thread would exceed B<-m>, it would run anyway.
+
+The default block size depends on B<-t>. A larger B<-t> means
+a smaller default block size. Generally, smaller
+blocks make compression worse. You can override the default
+with B<-b>. However, using a smaller block will make compression
+worse with no increase in speed, and using a larger block will
+compress slower.
+
+B<-b> may still be useful because decompression
+speed depends on the number of input blocks chosen during compression.
+For example, it may be useful to choose a smaller block size when
+compressing a lot of files at once so that individual files can
+be split into blocks so they can be decompressed faster.
+
+The Windows version is limited to B<-t64> due to a limitation of
+C<WaitOnMultipleObjects()> waiting for worker threads to finish.
+The Linux version does not have this limitation. It uses the I<pthread>
+library and uses condition variables to signal the main thread
+when a worker thread finishes. The limitation in Windows can
+be removed by compiling with B<-DPTHREAD> and linking with the
+Windows version of the I<pthread> library (see I<availability>).
+
+B<-DPTHREAD> is implied by B<-Dunix>, which is normally defined
+automatically in Linux but not Windows. If not defined,
+Windows is assumed.
 
 =head1 EXAMPLE
 
@@ -379,6 +539,9 @@ Probably others.
 I<pzpaq>, I<libzpaq>,
 and the ZPAQ level 1 standard specification and reference
 decoder are available at L<http://mattmahoney.net/dc/zpaq.html>.
+
+A Windows version of the pthreads library is available from
+L<http://sourceware.org/pthreads-win32/>.
 
 =head1 AUTHORS
 

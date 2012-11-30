@@ -1,4 +1,4 @@
-/* pzpaq.cpp v0.04 - Parallel ZPAQ compressor
+/* pzpaq.cpp v0.05 - Parallel ZPAQ compressor
 
 (C) 2011, Dell Inc. Written by Matt Mahoney
 
@@ -37,15 +37,16 @@ Or to compile in Windows:
 
   g++ -O3 -DNDEBUG pzpaq.cpp libzpaq.cpp libzpaqo.cpp
 
-Version 0.03 and higher will speed up decompression of archives created
+pzpaq will speed up decompression of archives created
 with non-default compression (other than levels -1 -2 -3 created by
-other programs) by translating the headers to pzpaqopt.cpp,
-compiling with g++ to pzpaqopt.exe, and running it with the same arguments.
+other programs) by translating the headers to C++, compiling with g++,
+linking to a copy of itself, and running it with the same arguments.
 This feature is disabled by default. It will still work, but more slowly.
 To enable this feature, compile with -DOPT="..." option, where the value
-is a command string to create pzpaqopt.exe. For example:
+is a command string to compile $1.cpp to $1.exe. pzpaq will replace "$1"
+with an appropriate file name in a temporary directory. For example:
 
-  -DOPT="\"g++ -O3 pzpaqopt.cpp pzpaq.o libzpaq.o -lpthread -o pzpaqopt.exe\""
+  -DOPT="\"g++ -O3 $1.cpp pzpaq.o libzpaq.o -lpthread -o $1.exe\""
 
 plus -I and -L or full paths as appropriate depending on where you put
 the .o files, libzpaq.h, and pthread files. pzpaq.o and libzpaq.o should
@@ -90,6 +91,7 @@ v0.01 - initial release.
 v0.02 - fix >2GB file handling for Windows.
 v0.03 - adds decompression optimization for nonstandard compression levels.
 v0.04 - native thread support in Windows, no longer needs pthread-win32.
+v0.05 - temporary files go in $TMPDIR, %TEMP%, or /tmp. Removed -s option.
 
 */
 
@@ -126,7 +128,7 @@ v0.04 - native thread support in Windows, no longer needs pthread-win32.
 
 void usage() {
   fprintf(stderr,
-  "pzpaq 0.04 - Parallel ZPAQ compressor\n"
+  "pzpaq 0.05 - Parallel ZPAQ compressor\n"
   "(C) 2011, Dell Inc. Written by Matt Mahoney\n"
   "This is free software under GPL v3. http://www.gnu.org/copyleft/gpl.html\n"
   "\n"
@@ -142,7 +144,6 @@ void usage() {
   "-k    Keep (don't delete) input files\n"
   "-l    List compressed file contents\n"
   "-mN   Memory limit of N MB (default -m500)\n"
-  "-sS   Suffix S1,S2... for temporary files (default -s.tmp)\n"
   "-tN   (De)compress blocks in parallel using N Threads (default -t2)\n"
   "-v    Verbose\n"
   "-x    Extract to original directory using saved paths, keep input files\n"
@@ -207,7 +208,6 @@ int bopt=-1;         // -b block size, 0 = infinite, -1 = default size/topt
 bool copt=false;     // -c (output to stdout)
 bool kopt=false;     // -k (keep input files)
 int mopt=500;        // -m memory limit in MB
-const char* sopt=".tmp";  // -s (temp file extension)
 int topt=2;          // -t, at least 1 (number of threads)
 bool verbose=false;  // -v
 
@@ -239,6 +239,7 @@ struct Job {
   State state;        // job state, protected by mutex
   std::vector<FileSize> input;  // list of files to input
   std::string output; // output file, "" for stdout, saved names override
+  int id;             // temporary output file name or 0 if none
   int64_t start;      // where to start input of first file
   int memory;         // how much memory is needed in MB (for scheduler)
   int part;           // position in sequence for concatenation, 0=first
@@ -248,14 +249,15 @@ struct Job {
 };
 
 // Initialize
-Job::Job(): state(READY), start(0), memory(0), part(0) {
+Job::Job(): state(READY), id(0), start(0), memory(0), part(0) {
   // tid is not initialized until state==RUNNING
 }
 
 // Print contents
 void Job::print(int i=0) const {
-  fprintf(stderr, "Job %d: state=%d start=%1.0f memory=%d part=%d output=%s\n",
-       i, state, double(start), memory, part, output.c_str());
+  fprintf(stderr,
+      "Job %d: state=%d start=%1.0f memory=%d part=%d output=%s id=%d\n",
+       i, state, double(start), memory, part, output.c_str(), id);
   for (int j=0; j<size(input); ++j)
     fprintf(stderr, "  %s %1.0f\n", input[j].filename, double(input[j].size));
 }
@@ -320,6 +322,24 @@ std::string itos(int64_t x) {
   return s;
 }
 
+// Test if filename is readable
+bool exists(const char* filename) {
+  FILE* in=fopen(filename, "rb");
+  if (in) {
+    fclose(in);
+    return true;
+  }
+  else
+    return false;
+}
+
+// Delete a file
+void delete_file(const char* filename) {
+  if (verbose && exists(filename))
+    fprintf(stderr, "Deleting %s\n", filename);
+  remove(filename);
+}
+
 // Append file2 to file1 and delete file2. Return true if the append
 // is successful. "" means stdout, stdin.
 bool append(const char* file1, const char* file2) {
@@ -344,10 +364,48 @@ bool append(const char* file1, const char* file2) {
   while ((n=fread(buf, 1, BUFSIZE, in))>0)
     fwrite(buf, 1, n, out);
   if (out!=stdout) fclose(out);
-  if (in!=stdin) fclose(in);
-  if (in!=stdin && remove(file2))
-    perror(file2);
+  if (in!=stdin) {
+    fclose(in);
+    delete_file(file2);
+  }
   return true;
+}
+
+// Return '/' in Linux or '\' in Windows
+char slash() {
+#ifdef unix
+  return '/';
+#else
+  return '\\';
+#endif
+}
+
+// Construct a temporary file name
+std::string tempname(int id) {
+
+  // Get temporary directory
+  std::string result;
+  const char* env=getenv("TMPDIR");
+  if (!env) env=getenv("TEMP");
+  if (!env) env="/tmp";
+  result=env;
+  if (size(result)<1 || result[size(result)-1]!=slash())
+    result+=slash();
+
+  // Append base name
+  result+="pzpaqtmp";
+
+  // Append process ID
+#ifdef unix
+  result+=itos(getpid());
+#else
+  result+=itos(GetCurrentProcessId());
+#endif
+
+  // Append id
+  result+="_";
+  result+=itos(id);
+  return result;
 }
 
 /////////////////////////// optimize ///////////////////////
@@ -371,46 +429,11 @@ int get2(const std::string& models, int p) {
   return (models[p]&255)+256*(models[p+1]&255);
 }
 
-// Test if filename is readable
-bool exists(const char* filename) {
-  FILE* in=fopen(filename, "rb");
-  if (in) {
-    fclose(in);
-    return true;
-  }
-  else
-    return false;
-}
-
-// Test if a file exists and exit with error if not
-void testfile(const char* filename) {
-  if (!exists(filename)) {
-    fprintf(stderr, "File not found: %s\n", filename);
-    exit(1);
-  }
-}
-
-// Delete a file
-void delete_file(const char* filename) {
-  if (verbose && exists(filename))
-    fprintf(stderr, "Deleting %s\n", filename);
-  unlink(filename);
-}
-
 // Print and run a command
 int run_cmd(const std::string& cmd) {
   if (verbose)
     fprintf(stderr, "%s\n", cmd.c_str());
   return system(cmd.c_str());
-}
-
-// Return '/' in Linux or '\' in Windows
-char slash() {
-#ifdef unix
-  return '/';
-#else
-  return '\\';
-#endif
 }
 
 typedef enum {NONE,CONS,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE,
@@ -1035,13 +1058,18 @@ void dump(FILE* out, const std::string& models, int p, int n) {
 // Then compile and run it with argc, argv
 void optimize(const std::string& models, int argc, char** argv) {
 
+  // Get file name
+  std::string basename=tempname(0);
+  std::string sourcefile=basename+".cpp";
+  std::string exefile=basename+".exe";
+
   // Open output file
-  FILE* out=fopen("pzpaqopt.cpp", "w");
-  if (!out) perror("pzpaqopt.cpp"), exit(1);
+  FILE* out=fopen(sourcefile.c_str(), "w");
+  if (!out) perror(sourcefile.c_str()), exit(1);
 
   // Print models[]
   fprintf(out,
-  "// pzpaqopt.cpp generated by pzpaq\n"
+  "// generated by pzpaq\n"
   "\n"
   "#include \"libzpaq.h\"\n"
   "namespace libzpaq {\n"
@@ -1110,35 +1138,49 @@ void optimize(const std::string& models, int argc, char** argv) {
 
   // Close output and make sure it exists
   fclose(out);
-  testfile("pzpaqopt.cpp");
   if (verbose)
-    fprintf(stderr, "Created pzpaqopt.cpp\n");
+    fprintf(stderr, "Created %s\n", sourcefile.c_str());
+
+  // Construct command by replacing "$1" with basename
+  const char* opt=OPT;
+  std::string command;
+  for (int i=0; opt[i]; ++i) {
+    if (opt[i]=='$' && opt[i+1]=='1') {
+      command+=basename;
+      ++i;
+    }
+    else
+      command+=opt[i];
+  }
 
   // Compile
-  unlink("pzpaqopt.exe");
-  run_cmd(OPT);
+  delete_file(exefile.c_str());
+  run_cmd(command.c_str());
+
+  // If compile failed, then run unoptimized
+  if (!exists(exefile.c_str())) {
+    if (verbose) fprintf(stderr, "Compile failed, skipping...\n");
+    return;
+  }
 
   // Run it
-  testfile("pzpaqopt.exe");
-  std::string command=".";
-  command+=slash();
-  command+="pzpaqopt.exe";
+  command=exefile;
   for (int i=1; i<argc; ++i) {
     command+=" ";
     command+=argv[i];
   }
   run_cmd(command);
 
-  // Clean up and quit
-  delete_file("pzpaqopt.exe");
-  delete_file("pzpaqopt.cpp");
-  delete_file("pzpaqopt.obj");
-  delete_file("pzpaqopt.map");
-  delete_file("pzpaqopt.tds");
+  // Clean up
+  delete_file((basename+".obj").c_str());
+  delete_file(exefile.c_str());
+  delete_file(sourcefile.c_str());
   exit(0);
 }
 
 #endif // ifdef OPT
+
+/////////////////// decompress, compress, list ////////////////////////
 
 // Decompress. The input is a list of files to decompress,
 // a size for each, an output file name, and a starting offset for
@@ -1178,7 +1220,7 @@ void decompress(const Job& job) {
     libzpaq::Decompresser d;
     d.setInput(&in);
     std::string output=job.output;
-    if (job.part) output+=sopt+itos(job.part);
+    if (job.part) output=tempname(job.id);
     File out(0);
     while (d.findBlock()) {
       StringWriter filename, comment;
@@ -1259,8 +1301,9 @@ void decompress(const Job& job) {
 void compress(const Job& job) {
 
   // Get output file name
-  std::string output=job.output;
-  if (job.part) output+=sopt+itos(job.part);
+  std::string output;
+  if (job.part) output=tempname(job.id);
+  else output=job.output;
 
   // Open output file
   libzpaq::Compressor c;
@@ -1410,6 +1453,8 @@ thread(void *arg) {
   return 0;
 }
 
+/////////////////////////////// main //////////////////////////////
+
 int main(int argc, char** argv) {
 
   // Start timer
@@ -1434,7 +1479,6 @@ int main(int argc, char** argv) {
           case 'c': copt=true; break;
           case 'k': kopt=true; break;
           case 'm': mopt=atoi(argv[i]+j+1); arg=true; break;
-          case 's': sopt=argv[i]+j+1; arg=true; break;
           case 't': topt=atoi(argv[i]+j+1); arg=true; break;
           case 'v': verbose=true; break;
           case '-': opt=false; break;
@@ -1505,8 +1549,8 @@ int main(int argc, char** argv) {
 
   // Print processed command line
   if (verbose) {
-    fprintf(stderr, "%s -%c -b%d %s %s -m%d -s%s -t%d -v",
-        argv[0], command, bopt, copt?"-c":"", kopt?"-k":"", mopt, sopt, topt);
+    fprintf(stderr, "%s -%c -b%d %s %s -m%d -t%d -v",
+        argv[0], command, bopt, copt?"-c":"", kopt?"-k":"", mopt, topt);
     for (int i=0; i<size(files); ++i)
       fprintf(stderr, " %s", files[i].filename);
     fprintf(stderr, "\n\n");
@@ -1536,7 +1580,7 @@ int main(int argc, char** argv) {
   // last named segment, with a path for -x or without for -e.
   // If no named segment, or names are ignored by -d then
   // job.output is derived by removing the .zpaq extension
-  // from the input filename, or appending sopt (.tmp) if there
+  // from the input filename, or appending .out if there
   // is no .zpaq extension, or is "" if -c or input is "" (stdin).
   // If OPT then build a list of models. If any non-default models
   // are found then generate and run pzpaqopt.
@@ -1565,13 +1609,13 @@ int main(int argc, char** argv) {
             perror(files[i].filename);
           else {
 
-            // Get initial output name by dropping .zpaq or adding .tmp
+            // Get initial output name by dropping .zpaq or adding .out
             if (!copt) {
               int l=strlen(files[i].filename);
               if (l>5 && !strcmp(files[i].filename+l-5, ".zpaq"))
                 output=std::string(files[i].filename).substr(0, l-5);
               else if (l>0)
-                output=std::string(files[i].filename)+sopt;
+                output=std::string(files[i].filename)+".out";
               if (command=='e')
                 output=strip(output);
             }
@@ -1698,10 +1742,11 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Print list of jobs
-  if (verbose) {
-    for (int i=0; i<size(jobs); ++i)
-      jobs[i].print(i);
+  // Assign job ids and print list of jobs
+  int id=0;
+  for (int i=0; i<size(jobs); ++i) {
+    if (jobs[i].part) jobs[i].id=++id;
+    if (verbose) jobs[i].print(i);
   }
 
   // Loop until all jobs return OK or ERR: start a job whenever one
@@ -1777,7 +1822,7 @@ int main(int argc, char** argv) {
         }
       }
 #else
-      // List of running jobs
+      // Make a list of running jobs and wait on one to finish
       HANDLE joblist[MAXIMUM_WAIT_OBJECTS];
       int jobptr[MAXIMUM_WAIT_OBJECTS];
       DWORD njobs=0;
@@ -1812,34 +1857,23 @@ int main(int argc, char** argv) {
   for (int i=0; i<size(jobs); ++i) {
     const int part=jobs[i].part;
     if (part>0 && part<=i) {
-      std::string tmp=jobs[i].output+sopt+itos(part);
+      std::string tmp=tempname(jobs[i].id);
       if (jobs[i].state==OK) {
         if (jobs[i-part].state==OK)
           append(jobs[i].output.c_str(), tmp.c_str());
-        else {
-          if (verbose)
-            fprintf(stderr, "Deleting %s\n", tmp.c_str());
-          if (remove(tmp.c_str()))
-            perror(tmp.c_str());
-        }
+        else
+          delete_file(tmp.c_str());
       }
     }
   }
 
   // Delete input files if there was no error in any output part
   if (!kopt) {
-    for (int i=0; i<size(jobs); ++i) {
-      if (jobs[i].state==OK) {
-        for (int j=0; j<size(jobs[i].input); ++j) {
-          if ((j>0 || jobs[i].start==0) && jobs[i].input[j].filename[0]) {
-            if (verbose)
-              fprintf(stderr, "Deleting %s\n", jobs[i].input[j].filename);
-            if (remove(jobs[i].input[j].filename))
-              perror(jobs[i].input[j].filename);
-          }
-        }
-      }
-    }
+    for (int i=0; i<size(jobs); ++i)
+      if (jobs[i].state==OK)
+        for (int j=0; j<size(jobs[i].input); ++j)
+          if ((j>0 || jobs[i].start==0) && jobs[i].input[j].filename[0])
+            delete_file(jobs[i].input[j].filename);
   }
 
   // Report unfinished jobs and time
