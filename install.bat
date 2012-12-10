@@ -5,7 +5,8 @@
 : Allowed compilers are g++.exe cl.exe bcc32.exe dmc.exe
 
 : Environment variables set here are local to the script
-setlocal
+setlocal EnableDelayedExpansion
+set CWD=%~dp0
 
 if "%2" == "" (
   echo To install ZPAQ in DIR: install DIR COMPILER
@@ -23,7 +24,7 @@ for %%i in (zpaq.cpp libzpaq.h libzpaq.cpp) do (
     goto :EOF
   )
 )
-
+goto skip_check_path
 : Make sure compiler is in PATH
 if "%~$PATH:2" == "" (
   echo %2 not found in PATH
@@ -32,7 +33,7 @@ if "%~$PATH:2" == "" (
 )  else (
   echo Installing for %~$PATH:2
 )
-
+:skip_check_path
 : Remove old installation
 del zpaq.exe libzpaq.o* zpaq.o* %1\zpaq.exe %1\zpaq\zpaq.o* %1\zpaq\libzpaq.o* %1\zpaq\libzpaq.h >nul: 2>&1
 
@@ -55,6 +56,7 @@ if not exist %1\zpaq\libzpaq.h (
   echo Could not install %1\zpaq\libzpaq.h
   goto :EOF
 )
+echo %Z%
 
 : Compile with g++
 if %2 == g++.exe (
@@ -65,9 +67,9 @@ if %2 == g++.exe (
 
 : Compile with Visual C++
 if %2 == cl.exe (
-  cl /Ox /GL /DNDEBUG /DOPT="\"cl /Ox /GL zpaqopt.cpp /I%Z%\\zpaq %Z%\\zpaq\\zpaq.obj %Z%\\zpaq\\libzpaq.obj\"" zpaq.cpp libzpaq.cpp libzpaqo.cpp
-  cl /Ox /GL /DNDEBUG /c zpaq.cpp libzpaq.cpp
-  del libzpaqo.obj
+  cl /Ox /GL /DNDEBUG /c divsufsort.c
+  cl /Ox /GL /DNDEBUG /I%CWD% zpaq.cpp libzpaq.cpp divsufsort.obj
+  del divsufsort.obj
 )
 
 : Compile with Borland
@@ -124,6 +126,8 @@ if exist %1\zpaq.exe (
   goto :EOF
 )
 
+goto skip_check_path2
+
 : Check if zpaq.exe is in PATH
 for %%I in (zpaq.exe) do (
   if "%%~$PATH:I" == "" (
@@ -133,3 +137,4 @@ for %%I in (zpaq.exe) do (
     echo %%~$PATH:I is in your PATH
   )
 )
+:skip_check_path2
