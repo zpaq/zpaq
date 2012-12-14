@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.16 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.17 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -712,28 +712,44 @@ string wtou(const wchar_t* s) {
   return r;
 }
 
-// In Windows, convert UTF-8 string to wide string and / to \ ignoring
-// invalid UTF-8 or >64K
-std::wstring utow(const char* ss) {
+// In Windows, convert UTF-8 string to wide string ignoring
+// invalid UTF-8 or >64K. If doslash then convert "/" to "\".
+std::wstring utow(const char* ss, bool doslash=false) {
   assert(sizeof(wchar_t)==2);
   assert((wchar_t)(-1)==65535);
   std::wstring r;
   if (!ss) return r;
   const unsigned char* s=(const unsigned char*)ss;
   for (; s && *s; ++s) {
-    if (s[0]=='/') r+='\\';
+    if (s[0]=='/' && doslash) r+='\\';
     else if (s[0]<128) r+=s[0];
     else if (s[0]>=192 && s[0]<224 && s[1]>=128 && s[1]<192)
       r+=(s[0]-192)*64+s[1]-128, ++s;
     else if (s[0]>=224 && s[0]<240 && s[1]>=128 && s[1]<192
              && s[2]>=128 && s[2]<192)
       r+=(s[0]-224)*4096+(s[1]-128)*64+s[2]-128, s+=2;
-    else
-      printf("unicode error s=%d %d %d %d\n", s[0], s[1], s[2], s[3]);
   }
   return r;
 }
 #endif
+
+// Print a UTF-8 string so it displays properly
+void printUTF8(const char* s, FILE* f=stdout) {
+  assert(f);
+  assert(s);
+#ifdef unix
+  fprintf(f, "%s", s);
+#else
+  const HANDLE h=(HANDLE)_get_osfhandle(_fileno(f));
+  if (h!=INVALID_HANDLE_VALUE && GetFileType(h)==FILE_TYPE_CHAR) {
+    std::wstring w=utow(s);  // Windows console: convert to UTF-16
+    DWORD n;
+    WriteConsole(h, w.c_str(), w.size(), &n, 0);
+  }
+  else  // stdout redirected to file
+    fprintf(f, "%s", s);
+#endif
+}
 
 // Convert 64 bit decimal YYYYMMDDHHMMSS to "YYYY-MM-DD HH:MM:SS"
 // where -1 = unknown date, 0 = deleted.
@@ -835,8 +851,8 @@ class InputFile: public File, public libzpaq::Reader {
 public:
   InputFile(): in(0), n(0) {}
 
-  // Open file for reading. Set key to k. Return true if successful
-  bool open(const char* filename, string k="") {
+  // Open file for reading. Return true if successful
+  bool open(const char* filename) {
     in=fopen(filename, "rb");
     if (!in) perror(filename);
     n=ptr=0;
@@ -888,8 +904,8 @@ public:
   // Return true if file is open
   bool isopen() {return test ? offset>=0 : out!=0;}
 
-  // Open for append/update or create if needed. Set key=k.
-  bool open(const char* filename, string k="") {
+  // Open for append/update or create if needed.
+  bool open(const char* filename) {
     assert(!isopen());
     ptr=0;
     this->filename=filename;
@@ -1000,18 +1016,19 @@ public:
 #else  // Windows
 
 // Print error message
-void winError(const std::wstring& filename) {
+void winError(const char* filename) {
   int err=GetLastError();
+  printUTF8(filename, stderr);
   if (err==ERROR_FILE_NOT_FOUND)
-    fwprintf(stderr, L"%s: file not found\n", filename.c_str());
+    fprintf(stderr, ": file not found\n");
   else if (err==ERROR_PATH_NOT_FOUND)
-    fwprintf(stderr, L"%s: path not found\n", filename.c_str());
+    fprintf(stderr, ": path not found\n");
   else if (err==ERROR_ACCESS_DENIED)
-    fwprintf(stderr, L"%s: access denied\n", filename.c_str());
+    fprintf(stderr, ": access denied\n");
   else if (err==ERROR_SHARING_VIOLATION)
-    fwprintf(stderr, L"%s: sharing violation\n", filename.c_str());
+    fprintf(stderr, ": sharing violation\n");
   else
-    fwprintf(stderr, L"%s: Windows error %d\n", filename.c_str(), err);
+    fprintf(stderr, ": Windows error %d\n", err);
 }
 
 class InputFile: public File, public libzpaq::Reader {
@@ -1021,14 +1038,14 @@ public:
   InputFile():
     in(INVALID_HANDLE_VALUE), n(0) {}
 
-  // Open for reading. Set key to k. Return true if successful
+  // Open for reading. Return true if successful
   bool open(const char* filename) {
     assert(in==INVALID_HANDLE_VALUE);
     n=ptr=0;
-    std::wstring w=utow(filename);
+    std::wstring w=utow(filename, true);
     in=CreateFile(w.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (in==INVALID_HANDLE_VALUE) winError(w);
+    if (in==INVALID_HANDLE_VALUE) winError(filename);
     return in!=INVALID_HANDLE_VALUE;
   }
 
@@ -1087,16 +1104,16 @@ public:
     return test ? offset>=0 : out!=INVALID_HANDLE_VALUE;
   }
 
-  // Open file ready to update or append, create if needed. Set key to k.
+  // Open file ready to update or append, create if needed.
   bool open(const char* filename_) {
     assert(!isopen());
     ptr=0;
-    filename=utow(filename_);
+    filename=utow(filename_, true);
     if (test) offset=0;
     else {
       out=CreateFile(filename.c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
                      FILE_ATTRIBUTE_NORMAL, NULL);
-      if (out==INVALID_HANDLE_VALUE) winError(filename);
+      if (out==INVALID_HANDLE_VALUE) winError(filename_);
       else SetFilePointer(out, 0, NULL, FILE_END);
     }
     return isopen();
@@ -1553,7 +1570,7 @@ private:
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.16 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.17 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ... (may be abbreviated)\n"
@@ -1572,7 +1589,7 @@ void Jidac::usage() {
   "  -to E...                   Extract F... to E...\n"
   "  -force                     Overwrite existing files\n"
   "-not F...                    Do not add/extract/list\n"
-  "-version N                   Roll back archive (default: latest)\n"
+  "-version N                   Roll back archive to first N updates\n"
   "-quiet                       Display only errors and warnings\n"
   "-threads %-4d                Default shown is cores detected\n"
   "-test                        Don't -add or -extract to disk\n"
@@ -1740,13 +1757,21 @@ int64_t Jidac::read_archive() {
   InputFile in;
   if (!in.open(archive.c_str())) {
     if (command=="-add") {
-      if (!quiet) printf("Creating new archive %s\n", archive.c_str());
+      if (!quiet) {
+        printf("Creating new archive ");
+        printUTF8(archive.c_str());
+        printf("\n");
+      }
       return 0;
     }
     else
       exit(1);
   }
-  if (!quiet) printf("Reading archive %s\n", archive.c_str());
+  if (!quiet) {
+    printf("Reading archive ");
+    printUTF8(archive.c_str());
+    printf("\n");
+  }
 
   // Scan archive contents
   libzpaq::Decompresser d;
@@ -3170,9 +3195,11 @@ void Jidac::add() {
     StringWriter pcomp_cmd;
     OutputFile out;
     if (!out.open(archive.c_str())) return;
-    if (!quiet)
-      printf("Appending archive %s at %1.0f\n",
-             archive.c_str(), double(out.tell()));
+    if (!quiet) {
+      printf("Appending archive ");
+      printUTF8(archive.c_str());
+      printf(" at %1.0f\n", double(out.tell()));
+    }
     co.setOutput(&out);
     if (mode==SOLID) co.writeTag();
     co.startBlock(method.c_str(), args, &pcomp_cmd);
@@ -3211,15 +3238,19 @@ void Jidac::add() {
         (itos(sz)+" "+dateToString(p->second.edate)).c_str() : 0);
       co.setInput(&in);
       while (co.compress(100000)) {
-        if (!quiet)
-          printf("%s %1.0f -> %1.0f\r", p->first.c_str(), double(in.tell()),
-               double(out.tell()-offset));
+        if (!quiet) {
+          printUTF8(p->first.c_str());
+          printf(" %1.0f -> %1.0f\r",
+                 double(in.tell()), double(out.tell()-offset));
+        }
         fflush(stdout);
       }
       co.endSegment(mode==SOLID ? sha1result : 0);
-      if (!quiet)
-        printf("%s %1.0f -> %1.0f -> %1.0f  \n", p->first.c_str(), double(sz),
+      if (!quiet) {
+        printUTF8(p->first.c_str());
+        printf(" %1.0f -> %1.0f -> %1.0f  \n", double(sz),
              double(in.tell()), double(out.tell()-offset));
+      }
       in.close();
       offset=out.tell();
 
@@ -3252,12 +3283,16 @@ void Jidac::add() {
   HTIndex htinv(ht);
 
   // Open archive to append
-  if (!quiet) printf("Appending to archive %s\n", archive.c_str());
+  if (!quiet) {
+    printf("Appending to archive ");
+    printUTF8(archive.c_str());
+    printf("\n");
+  }
   OutputFile out;
   if (!out.open(archive.c_str())) exit(1);
   int64_t archive_size=out.tell();
   if (mode!=JIDAC) header_pos=archive_size;
-  if (archive_size!=header_pos) {
+  if (archive_size>header_pos) {
     if (!quiet)
       printf("Archive truncated from %1.0f to %1.0f bytes\n",
              double(archive_size), double(header_pos));
@@ -3288,8 +3323,11 @@ void Jidac::add() {
       // Add directory in JIDAC mode
       string filename=rename(p->first);
       if (filename!="" && filename[filename.size()-1]=='/') {
-        if (mode==JIDAC && !quiet)
-          printf("Adding directory %s\n", p->first.c_str());
+        if (mode==JIDAC && !quiet) {
+          printf("Adding directory ");
+          printUTF8(p->first.c_str());
+          printf("\n");
+        }
         continue;
       }
 
@@ -3300,14 +3338,18 @@ void Jidac::add() {
         continue;
       }
       else if (!quiet) {
-        if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
-          printf("Adding %1.0f %s", double(p->second.esize),
-                 p->first.c_str());
-        else
-          printf("Updating %1.0f %s", double(p->second.esize),
-                 p->first.c_str());
-        if (p->first!=filename)
-          printf(" from %s", filename.c_str());
+        if (p->second.dtv.size()==0 || p->second.dtv.back().date==0) {
+          printf("Adding %1.0f ", double(p->second.esize));
+          printUTF8(p->first.c_str());
+        }
+        else {
+          printf("Updating %1.0f ", double(p->second.esize));
+          printUTF8(p->first.c_str());
+        }
+        if (p->first!=filename) {
+          printf(" from ");
+          printUTF8(filename.c_str());
+        }
         printf("\n");
       }
 
@@ -3439,7 +3481,11 @@ void Jidac::add() {
     // Remove file if external does not exist
     if (dtr.written==0 && !dtr.edate) {
       is+=ltob(0)+p->first+'\0';
-      if (!quiet) printf("Removing %s\n", p->first.c_str());
+      if (!quiet) {
+        printf("Removing ");
+        printUTF8(p->first.c_str());
+        printf("\n");
+      }
     }
 
     // Update file if compressed and anything differs
@@ -3512,7 +3558,11 @@ void makepath(string& path) {
 #else
       int ok=test ? false : CreateDirectory(utow(path.c_str()).c_str(), 0);
 #endif
-      if (ok && !quiet) printf("Created directory %s\n", path.c_str());
+      if (ok && !quiet) {
+        printf("Created directory ");
+        printUTF8(path.c_str());
+        printf("\n");
+      }
       path[i]='/';
     }
   }
@@ -3669,8 +3719,11 @@ ThreadReturn decompressThread(void* arg) {
           filename=job.jd.rename(p->first);
           if (dtr.written==0) {
             makepath(filename);
-            if (!quiet)
-              printf("Job %d: extracting %s\n", jobNumber, filename.c_str());
+            if (!quiet) {
+              printf("Job %d: extracting ", jobNumber);
+              printUTF8(filename.c_str());
+              printf("\n");
+            }
             if (job.outf.open(filename.c_str()))  // create new file
               job.outf.truncate();
           }
@@ -3757,7 +3810,9 @@ void Jidac::extract() {
         && p->second.written==0) {
       if (!force) {
         if (exists(rename(p->first))) {
-          fprintf(stderr, "File exists: %s\n", rename(p->first).c_str());
+          fprintf(stderr, "File exists: ");
+          printUTF8(rename(p->first).c_str(), stderr);
+          fprintf(stderr, "\n");
           error("won't clobber existing files without -force");
         }
       }
@@ -3819,7 +3874,11 @@ void Jidac::extract() {
           newfile=rename(lastfile);
           makepath(newfile);
           if (out.open(newfile.c_str())) {
-            if (!quiet) printf("main: extracting %s\n", newfile.c_str());
+            if (!quiet) {
+              printf("main: extracting ");
+              printUTF8(newfile.c_str());
+              printf("\n");
+            }
             out.truncate(0);
           }
         }
@@ -3937,7 +3996,9 @@ void Jidac::list() {
   if (detailed) {
     InputFile in;
     if (!in.open(archive.c_str())) return;
-    printf("Archive %s\n", archive.c_str());
+    printf("Archive ");
+    printUTF8(archive.c_str());
+    printf("\n");
     libzpaq::Decompresser d;
     d.setInput(&in);
     double mem;
@@ -3982,8 +4043,10 @@ void Jidac::list() {
             if (sha1result[0]) printf("%02x", sha1result[i+1]&255);
             else printf("  ");
           }
-          printf(" %s %s -> %1.0f\n", filename.s.c_str(), comment.s.c_str(),
-                 double(in.tell()-offset));
+          printf(" ");
+          printUTF8(filename.s.c_str());
+          printf(" %s -> %1.0f\n",
+                 comment.s.c_str(), double(in.tell()-offset));
           offset=in.tell();
 
           // Display JIDAC index blocks
@@ -4007,7 +4070,8 @@ void Jidac::list() {
               while (p<end-8) {
                 const int64_t fdate=btol(p);
                 printf("  %14.0f ", double(fdate));
-                while (p<end && *p) putchar(*p++);  // filename
+                printUTF8(p);
+                while (p<end && *p) ++p;  // skip filename
                 ++p;
                 if (fdate) {
                   putchar(' ');
@@ -4101,9 +4165,12 @@ void Jidac::list() {
     int i=1;
     for (map<int64_t, vector<string> >::const_iterator p=st.begin();
          p!=st.end() && i<=summary; ++p) {
-      for (unsigned j=0; i<=summary && j<p->second.size(); ++i, ++j)
-        printf("%4d %14.6f %9d %s\n", i, (-p->first)/1000000.0,
-               top[p->second[j].c_str()].count, p->second[j].c_str());
+      for (unsigned j=0; i<=summary && j<p->second.size(); ++i, ++j) {
+        printf("%4d %14.6f %9d ", i, (-p->first)/1000000.0,
+               top[p->second[j].c_str()].count);
+        printUTF8(p->second[j].c_str());
+        printf("\n");
+      }
     }
 
     // Report block and fragment usage statistics
@@ -4173,15 +4240,19 @@ void Jidac::list() {
       if (ver[i].date)
         ver[i].print(i, i<size(ver)-1 ? ver[i+1].offset : csize);
       for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
-        if (p->second.written==0)
-          for (unsigned j=0; j<p->second.dtv.size(); ++j)
-            if (p->second.dtv[j].version==i)
-              printf("%c %s %s %12.0f %s\n",
+        if (p->second.written==0) {
+          for (unsigned j=0; j<p->second.dtv.size(); ++j) {
+            if (p->second.dtv[j].version==i) {
+              printf("%c %s %s %12.0f ",
                     p->second.dtv[j].date ? '+' : '-',
                     dateToString(p->second.dtv[j].date).c_str(),
                     attrToString(p->second.dtv[j].attr).c_str(),
-                    double(p->second.dtv[j].size),
-                    p->first.c_str());
+                    double(p->second.dtv[j].size));
+              printUTF8(p->first.c_str());
+              printf("\n");
+            }
+          }
+        }
       }
       printf("\n");
     }
@@ -4195,18 +4266,22 @@ void Jidac::list() {
     for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
       if (p->second.written==0 && (p->second.dtv.size()==0
           || p->second.dtv.back().date!=p->second.edate)) {
-        if (p->second.dtv.size() && p->second.dtv.back().date)
-          printf("- %s %s %12.0f %s\n",
+        if (p->second.dtv.size() && p->second.dtv.back().date) {
+          printf("- %s %s %12.0f ",
                 dateToString(p->second.dtv.back().date).c_str(),
                 attrToString(p->second.dtv.back().attr).c_str(),
-                double(p->second.dtv.back().size),
-                p->first.c_str());
-        if (p->second.edate)
-          printf("+ %s %s %12.0f %s\n",
+                double(p->second.dtv.back().size));
+          printUTF8(p->first.c_str());
+          printf("\n");
+        }
+        if (p->second.edate) {
+          printf("+ %s %s %12.0f ",
                  dateToString(p->second.edate).c_str(),
                  attrToString(p->second.eattr).c_str(),
-                 double(p->second.esize),
-                 rename(p->first).c_str());
+                 double(p->second.esize));
+          printUTF8(rename(p->first).c_str());
+          printf("\n");
+        }
       }
     }
     return;
@@ -4222,11 +4297,12 @@ void Jidac::list() {
         && p->second.dtv.back().date) {
       ++nfiles;
       usize+=p->second.dtv.back().size;
-      printf("%s %s %12.0f %s\n",
+      printf("%s %s %12.0f ",
              dateToString(p->second.dtv.back().date).c_str(),
              attrToString(p->second.dtv.back().attr).c_str(),
-             double(p->second.dtv.back().size),
-             p->first.c_str());
+             double(p->second.dtv.back().size));
+      printUTF8(p->first.c_str());
+      printf("\n");
     }
   }
   printf("%u files. %1.0f -> %1.0f\n",
