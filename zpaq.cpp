@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.17 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.18 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2012, Dell Inc. Written by Matt Mahoney.
 
@@ -1114,7 +1114,10 @@ public:
       out=CreateFile(filename.c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
                      FILE_ATTRIBUTE_NORMAL, NULL);
       if (out==INVALID_HANDLE_VALUE) winError(filename_);
-      else SetFilePointer(out, 0, NULL, FILE_END);
+      else {
+        LONG hi=0;
+        SetFilePointer(out, 0, &hi, FILE_END);
+      }
     }
     return isopen();
   }
@@ -1570,7 +1573,7 @@ private:
 
 void Jidac::usage() {
   printf(
-  "zpaq 6.17 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.18 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: zpaq -options ... (may be abbreviated)\n"
@@ -3292,7 +3295,7 @@ void Jidac::add() {
   if (!out.open(archive.c_str())) exit(1);
   int64_t archive_size=out.tell();
   if (mode!=JIDAC) header_pos=archive_size;
-  if (archive_size>header_pos) {
+  if (archive_size!=header_pos) {
     if (!quiet)
       printf("Archive truncated from %1.0f to %1.0f bytes\n",
              double(archive_size), double(header_pos));
