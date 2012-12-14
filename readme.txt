@@ -1,10 +1,9 @@
-zpaq v6.16 archiver, Nov. 5, 2012. Contents:
+zpaq v6.17 archiver, Dec. 13, 2012. Contents:
 
 zpaq.exe      32 bit Windows executable, run from a command window.
-zpaq64.exe    64 bit Windows executable (added Nov. 6, 2012).
 zpaq.cpp      User's guide and source code.
-libzpaq.h     libzpaq API documentation and header v6.00a.
-libzpaq.cpp   libzpaq API source code v6.01.
+libzpaq.h     libzpaq API documentation and header v6.17.
+libzpaq.cpp   libzpaq API source code v6.17.
 divsufsort.h  libdivsufsoft-lite header.
 divsofsort.c  libdivsufsort-lite source code.
 

@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.00a header - July 27, 2012.
+/* libzpaq.h - LIBZPAQ Version 6.17 header - Dec. 13, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -573,7 +573,7 @@ private:
   void init();      // reset, but don't clear hbuf
   U32 len0, len1;   // length in bits (low, high)
   U32 h[5];         // hash state
-  U32 w[80];        // input buffer
+  U32 w[16];        // input buffer
   char hbuf[20];    // result
   void process();   // hash 1 block
 };
