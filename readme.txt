@@ -1,49 +1,55 @@
-zpaq v6.18 archiver, Dec. 14, 2012. Contents:
+zpaq v6.19, Jan. 22, 2013. Contents:
 
-zpaq.exe      32 bit Windows executable, run from a command window.
-zpaq.cpp      User's guide and source code.
-libzpaq.h     libzpaq API documentation and header v6.17.
-libzpaq.cpp   libzpaq API source code v6.17.
+zpaq.exe      Archiver, 32 bit Windows command line executable.
+zpaqd.exe     Development tool, 32 bit Windows command line executable.
+zpaq.cpp      zpaq user's guide and source code.
+zpaqd.cpp     zpaqd user's guide and source code.
+libzpaq.h     libzpaq API documentation and header v6.19.
+libzpaq.cpp   libzpaq API source code v6.19.
 divsufsort.h  libdivsufsoft-lite header.
 divsofsort.c  libdivsufsort-lite source code.
 
+All versions of this software can be found at
+http://mattmahoney.net/dc/zpaq.html
+Please report bugs to Matt Mahoney at mattmahoneyfl@gmail.com
+
 zpaq is (C) 2012, Dell Inc., written by Matt Mahoney.
 Licensed under GPL v3. http://www.gnu.org/copyleft/gpl.html
+zpaq is a journaling archiver optimized for user-level incremental
+backup of directory trees. It supports 4 multi-threaded compression
+levels and file-fragment level deduplication. It adds only files whose
+date has changed, and keeps both old and new versions. You can roll
+back the archive date to restore from old versions of the archive.
+The default compression level is faster than zip usually with better
+compression.
 
-libzpaq is an API providing compression and decompression services
-for developers. See libzpaq.h for documentation. It is public domain.
+zpaqd is written by Matt Mahoney and released to the public domain.
+It is a tool for developing, testing, and debugging new compression
+algorithms in the ZPAQ format. A ZPAQ archive is self-describing so that
+older decompressers can read archives produced by newer versions of
+the compressor when they use improved algorithms. Compression algorithms
+are described in configuration files written in the ZPAQL language
+described in libzpaq.h. The ZPAQ archive format is described in the
+specification at http://mattmahoney.net/dc/zpaq201.pdf
+
+libzpaq is written by Matt Mahoney and released to the public domain.
+It is an API providing compression and decompression services
+for developers. See libzpaq.h for documentation. It is needed to
+compile zpaq and zpaqd.
 
 libdivsufsort-lite v2.00 is (C) 2003-2008, Yuta Mori under the MIT open
 source license (see source code). It is mirrored from 
 http://code.google.com/p/libdivsufsort/ for your convenience.
-It and libzpaq are needed to compile zpaq.
+It is needed to compile zpaq.
 
-zpaq is journaling: when you add files and directories, it keeps both
-the old and new versions. You can roll it back to an earlier version.
-It is incremental: only files whose dates have changed are added. It is
-deduplicating: identical files and fragments are saved only once.
-Speed is similar to zip but with better compression. For example, a disk
-backup:
-
-  zpaq -add e:backup.zpaq c:\* -not c:\windows
-
-will take a couple hours to compress 100 GB the first time, then a couple
-minutes for subsequent backups each night. To list version dates:
-
-  zpaq -list e:backup.zpaq -summary
-
-To recover a copy of an old version of a directory:
-
-  zpaq -extract e:backup.zpaq c:\users\bob -to tmp\bob -version 5
-
-Command line documentation is in zpaq.cpp.
-If you find a bug, please let me know at mattmahoneyfl@gmail.com.
-All zpaq versions can be found at http://mattmahoney.net/zpaq
-
-zpaq.exe was compiled with MinGW g++ 4.7.0 and compressed with
-upx 3.06w as follows:
+zpaq.exe and zpaqd.exe were compiled with MinGW g++ 4.7.0 and compressed
+with upx 3.06w as follows:
 
   g++ -O3 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
-  upx zpaq.exe
+  g++ -O3 -s -static -Wall zpaqd.cpp libzpaq.cpp -o zpaqd
+  upx zpaq.exe zpaqd.exe
 
-To compile for Linux, include the options: -Dunix -fopenmp
+To compile zpaq for Linux, include the options: -Dunix -fopenmp
+To compile zpaqd for Linux, use -Dunix
+To compile either program for non-x86, use -DNOJIT
+
