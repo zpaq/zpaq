@@ -1,4 +1,4 @@
-zpaq v6.17 archiver, Dec. 13, 2012. Contents:
+zpaq v6.18 archiver, Dec. 14, 2012. Contents:
 
 zpaq.exe      32 bit Windows executable, run from a command window.
 zpaq.cpp      User's guide and source code.
