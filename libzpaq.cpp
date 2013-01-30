@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.01 implementation - Oct. 17, 2012.
+/* libzpaq.cpp - LIBZPAQ Version 6.17 implementation - Dec. 13, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -130,38 +130,25 @@ const char* SHA1::result() {
   return hbuf;
 }
 
+
 // Hash 1 block of 64 bytes
 void SHA1::process() {
-  for (int i=16; i<80; ++i) {
-    w[i]=w[i-3]^w[i-8]^w[i-14]^w[i-16];
-    w[i]=w[i]<<1|w[i]>>31;
-  }
-  U32 a=h[0];
-  U32 b=h[1];
-  U32 c=h[2];
-  U32 d=h[3];
-  U32 e=h[4];
-  const U32 k1=0x5A827999, k2=0x6ED9EBA1, k3=0x8F1BBCDC, k4=0xCA62C1D6;
-#define f1(a,b,c,d,e,i) e+=(a<<5|a>>27)+((b&c)|(~b&d))+k1+w[i]; b=b<<30|b>>2;
-#define f5(i) f1(a,b,c,d,e,i) f1(e,a,b,c,d,i+1) f1(d,e,a,b,c,i+2) \
-              f1(c,d,e,a,b,i+3) f1(b,c,d,e,a,i+4)
-  f5(0) f5(5) f5(10) f5(15)
-#undef f1
-#define f1(a,b,c,d,e,i) e+=(a<<5|a>>27)+(b^c^d)+k2+w[i]; b=b<<30|b>>2;
-  f5(20) f5(25) f5(30) f5(35)
-#undef f1
-#define f1(a,b,c,d,e,i) e+=(a<<5|a>>27)+((b&c)|(b&d)|(c&d))+k3+w[i]; b=b<<30|b>>2;
-  f5(40) f5(45) f5(50) f5(55)
-#undef f1
-#define f1(a,b,c,d,e,i) e+=(a<<5|a>>27)+(b^c^d)+k4+w[i]; b=b<<30|b>>2;
-  f5(60) f5(65) f5(70) f5(75)
-#undef f1
-#undef f5
-  h[0]+=a;
-  h[1]+=b;
-  h[2]+=c;
-  h[3]+=d;
-  h[4]+=e;
+  U32 a=h[0], b=h[1], c=h[2], d=h[3], e=h[4];
+  static const U32 k[4]={0x5A827999, 0x6ED9EBA1, 0x8F1BBCDC, 0xCA62C1D6};
+  #define f(a,b,c,d,e,i) \
+    if (i>=16) \
+      w[(i)&15]^=w[(i-3)&15]^w[(i-8)&15]^w[(i-14)&15], \
+      w[(i)&15]=w[(i)&15]<<1|w[(i)&15]>>31; \
+    e+=(a<<5|a>>27)+k[(i)/20]+w[(i)&15] \
+      +((i)%40>=20 ? b^c^d : i>=40 ? (b&c)|(d&(b|c)) : d^(b&(c^d))); \
+    b=b<<30|b>>2;
+  #define r(i) f(a,b,c,d,e,i) f(e,a,b,c,d,i+1) f(d,e,a,b,c,i+2) \
+               f(c,d,e,a,b,i+3) f(b,c,d,e,a,i+4)
+  r(0)  r(5)  r(10) r(15) r(20) r(25) r(30) r(35)
+  r(40) r(45) r(50) r(55) r(60) r(65) r(70) r(75)
+  #undef f
+  #undef r
+  h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e;
 }
 
 //////////////////////////// Component ///////////////////////
@@ -1982,7 +1969,7 @@ the only 3 byte instruction. They are organized:
   00dddxxx = unary opcode xxx on destination ddd (ddd < 111)
   00111xxx = special instruction xxx
   01dddsss = assignment: ddd = sss (ddd < 111)
-  1xxxxsss = operation sxxx from sss to a
+  1xxxxsss = operation xxxx from sss to a
 
 The meaning of sss and ddd are as follows:
 
