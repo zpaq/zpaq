@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.17 header - Dec. 13, 2012.
+/* libzpaq.h - LIBZPAQ Version 6.19 header - Jan. 22, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -211,7 +211,16 @@ This example has no postprocessor, but if it did, then setVerify(true)
 would cause compress() to run the preprocessed input through the
 postprocessor and into a SHA1 in parallel with compression. Then,
 getChecksum() would return the hash which could be compared with
-the hash of the input computed by the application.
+the hash of the input computed by the application. Also,
+
+  int64_t size;
+  c.endSegmentChecksum(&size);
+
+instead of c.endSegment() will automatically add the computed checksum
+if setVerify is true and return the checksum, whether or not there
+is a postprocessor. If &size is not NULL then the segment size is written
+to size. If setVerify is false, then no checksum is saved
+and the function returns 0 with size not written.
 
 A context model consists of two parts, an array COMP of n components,
 and some code HCOMP that computes contexts for the components.
@@ -911,6 +920,7 @@ public:
   void postProcess(const char* pcomp = 0, int len = 0);  // byte code
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
+  char* endSegmentChecksum(int64_t* size = 0);
   int64_t getSize() {return sha1.usize();}
   const char* getChecksum() {return sha1.result();}
   void endBlock();
@@ -920,6 +930,7 @@ private:
   Encoder enc;  // arithmetic encoder containing predictor
   Reader* in;   // input source
   SHA1 sha1;    // to test pz output
+  char sha1result[20];  // sha1 output
   enum {INIT, BLOCK1, SEG1, BLOCK2, SEG2} state;
   bool verify;  // if true then test by postprocessing
 };

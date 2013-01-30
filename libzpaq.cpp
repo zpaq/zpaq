@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.17 implementation - Dec. 13, 2012.
+/* libzpaq.cpp - LIBZPAQ Version 6.19 implementation - Jan. 22, 2012.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -1906,6 +1906,33 @@ void Compressor::endSegment(const char* sha1string) {
   else
     enc.out->put(254);
   state=BLOCK2;
+}
+
+// End segment, write checksum and size is verify is true
+char* Compressor::endSegmentChecksum(int64_t* size) {
+  if (state==SEG1)
+    postProcess();
+  assert(state==SEG2);
+  enc.compress(-1);
+  if (verify && pz.hend) {
+    pz.run(-1);
+    pz.flush();
+  }
+  enc.out->put(0);
+  enc.out->put(0);
+  enc.out->put(0);
+  enc.out->put(0);
+  if (verify) {
+    if (size) *size=sha1.usize();
+    memcpy(sha1result, sha1.result(), 20);
+    enc.out->put(253);
+    for (int i=0; i<20; ++i)
+      enc.out->put(sha1result[i]);
+  }
+  else
+    enc.out->put(254);
+  state=BLOCK2;
+  return verify ? sha1result : 0;
 }
 
 // End block
