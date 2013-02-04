@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.19 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.20 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -113,7 +113,7 @@ Compress faster...better. The default is -method 1. The algorithms are:
   2 = LZ77 + context model + arithmetic coding.
   3 = BWT (Burrows-Wheeler transform) + order 0-1 indirect model.
   4 = CM (mid.cfg context mixing) with 8 components.
-  5..9 = CM (max.cfg) with 22 components using increasing memory.
+  5..9 = CM with more components using increasing memory.
 
 Method 0 deduplicates file fragments but does not otherwise compress.
 Deduplication is accomplished by a rolling hash that depends on the
@@ -209,11 +209,6 @@ the match with probability 1 - 1/(length in bits). The outputs of
 all 7 models are then mixed as with an ISSE except with a vector of
 7 weights selected by an order 1 (16 bit) context, and with a faster
 weight update rate of about 0.01.
-
-With method 4 you can give an argument like "-method 4 1" to double
-the memory allocated to the components to improve compression. The
-same extra memory is needed to decompress. The default is 111 MB
-per thread. An argument n multiplies memory usage by 2^n. n can be negative.
 
 In all cases, the context modeling and postprocessing (inverse BWT
 or LZ77 decoding) is executed by JIT optimized ZPAQL code stored in
@@ -1361,7 +1356,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.19 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.20 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
@@ -2168,10 +2163,10 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   assert(out);
   assert(method && *method);
   if (!quiet)
-    printf("Job %d compressing %d bytes to %s %s\n", jobNumber,
-           size(*in), filename?filename:"", comment?comment:"");
+    printf("Job %d compressing %d bytes to %s\n", jobNumber,
+           size(*in), filename?filename:"");
 
-  // Built in ZPAQL code for -method 0..4
+  // Built in ZPAQL code for -method 0..9
   const char* cfg[6]={
     "(method 0 - store uncompressed) "
     "comp 0 0 0 0 0 hcomp post 0 end ",
@@ -2481,7 +2476,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     " ",
 
     "(method 4 mid.cfg with e8e9 postprocessing) "
-    "comp 3 3 0 24 8 (hh hm ph pm n) "
+    "comp 3 3 0 0 8 (hh hm ph pm n) "
     "  0 icm 5        (order 0...5 chain) "
     "  1 isse 13 0 "
     "  2 isse $1+17 1 "
@@ -2501,36 +2496,38 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  d++ a=*c a<<= 8 *d=a (order 1 for mix) "
     "  halt "
     "pcomp e8e9 d ; "
-    "  (Decode LZ77: M=output buffer, b=size) "
-    "  a> 255 if (at EOF decode e8e9 and output) "
-    "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-    "      a=b a==d ifnot "
-    "        a+= 4 a<d if "
-    "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-    "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-    "              b-- a=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              a-=b a++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a b++ "
-    "            endif "
-    "            b=c "
-    "          endif "
-    "        endif "
-    "        a=*b out b++ "
-    "      forever "
+    "  (inverse E8E9 transform. Assume input < 4 GB) "
+    "  (E8|E9 xx xx xx 00|FF -> subtract offset from middle 3 bytes) "
+    "  (b=last 4 bytes, c=offset) "
+    " "
+    "  a> 255 if (flush b at EOF) "
+    "    a=c a> 4 if "
+    "      c= 4 "
+    "    else "
+    "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a "
     "    endif "
-    "    b=0 (reset state) "
+    "    do a=c a> 0 if "
+    "      a=b out a>>= 8 b=a c-- "
+    "    forever endif "
     "  else "
-    "    *b=a b++ "
+    "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++ (shift a into b|*b) "
+    "    a=c a> 4 if "
+    "      a=*b out "
+    "      a&= 254 a== 232 if (E8 or E9) "
+    "        a=b a>>= 24 a++ a&= 254 a== 0 if (00 or FF) "
+    "          a=b a>>= 24 a<<= 24 d=a  (high byte of b) "
+    "          a=b a-=c a+= 5 (subtract offset) "
+    "          a<<= 8 a>>= 8 a|=d b=a (restore high byte) "
+    "        endif "
+    "      endif "
+    "    endif "
     "  endif "
     "  halt "
     "end ",
 
-    // method 5 - max.cfg + E8E9
-    "comp 5 9 0 $1+24 22 (hh hm ph pm n) "
+    // methods 5..9
+    " "
+    "comp 5 16 0 0 26 (hh hm ph pm n) "
     "  0 const 160 "
     "  1 icm 5  (orders 0-6) "
     "  2 isse 13 1 (sizebits j) "
@@ -2541,18 +2538,22 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  7 isse $1+19 6 "
     "  8 match $1+21 $1+24 "
     "  9 icm $1+17 (order 0 word) "
-    "  10 isse $1+19 9 (order 1 word) "
+    "  10 isse $1+18 9 (order 1 word) "
     "  11 icm 13 (sparse with gaps 1-3) "
     "  12 icm 13 "
     "  13 icm 13 "
     "  14 icm 14 (pic) "
-    "  15 mix 16 0 15 24 255 (mix orders 1 and 0) "
-    "  16 mix 8 0 16 10 255 (including last mixer) "
-    "  17 mix2 0 15 16 24 0 "
-    "  18 sse 8 17 32 255 (order 0) "
-    "  19 mix2 8 17 18 16 255 "
-    "  20 sse 16 19 32 255 (order 1) "
-    "  21 mix2 0 19 20 16 0 "
+    "  15 icm 14 (text column order 1) "
+    "  16 icm 16 (text column order 2) "
+    "  17 icm 14 (record pos order 1) "
+    "  18 icm 14 (record pos above) "
+    "  19 cm 9 128 "
+    "  20 cm 9 12 "
+    "  21 mix 8 0 21 24 255 (mix orders 1 and 0) "
+    "  22 mix 16 0 22 16 255 (including last mixer) "
+    "  23 mix2 8 21 22 24 255 "
+    "  24 sse 8 23 32 255 (order 0) "
+    "  25 mix2 8 23 24 32 255 "
     "hcomp "
     "  c++ *c=a b=c a=0 (save in rotating buffer) "
     "  d= 2 hash *d=a b-- (orders 1,2,3,4,5,7) "
@@ -2562,57 +2563,73 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  d++ hash *d=a b-- "
     "  d++ hash b-- hash *d=a b-- "
     "  d++ hash *d=a b-- (match, order 8) "
-    "  d++ a=*c a&~ 32 (lowercase words) "
+    "  d++ a=*c (lowercase words) "
     "  a> 64 if "
-    "    a< 91 if (if a-z) "
-    "      d++ hashd d-- (update order 1 word hash) "
-    "      *d<>a a+=*d a*= 20 *d=a (order 0 word hash) "
-    "      jmp 9 "
-    "    endif "
-    "  endif "
-    "  (else not a letter) "
+    "    a< 91 if a+= 32 endif "
+    "    d++ hashd d-- (update order 1 word hash) "
+    "    *d<>a a+=*d a*= 20 *d=a (order 0 word hash) "
+    "  else "
     "    a=*d a== 0 ifnot (move word order 0 to 1) "
     "      d++ *d=a d-- "
     "    endif "
     "    *d=0  (clear order 0 word hash) "
-    "  (end else) "
+    "  endif "
+    " "
     "  d++ "
     "  d++ b=c b-- a=0 hash *d=a (sparse 2) "
     "  d++ b-- a=0 hash *d=a (sparse 3) "
     "  d++ b-- a=0 hash *d=a (sparse 4) "
     "  d++ a=b a-= 212 b=a a=0 hash "
     "    *d=a b<>a a-= 216 b<>a a=*b a&= 60 hashd (pic) "
-    "  d++ a=*c a<<= 9 *d=a (mix) "
-    "  d++ "
-    "  d++ "
-    "  d++ d++ "
-    "  d++ *d=a (sse) "
-    "  halt "
-    "pcomp e8e9 d ; "
-    "  (Decode LZ77: M=output buffer, b=size) "
-    "  a> 255 if (at EOF decode e8e9 and output) "
-    "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-    "      a=b a==d ifnot "
-    "        a+= 4 a<d if "
-    "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-    "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-    "              b-- a=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              a-=b a++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a b++ "
-    "            endif "
-    "            b=c "
-    "          endif "
-    "        endif "
-    "        a=*b out b++ "
-    "      forever "
-    "    endif "
-    "    b=0 (reset state) "
+    " "
+    "  (r1=text column) "
+    "  d++ a=*c a== 10 if "
+    "    a=0 "
     "  else "
-    "    *b=a b++ "
+    "    a=r 1 a< 255 if "
+    "      a++ "
+    "    endif "
+    "  endif r=a 1 "
+    "  b=c hash *d=a "
+    "  d++ b-- hash *d=a "
+    " "
+    "  (-r2=fixed column $3*256+$2) "
+    "  d++ a= $3 a<<= 8 a+= $2 b=a a=c a%=b a! a++ r=a 2 b=c hash *d=a (left) "
+    "  d++ a=r 2 a+=c b=a a=r 2 hash *d=a (above) "
+    " "
+    "  d++ (cm) "
+    "  d++ "
+    " "
+    "  d++ (mix order 0) "
+    "  d++ a=*c a<<= 9 *d=a (mix order 1) "
+    "  halt "
+    " "
+    "pcomp e8e9 e ; "
+    "  (inverse E8E9 transform. Assume input < 4 GB) "
+    "  (E8|E9 xx xx xx 00|FF -> subtract offset from middle 3 bytes) "
+    "  (b=last 4 bytes, c=offset) "
+    " "
+    "  a> 255 if (flush b at EOF) "
+    "    a=c a> 4 if "
+    "      c= 4 "
+    "    else "
+    "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a "
+    "    endif "
+    "    do a=c a> 0 if "
+    "      a=b out a>>= 8 b=a c-- "
+    "    forever endif "
+    "  else "
+    "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++ (shift a into b|*b) "
+    "    a=c a> 4 if "
+    "      a=*b out "
+    "      a&= 254 a== 232 if (E8 or E9) "
+    "        a=b a>>= 24 a++ a&= 254 a== 0 if (00 or FF) "
+    "          a=b a>>= 24 a<<= 24 d=a  (high byte of b) "
+    "          a=b a-=c a+= 5 (subtract offset) "
+    "          a<<= 8 a>>= 8 a|=d b=a (restore high byte) "
+    "        endif "
+    "      endif "
+    "    endif "
     "  endif "
     "  halt "
     "end "
@@ -2641,15 +2658,43 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   // Compress in to out using method
   libzpaq::Compressor co;
   co.setOutput(out);
+#ifdef DEBUG
+  co.setVerify(true);
+#endif
   StringBuffer pcomp_cmd;
   co.writeTag();
+
+  // For levels 5..9 get length of periodic data
   if (level>=5 && level<=9) {
     int a[9]={0};
+    const int NR=1<<12;
+    int pt[256]={0}, r[NR]={0};  // count repetition gaps of length r
+    const unsigned char* p=in->data();
+    for (int i=0; i<n; ++i) {
+      const int k=i-pt[p[i]];
+      if (k>0 && k<NR) ++r[k];
+      pt[p[i]]=i;
+    }
+    int period=0;
+    double score=0;
+    int t=0;
+    for (int i=2; i<NR && t<n-r[1]; ++i) {
+      const double s=r[i]/(256.0+n-t-r[1]);
+      if (s>score) score=s, period=i;
+      t+=r[i];
+    }
     a[0]=level-5;
+    a[1]=period&255;
+    a[2]=(period>>8)&255;
+    if (!quiet)
+      printf("Job %d: period = %d (%1.4f/%d)\n",
+             jobNumber, period, double(score), n);
     co.startBlock(method, a, &pcomp_cmd);
   }
   else
     co.startBlock(method, args, &pcomp_cmd);
+
+  // Compress with appropriate preprocessor depending on level
   string cs=itos(n);
   if (comment) cs+=comment;
   co.startSegment(filename, cs.c_str());
@@ -2657,21 +2702,33 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     LZBuffer lz(*in, level);
     co.setInput(&lz);
     co.compress();
-    co.endSegment(sha1ptr);
   }
   else if (level==3) {  // preprocess with built-in BWT
     BWTBuffer bwt(*in);
     co.setInput(&bwt);
     co.compress();
-    co.endSegment(sha1ptr);
   }
   else {  // compress method 4 with e8e9 else without preprocessing
     if (level>=4 && level<=9)
       e8e9(in->data(), in->size());
     co.setInput(in);
     co.compress();
-    co.endSegment(sha1ptr);
   }
+#ifdef DEBUG  // verify pre-post processing are inverses
+  int64_t outsize;
+  const char* sha1result=co.endSegmentChecksum(&outsize);
+  assert(sha1result);
+  if (memcmp(sha1result, sha1ptr, 20)!=0) {
+    fprintf(stderr, "Job %d: pre size=%d post size=%1.0f\n", jobNumber, 
+            n, double(outsize));
+    error("Pre/post-processor test failed");
+  }
+  if (!quiet)
+    printf("Job %d: Compressed %d bytes. Postprocessor test passed\n",
+           jobNumber, n);
+#else
+  co.endSegment(sha1ptr);
+#endif
   co.endBlock();
 }
 

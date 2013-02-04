@@ -1,13 +1,14 @@
-zpaq v6.19, Jan. 22, 2013. Contents:
+zpaq v6.20, Feb. 1, 2013. Contents:
 
-zpaq.exe      Archiver, 32 bit Windows command line executable.
-zpaqd.exe     Development tool, 32 bit Windows command line executable.
-zpaq.cpp      zpaq user's guide and source code.
-zpaqd.cpp     zpaqd user's guide and source code.
-libzpaq.h     libzpaq API documentation and header v6.19.
-libzpaq.cpp   libzpaq API source code v6.19.
-divsufsort.h  libdivsufsoft-lite header.
-divsofsort.c  libdivsufsort-lite source code.
+zpaq.exe      6.20  Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.20  Archiver, 64 bit Windows (added Feb. 4, 2013).
+zpaq.cpp      6.20  zpaq user's guide and source code.
+zpaqd.exe     6.19  Development tool, 32 bit Windows command line executable.
+zpaqd.cpp     6.19  zpaqd user's guide and source code.
+libzpaq.h     6.19  libzpaq API documentation and header.
+libzpaq.cpp   6.19  libzpaq API source code.
+divsufsort.h  2.00  libdivsufsoft-lite header.
+divsofsort.c  2.00  libdivsufsort-lite source code.
 
 All versions of this software can be found at
 http://mattmahoney.net/dc/zpaq.html
@@ -52,4 +53,3 @@ with upx 3.06w as follows:
 To compile zpaq for Linux, include the options: -Dunix -fopenmp
 To compile zpaqd for Linux, use -Dunix
 To compile either program for non-x86, use -DNOJIT
-
