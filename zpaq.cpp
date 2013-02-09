@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.20 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.21 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -40,7 +40,7 @@ Commands:
 Options (may be abbreviated):
   -not <file|dir>...   Do not add/extract/list
   -to <file|dir>...    Rename external files
-  -version N           Revert to N'th update
+  -until N|YYYYMMDD[HH[MM[SS]]]   Revert to version number or date
   -force               a: Add even if unchanged. x: output clobbers
   -quiet               Display only errors and warnings
   -threads N           Use N threads (default: cores detected)
@@ -61,31 +61,177 @@ existing abbreviations ambiguous.
 
   a or -add
 
-Add files and directory trees. Directories are scanned recursively.
-Only ordinary files and directories are added, not special types
-(devices, symbolic links, etc). Symbolic links are not followed. The file
-names are saved as given on the command line. The last-modified
-date is saved, rounded to the nearest second. Windows attributes
-or Linux permissions are saved. However, additional metadata such
-as owner, group, extended attributes (xattrs, ACLs, alternate
-streams) are not saved.
-
-Existing files and directories are updated, but preserving the
-old version as well. This means that if an external file or the
-directory containing it is named but no longer exists then the internal
-file is marked as deleted in the current version but still available
-in the previous version.
+Add files and directory trees to the archive. Directories are scanned
+recursively to add subdirectories and their contents. Only ordinary
+files and directories are added, not special types (devices, symbolic
+links, etc). Symbolic links are not followed. File names and directories
+may be specified with absolute or relative paths or no paths, and will
+be saved that way. The last-modified date is saved, rounded to the nearest
+second. Windows attributes or Linux permissions are saved. However,
+additional metadata such as owner, group, extended attributes (xattrs,
+ACLs, alternate streams) are not saved.
 
 Before adding files, the last-modifed date is compared with the
 date stored in the archive. Files are added only if the dates
-differ or if the file is not already in the archive.
+differ or if the file is not already in the archive, or if -force
+is specified.
 
-If a file is added, then it is deduplicated by computing the SHA-1
-hashes of file fragments (average size 64 KB) along content-dependent
-boundaries, and compared with the hashes already in the archive.
-Only those hashes that don't match are added. Matching fragments
-are stored as pointers to the match, which may be in the current
-or earlier versions.
+When a file is changed, both the old and new versions are saved to
+the archive. When a directory is added, any files that existed in
+the old version of the directory but not the new version are marked
+as deleted in the current version but remain in the archive.
+
+  x or -extract
+
+Extract files and directores (default: all) from the archive.
+Files will be extracted by creating filenames as saved in the archive.
+If any of the external files already exist then zpaq will exit with
+an error and not extract any files unless -force is given to allow
+files to be overwritten. Last-modified dates and attributes will be
+restored as saved. Attributes saved in Windows will not be restored
+in Linux and vice versa. If there are multiple versions of a file
+saved, then the latest version will be extracted unless an earlier
+version is specified with -version.
+
+  l or -list
+
+List the archive contents. Each file or directory is shown with a
+version number, date, attributes, uncompressed size, and file name.
+There may be multiple versions of a single file with different
+version numbers. A second table lists for each version number the
+date of the update, number of files added and deleted, and the number
+of MB added before and after compression. Attributes are shown as
+a string of characters like "DASHRI" in Windows (directory, archive,
+system, hidden, read-only, indexed), or an octal number like "100644"
+(as passed to chmod(), meaning rw-r--r--) in Linux.
+
+  -not
+
+Exclude files and directories (before renaming) from being added,
+extracted, or listed. For example "zpaq a arc calgary -not calgary/book1"
+will add all the files in calgary except book1.
+
+  -to
+
+Rename extracted files and directories. Each argument to -to is matched
+to an argument to -add or -extract in the same order. For example,
+"zpaq x arc calgary -to out" extracts calgary/book2 to out/book2, etc.
+"zpaq a arc newfile -to file" saves the name of file as newfile.
+
+  -until N
+  -until YYYYMMDD[HH[MM[SS]]]
+
+Roll back the archive to an earlier version. With -list and -extract,
+versions later than N will be ignored. With -add, the archive
+will be truncated at N, discarding any subsquently added contents
+before updating. The version can also be specified as a date and time
+(UCT time zone) as an 8, 10, 12, or 14 digit number in the range
+19000101 to 29991231235959 with the last 6 digits defaulting to 235959.
+The default is the latest version. For backward compatibility, -version
+is equivalent to -until.
+
+  -force
+
+Add files even if the dates match. If a file really is identical,
+then it will not be added. When extracting, output files will be
+overwritten.
+
+  -quiet
+
+When adding or extracting, don't print anything unless there is
+an error.
+
+  -threads N
+
+Set the number of threads to N for parallel compression and decompression.
+The default is to detect the number of processor cores and use that value
+or the limit according to -method, whichever is less. The number of cores
+is detected from the environment variable %NUMBER_OF_PROCESSORS% in
+Windows or /proc/cpuinfo in Linux.
+
+  -method 0..9
+
+Compress faster...better. The default is -method 1. The following
+table shows the memory required per thread, block size, maximum number of
+threads (if compiled for 32 bit OS), and algorithm used. The same
+memory per thread is required to decompress. For a 32 bit OS, the number
+of threads is limited to not exceed 2 GB of memory. When compiled for a
+64 bit OS, there is no limit on the number of threads. Blocks are compressed
+and decompressed indepenently in separate threads. Larger blocks usually
+compress better, but reduce the number of threads it is possible to run
+at the same time.
+
+                           Thread limit
+  Method   Memory  Block   (32 bit)      Algorithm
+  ------   ------  ------  ------------  ---------
+    0        1 MB   16 MB  64            Not compressed
+    1       16 MB   16 MB  64            LZ77
+    2       17 MB   16 MB  64            LZ77 + CM
+    3       84 MB   16 MB  20            BWT + CM
+    4      111 MB   16 MB  16            CM
+    5      188 MB   16 MB   8            CM
+    6      360 MB   32 MB   4            CM
+    7      704 MB   64 MB   2            CM
+    8     1392 MB  128 MB   1            CM
+    9     2800 MB  256 MB   0            CM
+
+  -summary N
+
+When listing contents, show only the top N files, directories, and
+filename extensions by total size. The default is 20. Also show
+a table of deduplication statistics and a table of version dates.
+
+  -since N
+
+List only versions N and later. If N is negative then list only the
+last -N updates. Default is 0 (all).
+
+  -above N
+
+List only files at least N bytes in size. Default is -1 (all including
+unknown sizes).
+
+
+ARCHIVE FORMAT
+
+Data is compressed in the journaling format described in section 8
+of http://mattmahoney.net/dc/zpaq201.pdf
+However, zpaq can extract any conforming archive including streaming
+format. All blocks include locator tags, file names, comments, and
+SHA-1 hashes, although they are not required to extract.
+
+The c (version header), and h (hash table) blocks are stored with
+method 0. The i blocks (index) are split into blocks of about 16 KB
+(to reduce losses in case of archive damage) and compressed with method 1.
+The d (data) blocks are compressed depending on the selected method.
+
+Updates are transacted by writing -1 for the value of csize in the c block,
+then appending the other blocks, and finally committing the update by
+rewriting csize with the total size of the d blocks. If an error occurs
+during update or if it is interrupted, then the -1 signals the end of
+valid data in the archive. The next update will overwrite this block and
+all subsequent data.
+
+For deduplication, files are fragmented by a rolling hash that depends
+on the last 32 bytes that are not predicted by an order-1 context and
+selected with probability 2^-16, with a minimum size of 4096 or EOF,
+whichever is first, and a maximum size of 520192 bytes. The hash is
+initially 0 and updated for each byte c:
+
+  hash := (hash + c + 1) * 314159265 (mod 2^32)  if c is predicted,
+  hash := (hash + c + 1) * 271828182 (mod 2^32)  if c is not predicted.
+
+and a boundary occurs after byte c if hash < 65536. c is predicted
+if the previous occurrence of the byte before c is also followed by c
+(or 0 if the context appears for the first time in the fragment).
+If the SHA-1 hash of the fragment matches one already compressed,
+then the fragments are assumed to be identical and stored only once.
+
+The number of predicted and mispredicted bytes in each block are counted.
+For methods 1 through 4, if the fraction of predicted bytes is less
+than 1/16, 1/32, 1/64, 1/128 respectively, then the block is assumed
+to be not compressible and is stored as with method 0. Methods 5 through 9
+always compress.
 
 Files are sorted by filename extension (like ".exe", ".html", ".jpg")
 and then lexicographically by name. Non-matching fragments are packed into
@@ -96,46 +242,35 @@ index listing fragment hashes and sizes and a list of added and deleted
 files. For each added file, the date, attributes, and list of fragment
 indexes is stored.
 
-The header stores the date of the update and compressed data size.
-The size is temporarily set to an invalid value (-1) and updated as the
+Each transaction header stores the date of the update and compressed data
+size. The size is temporarily set to an invalid value (-1) and updated as the
 last step. If -add encounters an error or is interrupted by the
 user with Ctrl-C, resulting in an invalid header followed by corrupted
 data, then zpaq will interpret the invalid value as the end of the
 archive. It will ignore anything that follows, and the next -add command
 will overwrite it.
 
-  -method 0..9
-
-Compress faster...better. The default is -method 1. The algorithms are:
-
-  0 = Not compressed.
-  1 = Byte aligned LZ77.
-  2 = LZ77 + context model + arithmetic coding.
-  3 = BWT (Burrows-Wheeler transform) + order 0-1 indirect model.
-  4 = CM (mid.cfg context mixing) with 8 components.
-  5..9 = CM with more components using increasing memory.
-
 Method 0 deduplicates file fragments but does not otherwise compress.
-Deduplication is accomplished by a rolling hash that depends on the
-last 32 bytes that are not predicted by an order-1 context and
-selected with probability 2^-16, with a minimum size of 4096 or EOF,
-whichever is first, and a maximum size of 520192 bytes. The hash
-update function for each byte c is:
+Methods 1 through 9 preprocess the input block with a E8E9 transform
+before compression. The transform scans the block from back to front
+for 5 byte sequences of (E8|E9 XX XX XX 00|FF) hex and adds the offset
+(distance from the start of the block) to the middle 3 bytes (mod 2^24),
+assuming LSB first. This improves the compression of .exe and .dll files
+containing x86 or x86-64 code by replacing CALL and JMP operands with
+absolute addresses.
 
-  hash := (hash + c + 1) * 314159265 (mod 2^32)  if c is predicted,
-  hash := (hash + c + 1) * 271828182 (mod 2^32)  if c is not predicted.
+Method 1 is LZ77 using variable length bit codes without context
+modeling. Literals are coded as 2 bits 00, followed by the literal
+length as an interleaved Elias Gamma code, followed by the uncompressed
+literals. An n-bit binary number is coded in 2n-1 bits by dropping the
+leading 1, putting a 1 in front of all other bits, and appending a 0,
+e.g. abcd -> 1,b,1,c,1,d,0.
 
-and a boundary occurs after byte c if hash < 65536. c is predicted
-if the previous occurrence of the byte before c is also followed by c.
+A match with an m-bit offset and n-bit length is coded by giving
+the length of m (01000..11111 -> 0..23), then 2n-3 interleaved bits
+for the length (4 or more, with the last 2 bits coded directly), and m
+bits of the offset (1..16777215).
 
-For methods 1 through 4, if less than 1/16, 1/32, 1/64, or 1/128
-respectively of the bytes in the block are predicted, then the
-block is stored without compression. Otherwise it is compressed
-as follows:
-
-Method 1 is LZ77 using variable length codes to represent the lengths
-of literal byte strings or the length and offset of matches to
-earlier occurrences of the same string in a 16 MB output block.
 Matches are found by indexing a hash of the next 4 bytes in the
 input buffer into a table of size 4M which is grouped into 512K
 buckets of 8 pointers each. The longest match is coded, provided
@@ -143,17 +278,6 @@ the length is at least 4, or 5 if the offset > 64K and the last
 output was a literal. Ties are broken by favoring the smaller offset.
 Bucket elements are selected for replacement using the low 3 bits
 of the output count.
-
-Literal lengths are coded using "marked binary", where the leading
-1 bit of the number is dropped and a 1 bit is inserted in front
-of the remaining bits and a 0 marks the end. For example, 1100
-is coded as 1,1,1,0,1,0,0. Matches are coded as a length and an
-offset. The length is at least 4. All but the last 2 bits are
-coded as a marked binary. The number of match bits is given in
-the first 5 bits of the code. If the code starts with 00, then
-a literal length and string of literal follow. Otherwise the 5
-bits code a number from 0 to 23, and that number of bits, with
-an implied leading 1 give the offset.
 
 Method 2 is also LZ77, but the codes are byte aligned and context
 modeled rather than coded directly. It also searches 4 order-7
@@ -166,36 +290,18 @@ high 2 bits of the first byte:
   10 = match of length 1..64 and offset of 1..65536.
   11 = match of length 1..64 and offset of 1..16777216.
 
-These codes are arithmetic coded using an indirect context model. The
-context depends on the parse state and in the case of literals, on the
-previous byte. An indirect context model maps a context into
-a bit history (represented as an 8 bit state) and then to a bit
-prediction. The model is updated by adjusting the prediction
-to reduce the error by 0.1%. A bit history represents a bounded
-pair of bit counts (n0,n1) and the value of the most recent bit.
-The bounds for (n0,n1) and (n1,n0) are (20,0), (48,1), (15,2),
-(8,3), (6,4), (5,5).
+These codes are arithmetic coded using an indirect context model (ICM).
+The context depends on the parse state and in the case of literals, on the
+previous byte. An ICM maps this context to a 219 state bit history and
+then to a bit predition.
 
-Method 3 uses a Burrows-Wheeler transform (BWT). The input bytes
-are sorted by their right contexts and compressed using an
-order 0-1 ICM-ISSE chain. The order 0 ICM (indirect context
-model) works as in method 2, taking only the previous bits of
-the current byte (MSB first) as context. The prediction is
-adjusted by an order-1 indirect secondary symbol estimator (ISSE).
-An ISSE maps its context (the previous byte and the leading
-bits of the current byte) to a bit history, and the history
-selects a pair of mixing weights to compute the weighted average
-of the constant 1 and the ICM output in the logistic domain,
-log(p/(1-p)). The output is converted back to linear, and the
-two weights are updated to reduce the prediction error in favor
-of the better model. In other words, the output is:
-
-  p' := 1/(1 + exp(-w1*1 - w2*log(p/(1-p))))
-
-and after the bit is arithmetic coded, the weights w1 and w2 are updated:
-
-  w1 := w1 + 1            * 0.001 * (bit - p')
-  w2 := w2 + log(p/(1-p)) * 0.001 * (bit - p')
+Method 3 uses a Burrows-Wheeler transform (BWT) modeled by an order 0-1
+ICM-ISSE chain. An ISSE (indirect secondary symbol estimator) mixes
+the order 0 prediction with a constant 1 by weighted averaging in the
+logistic (log p1/p0) domain, such that the mixing weights are selected
+by the bit history of the order 1 context (i.e. the previous byte
+and the previous bits of the current byte), then adjusting the weights
+to reduce the prediction error by about 0.001.
 
 Method 4 directly models the data using an order 0-5 ICM-ISSE chain,
 an order 7 match model, and an order 1 mixer which produces the bit
@@ -210,108 +316,39 @@ all 7 models are then mixed as with an ISSE except with a vector of
 7 weights selected by an order 1 (16 bit) context, and with a faster
 weight update rate of about 0.01.
 
-In all cases, the context modeling and postprocessing (inverse BWT
-or LZ77 decoding) is executed by JIT optimized ZPAQL code stored in
-the archive. JIT optimization translates ZPAQL to 32 or 64 bit x86
-code which is executed directly for better speed. On other processors,
-the ZPAQL code is interpreted. The ZPAQL language is described
-in libzpaq.h. The precise semantics are described in the ZPAQ
-specification.
+Methods 5 through 9 are identical except for memory usage, which is
+16, 32, 64, 128, 256 MB for 5..9 respectively. These mix 21 bit predictors
+using a pair of order 0 and 1 mixers, then mix those two mixer outputs
+(order 0), then adjust that prediction with an order 0 SSE, an finally mix
+the SSE input and output. An SSE adjusts a prediction using an interpolated
+table indexed by the input prediction and a context.
 
-  -force
+The 21 bit predictors are an order 0-6 ICM-ISSE chain, a word order 0-1
+ICM-ISSE chain for modeling text, an order 8 MATCH, 3 order 1 sparse
+ICMs with context gaps of 1, 2, and 3, a model for CCITT fax images,
+order 1 and 2 ICM text column models, two order 1 ICMs for 2-dimensional
+modeling of periodic data, two order 0 CMs with different update rates,
+and one fixed bias (CONST).
 
-Add files even if the dates match. If a file really is identical,
-then it will not take significant space because all of its fragments
-will be deduplicated. With -extract, output files will be overwritten.
+A word order-n context is a hash of the last n whole words, defined as
+a sequence of 1 to 16 byte values in the range 65..255 with upper case
+letters (65..90) mapped to lower case, and all intervening characters
+mapped to a single space.
 
-  l or -list
+A text column model counts from the last newline (range 0..255) and
+combines the count with an order 1 or 2 context).
 
-List the archive contents. If any file names are directories are
-specified, then only those are listed. For each file, all versions
-are shown along with version numbers. The listing shows the attributes,
-uncompressed size, and file name. Windows attributes have the form
-"DASHRI" where the letters are replaced with "." unless the directory,
-archive, system, hidden, read-only, and index attributes are respectively
-set. If any other attributes are set, then the value is shown as a
-hexadecimal number. In Linux, the attributes are shown as a 6 digit octal
-number as would normally be passed to chmod(), e.g. "100644" for a normal
-file with user read-write permissions and read-only for group and others.
-If no attributes are shown then none are stored and the file
-will be restored with default attributes.
+The CCITT model assumes a bit mapped binary image width of 1728 pixels
+(216 bytes). The context for the current row of 8 pixels is the 12
+pixels in the two scan lines above (8 in the next row and middle 4
+in the second row above).
 
-  -since N
-
-List only versions N and later. If N is negative then list only the
-last -N updates. Default is 0 (all).
-
-  -above N
-
-List only files at least N bytes in size. Default is -1 (all including
-unknown sizes).
-
-  -summary N
-
-Modifies -list to summarize statistics about the archive. There are
-3 tables. The first table shows the top N (default 20) files,
-directories, and file types (extensions) ranked by total size,
-giving the rank, size, and number of files in each category.
-A second table shows deduplication statistics: the number of
-fragments and MB (deduplicated and expanded) that are shared by 0, 1, 2,...
-files. A third table summarizes updates, showing for each one the version
-number, date, number of files added and deleted, and MB added
-before and after compression. In addition the following is
-reported: number of fragments, number of fragments with unknown
-size (compressed with -tiny), number of blocks, number of blocks
-not referenced by any file, and total size before and after compression.
-
-  x or -extract
-
-Extract files and directores (default: all) from archive.
-Files will be extracted by creating filenames as saved in the archive.
-If any of the external files already exist then zpaq will exit with
-an error and not extract any files unless -force is given to allow
-files to be overwritten. Last-modified dates and attributes will be
-restored as saved. Attributes saved in Windows will not be restored
-in Linux and vice versa.
-
-  -to
-
-Rename external files corresponding to the arguments to -add,
--extract, or -list. The most common use is to rename extracted
-files and directories, for example:
-
-    zpaq a arc calgary
-    zpaq x arc calgary -to out
-
-will extract calgary/book1 (from arc.zpaq) to out/book1 and so on.
-
-  -not
-
-Exclude files and directories (before renaming) from -add, -extract,
-and -list. For example "zpaq a arc calgary -not calgary/book1"
-will add all the files in calgary except book1.
-
-  -version N
-
-Roll back the archive to an earlier version. With -list and -extract,
-versions later than N will be ignored. With -add, the archive
-will be truncated at N, discarding any subsquently added contents
-before updating.
-
-  -quiet
-
-With -add and -extract, don't display anything except errors and
-warnings. Normally, each filename is displayed as it is added or
-extracted.
-
-  -threads N
-
-Set the number of parallel threads for -add and -extract to N. The
-default is the number of cores detected by %NUMBER_OF_PROCESSORS%
-in Windows or /proc/cpuinfo in Linux. This number is displayed
-by the help message when zpaq is run with no options.
-Using fewer threads can reduce memory usage, but using more is
-not any faster.
+The 2-D model assumes a width of n bytes. The context is the column
+number (0..n-1) and either the previous byte or the current byte in
+the previous row. To find n, the block is first scanned to count gaps
+of length n between consecutive occurrences of the same byte value.
+Then n (at least 2) is chosen to maximize the number of gaps relative
+to the sum of the counts of all gaps greater than n.
 
 
 TO COMPILE:
@@ -846,6 +883,25 @@ void winError(const char* filename) {
     fprintf(stderr, ": Windows error %d\n", err);
 }
 
+// Set the last-modified date of an open file handle
+void setDate(HANDLE out, int64_t date) {
+  if (date>0) {
+    SYSTEMTIME st;
+    FILETIME ft;
+    st.wYear=date/10000000000LL%10000;
+    st.wMonth=date/100000000%100;
+    st.wDayOfWeek=0;  // ignored
+    st.wDay=date/1000000%100;
+    st.wHour=date/10000%100;
+    st.wMinute=date/100%100;
+    st.wSecond=date%100;
+    st.wMilliseconds=0;
+    SystemTimeToFileTime(&st, &ft);
+    if (!SetFileTime(out, NULL, NULL, &ft))
+      fprintf(stderr, "SetFileTime error %d\n", int(GetLastError()));
+  }
+}
+
 class InputFile: public File, public libzpaq::Reader {
   HANDLE in;  // input file handle
   DWORD n;    // buffer size
@@ -998,21 +1054,7 @@ public:
   void close(int64_t date=0, int64_t attr=0) {
     if (isopen()) {
       flush();
-      if (date>0) {
-        SYSTEMTIME st;
-        FILETIME ft;
-        st.wYear=date/10000000000LL%10000;
-        st.wMonth=date/100000000%100;
-        st.wDayOfWeek=0;  // ignored
-        st.wDay=date/1000000%100;
-        st.wHour=date/10000%100;
-        st.wMinute=date/100%100;
-        st.wSecond=date%100;
-        st.wMilliseconds=0;
-        SystemTimeToFileTime(&st, &ft);
-        if (!SetFileTime(out, NULL, NULL, &ft))
-          fprintf(stderr, "SetFileTime error %d\n", int(GetLastError()));
-      }
+      setDate(out, date);
       CloseHandle(out);
       out=INVALID_HANDLE_VALUE;
       if ((attr&255)=='w')
@@ -1283,23 +1325,7 @@ struct VER {
   VER() {memset(this, 0, sizeof(*this));}
 };
 
-// Compare by filename extension, then by full path
-struct Compare {
-  bool operator()(const string& a, const string& b) const {
-    const char* as=a.c_str();
-    const char* bs=b.c_str();
-    const char* ae=strrchr(as, '.');
-    if (!ae) ae="";
-    const char* be=strrchr(bs, '.');
-    if (!be) be="";
-    int cmp=strcmp(ae, be);
-    if (cmp) return cmp<0;
-    return strcmp(as, bs)<0;
-  }
-};
-
-typedef map<string, DT, Compare> DTMap;
-
+typedef map<string, DT> DTMap;
 class CompressJob;
 
 // Do everything
@@ -1312,18 +1338,17 @@ private:
 
   // Command line arguments
   string command;           // "-add", "-extract", "-list"
-  int blocksize;            // depends on method
   string archive;           // archive name
   vector<string> files;     // list of files and directories to add
   vector<string> notfiles;  // list of prefixes to exclude
   vector<string> tofiles;   // files renamed with -to
   int64_t date;             // now as decimal YYYYMMDDHHMMSS (UT)
   int64_t above;            // minimum file size to list
-  int version;              // Set by -version
+  int64_t version;          // version number or 14 digit date
   int threads;              // default is number of cores
   int since;                // First version to -list
   int summary;              // Arg to -summary
-  string method;            // "0".."4" or ZPAQL source code
+  int method;               // 0..9, default 1
   bool force;               // true if -force selected
   bool compare;             // true if -compare selected
 
@@ -1347,8 +1372,7 @@ private:
   void scandir(const char* filename);   // scan dirs and add args to dt
   void addfile(const char* filename, int64_t edate, int64_t esize,
                int64_t eattr);
-  void write_fragments(CompressJob& job, StringBuffer& b,
-                       const char* method, const int* args,
+  void write_fragments(CompressJob& job, StringBuffer& b, int method,
                        unsigned& block_start, int& misses);
   void list_versions(int64_t csize);
 };
@@ -1356,7 +1380,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.20 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.21 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
@@ -1367,7 +1391,7 @@ void Jidac::usage() {
   "Options (may be abbreviated):\n"
   "  -not <file|dir>...   Do not add/extract/list\n"
   "  -to <file|dir>...    Rename external files\n"
-  "  -version N           Revert to N'th update\n"
+  "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
   "  -force               a: Add even if unchanged. x: output clobbers\n"
   "  -quiet               Display only errors and warnings\n"
   "  -threads N           Use N threads (default: %d detected)\n"
@@ -1407,7 +1431,7 @@ string Jidac::unrename(const string& name) {
 string expandOption(const char* opt) {
   const char* opts[]={"list","add","extract","method",
     "force","quiet", "summary","since","above","compare",
-    "to","not","version","threads",0};
+    "to","not","version","until","threads",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -1435,10 +1459,9 @@ void Jidac::doCommand(int argc, char** argv) {
   since=0;
   above=-1;
   summary=0;
-  version=0x7fffffff;
-  threads=numberOfProcessors();
-  method="1";  // 0..4
-  blocksize=(1<<24)-257;
+  version=9999999999999LL;
+  threads=0; // 0 = auto-detect
+  method=1;  // 0..9
 
   // Get optional options
   for (int i=1; i<argc; ++i) {
@@ -1476,18 +1499,40 @@ void Jidac::doCommand(int argc, char** argv) {
         notfiles.push_back(atou(argv[i]));
       --i;
     }
-    else if (opt=="-version" && i<argc-1)
-      version=atoi(argv[++i]);
-    else if (opt=="-method" && i<argc-1) {  // read config file
-      method=atou(argv[++i]);
-      if (method.size()!=1 || !isdigit(method[0]))
-        usage();
-      int b=24;
-      if (method[0]>'5') b=24+method[0]-'5';
-      blocksize=(1<<b)-257;
+    else if ((opt=="-version" || opt=="-until") && i<argc-1) {
+      version=atof(argv[++i]);
+      if (version>=19000000LL     && version<=29991231LL)
+        version=version*100+23;
+      if (version>=1900000000LL   && version<=2999123123LL)
+        version=version*100+59;
+      if (version>=190000000000LL && version<=299912312359LL)
+        version=version*100+59;
+      if (version>9999999
+          && (version<19000101000000LL || version>29991231235959LL)) {
+        fprintf(stderr,
+           "Version date %1.0f must be 19000101000000 to 29991231235959\n",
+            double(version));
+        exit(1);
+      }
+    }
+    else if (opt=="-method" && i<argc-1) {
+      method=atoi(argv[++i]);
+      if (method<0 || method>9) usage();
     }
     else usage();
   }
+
+  // Set threads. In 32 bit programs, limit memory to 2 GB
+  if (!threads) {
+    threads=numberOfProcessors();
+    if (sizeof(char*)<8) {
+      assert(method>=0 && method<=9);
+      static const int limit[10]={64,64,64,20,16,8,4,2,1,0};
+      if (method==9) error("-method 9 requires 64 bit compile");
+      if (threads>limit[method]) threads=limit[method];
+    }
+  }
+  if (!quiet) printf("Using %d threads\n", threads);
 
   // Add .zpaq extension to archive
   if (size(archive)<5 || archive.substr(archive.size()-5)!=".zpaq")
@@ -1605,11 +1650,10 @@ int64_t Jidac::read_archive() {
           if (filename.s[17]=='c' && fdate>=19000000000000LL
               && fdate<30000000000000LL) {
             data_offset=in.tell();
-            bool isbreak=false;
+            bool isbreak=version<19000000000000LL ? size(ver)>version :
+                         version<fdate;
             int64_t jmp=0;
-            if (size(ver)>version) // roll back archive to here
-              isbreak=true;
-            else if (os.size()==8) {  // jump
+            if (!isbreak && os.size()==8) {  // jump
               const char* s=os.c_str();
               jmp=btol(s);
               if (jmp<0) {
@@ -1619,7 +1663,7 @@ int64_t Jidac::read_archive() {
               else if (jmp>0)
                 in.seek(jmp, SEEK_CUR);
             }
-            else {
+            if (os.size()!=8) {
               fprintf(stderr, "Bad JIDAC header size: %d\n", size(os));
               isbreak=true;
             }
@@ -1735,7 +1779,7 @@ int64_t Jidac::read_archive() {
           }
           assert(dtr.dtv.size()>0);
           dtr.dtv.back().ptr.push_back(size(ht));
-          dtr.dtv.back().streaming|=usize<0 || usize>blocksize;
+          dtr.dtv.back().streaming|=usize<0 || usize>(1<<24);
           if (usize>=0 && dtr.dtv.back().size>=0) dtr.dtv.back().size+=usize;
           else dtr.dtv.back().size=-1;
           ht.push_back(HT(sha1result+1, usize, segs ? -segs : block_offset));
@@ -2151,17 +2195,17 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_):
   flush();
 }
 
-// Compress from in to out in 1 block. method is "1".."4" or ZPAQL source
+// Compress from in to out in 1 block. method is 0..0
 // with args[9] or 0.  jobNumber is unique among threads in order to
 // create unique temporary file names. filename is saved in the segment
 // header. comment is appended to the decimal size
 void compressBlock(StringBuffer* in, libzpaq::Writer* out,
-                   const char* method, int* args=0, int jobNumber=0,
-                   const char* filename=0, const char* comment=0) {
+                   const int method, const int jobNumber=0,
+                   const char* filename=0) {
 
   assert(in);
   assert(out);
-  assert(method && *method);
+  assert(method>=0 && method<=9);
   if (!quiet)
     printf("Job %d compressing %d bytes to %s\n", jobNumber,
            size(*in), filename?filename:"");
@@ -2172,7 +2216,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "comp 0 0 0 0 0 hcomp post 0 end ",
 
     "(method 1 - lazy2 = e8e9 + LZ77) "
-    "comp 0 0 0 24 0 (for files up to 2^24 bytes) "
+    "comp 0 0 0 $1 0 (for files up to 2^$1 = 2^24 bytes) "
     "hcomp "
     "pcomp lazy2 3 ; (can be 1..5 for fastest..best compression) "
     " (r1 = state "
@@ -2291,7 +2335,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "end ",
 
     "(method 2 - LZ77 + ICM) "
-    "comp 0 0 0 24 1 "
+    "comp 0 0 0 $1 1 "
     "  0 icm 12 (sometimes \"0 cm 20 48\" will compress better) "
     "hcomp "
     "  (c=state: 0=init, 1=expect LZ77 literal or match code, "
@@ -2384,7 +2428,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "end ",
 
     "(method 3 - BWT) "
-    "comp 1 0 24 24 2 "
+    "comp 1 0 $1 $1 2 "  // 2^$1 >= block size + 257
     "  0 icm 5 "
     "  1 isse 12 0 "
     "hcomp "
@@ -2525,7 +2569,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  halt "
     "end ",
 
-    // methods 5..9
+    // methods 5..9. $1 = 0..4 = method-5
     " "
     "comp 5 16 0 0 26 (hh hm ph pm n) "
     "  0 const 160 "
@@ -2635,27 +2679,24 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "end "
   };
 
-  int level=-1;
-  if (*method>='0' && *method<='9' && method[1]==0) {
-    level=*method-'0';
-    if (level>5) method=cfg[5];
-    else method=cfg[level];
-    assert(level!=1 || size(*in)<(1<<24));
-    assert(level!=2 || size(*in)<(1<<24));
-    assert(level!=3 || size(*in)<=(1<<24)-257);
-    assert(level!=4 || size(*in)<(1<<24));
-    assert(level<5  || size(*in)<(1<<(24+level-5)));
-  }
+  assert(method>=0 && method<=9);
+  const char* config=cfg[5];
+  if (method<5) config=cfg[method];
+  const int n=in->size();  // input size
+  assert(method!=1 || n<(1<<24));
+  assert(method!=2 || n<(1<<24));
+  assert(method!=3 || n<=(1<<24)-257);
+  assert(method!=4 || n<(1<<24));
+  assert(method<5  || n<(1<<(24+method-5)));
 
   // Get hash of input
   libzpaq::SHA1 sha1;
   const char* sha1ptr=0;
-  const int n=in->size();  // input size
   for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
     sha1.put(*p);
   sha1ptr=sha1.result();
 
-  // Compress in to out using method
+  // Compress in to out using config
   libzpaq::Compressor co;
   co.setOutput(out);
 #ifdef DEBUG
@@ -2664,9 +2705,9 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   StringBuffer pcomp_cmd;
   co.writeTag();
 
-  // For levels 5..9 get length of periodic data
-  if (level>=5 && level<=9) {
-    int a[9]={0};
+  // For methods 5..9 get length of periodic data
+  int args[9]={0};
+  if (method>=5 && method<=9) {
     const int NR=1<<12;
     int pt[256]={0}, r[NR]={0};  // count repetition gaps of length r
     const unsigned char* p=in->data();
@@ -2683,37 +2724,42 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
       if (s>score) score=s, period=i;
       t+=r[i];
     }
-    a[0]=level-5;
-    a[1]=period&255;
-    a[2]=(period>>8)&255;
+    args[0]=method-5;
+    args[1]=period&255;
+    args[2]=(period>>8)&255;
     if (!quiet)
       printf("Job %d: period = %d (%1.4f/%d)\n",
              jobNumber, period, double(score), n);
-    co.startBlock(method, a, &pcomp_cmd);
   }
-  else
-    co.startBlock(method, args, &pcomp_cmd);
 
-  // Compress with appropriate preprocessor depending on level
-  string cs=itos(n);
-  if (comment) cs+=comment;
+  // For methods 1..3 choose memory size
+  if (method>=1 && method<=3 && n>0) {
+    args[0]=lg(n-1+257*(method==3));
+    assert(args[0]>=0 && args[0]<=24);
+    assert(method!=3 || args[0]>=9);
+  }
+
+  // Compress with appropriate preprocessor depending on method
+  co.startBlock(config, args, &pcomp_cmd);
+  string cs=itos(n)+" jDC\x01";
   co.startSegment(filename, cs.c_str());
-  if (level==1 || level==2) {  // preprocess with built-in LZ77
-    LZBuffer lz(*in, level);
+  if (method==1 || method==2) {  // preprocess with built-in LZ77
+    LZBuffer lz(*in, method);
     co.setInput(&lz);
     co.compress();
   }
-  else if (level==3) {  // preprocess with built-in BWT
+  else if (method==3) {  // preprocess with built-in BWT
     BWTBuffer bwt(*in);
     co.setInput(&bwt);
     co.compress();
   }
   else {  // compress method 4 with e8e9 else without preprocessing
-    if (level>=4 && level<=9)
+    if (method>=4 && method<=9)
       e8e9(in->data(), in->size());
     co.setInput(in);
     co.compress();
   }
+  in->reset();
 #ifdef DEBUG  // verify pre-post processing are inverses
   int64_t outsize;
   const char* sha1result=co.endSegmentChecksum(&outsize);
@@ -2744,15 +2790,10 @@ struct CJ {
   enum {EMPTY, FILLING, FULL, COMPRESSING, COMPRESSED, WRITING} state;
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
-  string comment;        // to append to size in comment field
-  string method;         // compression algorithm
-  int args[9];           // arguments to method
+  int method;            // compression level 0..9 or -1 to mark end of data
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
-  bool end;              // mark end of data
-  CJ(): state(EMPTY), in(1<<24), out(1<<24), end(false) {
-    memset(args, 0, sizeof(args));
-  }
+  CJ(): state(EMPTY), in(1<<24), out(1<<24), method(0) {}
 };
 
 // Instructions to a compression job
@@ -2782,26 +2823,21 @@ public:
     }
     destroy_mutex(mutex);
   }      
-  void write(const StringBuffer& s, const char* filename,
-             const char* comment, const char* method, const int* args);
+  void write(const StringBuffer& s, const char* filename, int method);
   vector<int> csize;  // compressed block sizes
 };
 
-// Write s at the back of the queue. Signal end of input with method=0
-void CompressJob::write(const StringBuffer& s, const char* fn,
-                        const char* cm, const char* method, const int* args) {
-  for (unsigned k=(method==0)?q.size():1; k>0; --k) {
+// Write s at the back of the queue. Signal end of input with method=-1
+void CompressJob::write(const StringBuffer& s, const char* fn, int method) {
+  for (unsigned k=(method<0)?q.size():1; k>0; --k) {
     empty.wait();
     lock(mutex);
     unsigned i, j;
     for (i=0; i<q.size(); ++i) {
       if (q[j=(i+front)%q.size()].state==CJ::EMPTY) {
         q[j].state=CJ::FILLING;
-        q[j].end=method==0;
         q[j].filename=fn?fn:"";
-        q[j].comment=cm?cm:"";
-        q[j].method=method?method:"";
-        for (int k=0; k<9; ++k) q[j].args[k]=args?args[k]:0;
+        q[j].method=method;
         release(mutex);
         q[j].in=s;
         lock(mutex);
@@ -2834,7 +2870,7 @@ ThreadReturn compressThread(void* arg) {
       lock(job.mutex);
 
       // Check for end of input
-      if (cj.end) {
+      if (cj.method<0) {
         cj.compressed.signal();
         release(job.mutex);
         return 0;
@@ -2844,8 +2880,8 @@ ThreadReturn compressThread(void* arg) {
       assert(cj.state==CJ::FULL);
       cj.state=CJ::COMPRESSING;
       release(job.mutex);
-      compressBlock(&cj.in, &cj.out, cj.method.c_str(), cj.args,
-                    jobNumber+1, cj.filename.c_str(), cj.comment.c_str());
+      compressBlock(&cj.in, &cj.out, cj.method,
+                    jobNumber+1, cj.filename.c_str());
       lock(job.mutex);
       cj.in.reset();
       cj.state=CJ::COMPRESSED;
@@ -2853,7 +2889,7 @@ ThreadReturn compressThread(void* arg) {
       release(job.mutex);
     }
   }
-  catch (std::runtime_error& e) {
+  catch (std::exception& e) {
     fprintf(stderr, "zpaq exiting from job %d: %s\n", jobNumber+1, e.what());
     exit(1);
   }
@@ -2874,7 +2910,7 @@ ThreadReturn writeThread(void* arg) {
 
       // Quit if end of input
       lock(job.mutex);
-      if (cj.end) {
+      if (cj.method<0) {
         release(job.mutex);
         return 0;
       }
@@ -2899,7 +2935,7 @@ ThreadReturn writeThread(void* arg) {
       release(job.mutex);
     }
   }
-  catch (std::runtime_error& e) {
+  catch (std::exception& e) {
     fprintf(stderr, "zpaq exiting from writeThread: %s\n", e.what());
     exit(1);
   }
@@ -2915,39 +2951,35 @@ void writeJidacHeader(libzpaq::Writer *out, int64_t date,
   libzpaq::Compressor co;
   StringBuffer is;
   is+=ltob(cdata);
-  compressBlock(&is, out, "0", 0, 0,
-    ("jDC"+itos(date, 14)+"c"+itos(htsize, 10)).c_str(), " jDC\x01");
+  compressBlock(&is, out, 0, 0,
+                ("jDC"+itos(date, 14)+"c"+itos(htsize, 10)).c_str());
 }
 
 // Compress fragments in b indexed by ht[block_start...] to job
 // using method and args with list of fragment sizes appended.
-// Select method "0" if misses is near b.size() and reset misses=0.
+// Select method 0 if misses is near b.size() and reset misses=0.
 void Jidac::write_fragments(CompressJob& job, StringBuffer& b,
-                            const char* method, const int* args,
-                            unsigned& block_start, int& misses) {
+                            int method, unsigned& block_start, int& misses) {
   bool iscompressed=true;
-  if (strlen(method)==1) {
-    switch(method[0]-'0') {
-      case 1: iscompressed=b.size()-misses>b.size()/16; break;
-      case 2: iscompressed=b.size()-misses>b.size()/32; break;
-      case 3: iscompressed=b.size()-misses>b.size()/64; break;
-      case 4: iscompressed=b.size()-misses>b.size()/128; break;
-    }
+  switch(method) {
+    case 1: iscompressed=b.size()-misses>b.size()/16; break;
+    case 2: iscompressed=b.size()-misses>b.size()/32; break;
+    case 3: iscompressed=b.size()-misses>b.size()/64; break;
+    case 4: iscompressed=b.size()-misses>b.size()/128; break;
   }
   if (!quiet) {
     printf("Fragments %d-%d misses=%d/%d %1.2f%% (%s)\n",
            block_start, size(ht), misses, size(b), misses*100.0/size(b),
            iscompressed ? "compressed" : "stored");
   }
-  if (!iscompressed) method="0", args=0;
+  if (!iscompressed) method=0;
   if (block_start>=ht.size()) return;
   for (unsigned i=block_start; i<ht.size(); ++i)
     b+=itob(ht[i].usize);
   b+=itob(block_start);
   b+=itob(ht.size()-block_start);
-  job.write(b, 
-    ("jDC"+itos(date, 14)+"d"+itos(block_start,10)).c_str(), " jDC\x01",
-     method, args);
+  job.write(b, ("jDC"+itos(date, 14)+"d"+itos(block_start,10)).c_str(),
+            method);
   b.reset();
   ht[block_start].csize=-1;  // to fill in later
   block_start=ht.size();
@@ -2985,6 +3017,19 @@ public:
       t[hash(htr[htsize].sha1)].push_back(htsize);
   }    
 };
+
+// Sort by file name extension
+bool compareFilename(DTMap::iterator ap, DTMap::iterator bp) {
+  const char* as=ap->first.c_str();
+  const char* bs=bp->first.c_str();
+  const char* ae=strrchr(as, '.');
+  if (!ae) ae="";
+  const char* be=strrchr(bs, '.');
+  if (!be) be="";
+  int cmp=strcmp(ae, be);
+  if (cmp) return cmp<0;
+  return strcmp(as, bs)<0;
+}
 
 // Add files to archive
 void Jidac::add() {
@@ -3039,15 +3084,23 @@ void Jidac::add() {
   for (int i=0; i<threads; ++i) run(tid[i], compressThread, &job);
   run(wid, writeThread, &job);
 
+  // Sort the files to be added by filename extension
+  vector<DTMap::iterator> vf;
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+    if (p->second.edate && (force || p->second.dtv.size()==0
+       || p->second.edate!=p->second.dtv.back().date))
+    vf.push_back(p);
+  }
+  std::sort(vf.begin(), vf.end(), compareFilename);
+
   // Split input files into fragments and group into blocks.
   unsigned block_start=ht.size();
   StringBuffer b(1<<24);  // current block
   int unmatchedFragments=0, totalFragments=0;  // counts
   int misses=0, fmisses=0;  // mispredictions in block and fragment
-  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (p->second.edate && (force || p->second.dtv.size()==0
-       || p->second.edate!=p->second.dtv.back().date)) {
-
+  for (unsigned i=0; i<vf.size(); ++i) {
+    DTMap::iterator p=vf[i];
+    {
       // Add directory
       string filename=rename(p->first);
       if (filename!="" && filename[filename.size()-1]=='/') {
@@ -3081,6 +3134,10 @@ void Jidac::add() {
         printf("\n");
       }
 
+      // Set block size
+      int blocksize=(1<<24)-257*(method==3);
+      if (method>5) blocksize=1<<(24+method-5);
+
       // Split the file into fragments on content-dependent
       // boundaries and group into blocks. For each fragment, look up its
       // hash in ht. If found, then omit it from the block, otherwise append
@@ -3093,7 +3150,7 @@ void Jidac::add() {
         unsigned char o1[256]={0};  // order-1 prediction
         int fragment=0;  // size
         if (size(b)>blocksize*3/4 && size(b)+p->second.esize>blocksize)
-          write_fragments(job, b, method.c_str(), 0, block_start, misses);
+          write_fragments(job, b, method, block_start, misses);
         do {
           c=in.get();
           if (c!=EOF) {
@@ -3124,8 +3181,7 @@ void Jidac::add() {
             p->second.eptr.push_back(j);
             fragment=fmisses=0;
             if (b.size()>=blocksize-MAX_FRAGMENT-8-(ht.size()-block_start)*4)
-              write_fragments(job, b, method.c_str(), 0,
-                              block_start, misses);
+              write_fragments(job, b, method, block_start, misses);
             c1=h=0;
             memset(o1, 0, sizeof(o1));
           }
@@ -3142,10 +3198,10 @@ void Jidac::add() {
            totalFragments-unmatchedFragments, totalFragments);
 
   // compress last partial block
-  write_fragments(job, b, method.c_str(), 0, block_start, misses);
+  write_fragments(job, b, method, block_start, misses);
 
   // Wait for jobs to finish
-  job.write(b, 0, 0, 0, 0);  // signal end of input
+  job.write(b, 0, -1);  // signal end of input
   for (int i=0; i<threads; ++i)
     join(tid[i]);
   join(wid);
@@ -3165,10 +3221,9 @@ void Jidac::add() {
   for (unsigned i=htsize; i<=ht.size(); ++i) {
     if ((i==ht.size() || ht[i].csize>0) && is.size()>0) {  // write a block
       assert(block_start>=htsize && block_start<i);
-      compressBlock(&is, &out, "0", 0, 0,
-        ("jDC"+itos(date, 14)+"h"+itos(block_start, 10)).c_str(),
-        " jDC\x01");
-        assert(is.size()==0);
+      compressBlock(&is, &out, 0, 0,
+                    ("jDC"+itos(date, 14)+"h"+itos(block_start, 10)).c_str());
+      assert(is.size()==0);
     }
     if (i<ht.size()) {
       if (ht[i].csize) is+=itob(ht[i].csize), block_start=i;
@@ -3219,16 +3274,8 @@ void Jidac::add() {
     }
     ++p;
     if (is.size()>16000 || (is.size()>0 && p==dt.end())) {
-      compressBlock(&is, &out, 
-        // 2-D indirect context model with 4 columns
-        "comp 0 1 0 0 1 "
-        "  0 icm 11 "
-        "hcomp "
-        "  *b=a hash "
-        "  b-- hash *d=a "
-        "  halt "
-        "post 0 end ",
-        0, 0, ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str(), " jDC\x01");
+      compressBlock(&is, &out, 1, 0,
+        ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
       assert(is.size()==0);
     }
     if (p==dt.end()) break;
@@ -3252,8 +3299,8 @@ void Jidac::add() {
 
 // Create directories as needed. For example if path="/tmp/foo/bar"
 // then create directories /, /tmp, and /tmp/foo unless they exist.
-// Change \ to / in path.
-void makepath(string& path) {
+// Change \ to / in path. Set date and attributes if not 0.
+void makepath(string& path, int64_t date=0, int64_t attr=0) {
   for (int i=0; i<size(path); ++i) {
     if (path[i]=='\\' || path[i]=='/') {
       path[i]=0;
@@ -3270,6 +3317,37 @@ void makepath(string& path) {
       path[i]='/';
     }
   }
+
+  // Set date and attributes
+  string filename=path;
+  if (filename!="" && filename[filename.size()-1]=='/')
+    filename=filename.substr(0, filename.size()-1);  // remove trailing slash
+#ifdef unix
+  if (date>0) {
+    struct utimbuf ub;
+    ub.actime=time(NULL);
+    ub.modtime=unix_time(date);
+    utime(filename.c_str(), &ub);
+  }
+  if ((attr&255)=='u')
+    chmod(filename.c_str(), attr>>8);
+#else
+  for (int i=0; i<size(filename); ++i)  // change to backslashes
+    if (filename[i]=='/') filename[i]='\\';
+  if (date>0) {
+    HANDLE out=CreateFile(utow(filename.c_str()).c_str(),
+                          FILE_WRITE_ATTRIBUTES, 0, NULL, OPEN_EXISTING,
+                          FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (out!=INVALID_HANDLE_VALUE) {
+      setDate(out, date);
+      CloseHandle(out);
+    }
+    else winError(filename.c_str());
+  }
+  if ((attr&255)=='w') {
+    SetFileAttributes(utow(filename.c_str()).c_str(), attr>>8);
+  }
+#endif
 }
 
 // An extract job is a set of blocks with at least one file pointing to them.
@@ -3309,173 +3387,179 @@ struct ExtractJob {         // list of jobs
 
 // Decompress blocks in a job until none are READY
 ThreadReturn decompressThread(void* arg) {
-  ExtractJob& job=*(ExtractJob*)arg;
-  int jobNumber=0;
-  InputFile in;
+  try {
+    ExtractJob& job=*(ExtractJob*)arg;
+    int jobNumber=0;
+    InputFile in;
 
-  // Get job number
-  lock(job.mutex);
-  jobNumber=++job.job;
-  release(job.mutex);
-
-  // Open archive for reading
-  if (!in.open(job.jd.archive.c_str())) return 0;
-  StringBuffer out(job.jd.blocksize);
-
-  // Look for next READY job
-  for (unsigned i=0; i<job.block.size(); ++i) {
-    Block& b=job.block[i];
+    // Get job number
     lock(job.mutex);
-    if (b.state==Block::READY) {
-      b.state=Block::WORKING;
-      release(job.mutex);
-    }
-    else {
-      release(job.mutex);
-      continue;
-    }
-    if (b.size==0 || b.streaming) continue;  // nothing to decompress
+    jobNumber=++job.job;
+    release(job.mutex);
 
-    // Get uncompressed size of block
-    int output_size=0;
-    assert(b.start>0);
-    for (int j=0; j<b.size; ++j) {
-      assert(b.start+j<job.jd.ht.size());
-      assert(job.jd.ht[b.start+j].usize>=0);
-      output_size+=job.jd.ht[b.start+j].usize;
-    }
+    // Open archive for reading
+    if (!in.open(job.jd.archive.c_str())) return 0;
+    StringBuffer out;
 
-    // Decompress
-    try {
+    // Look for next READY job
+    for (unsigned i=0; i<job.block.size(); ++i) {
+      Block& b=job.block[i];
+      lock(job.mutex);
+      if (b.state==Block::READY) {
+        b.state=Block::WORKING;
+        release(job.mutex);
+      }
+      else {
+        release(job.mutex);
+        continue;
+      }
+      if (b.size==0 || b.streaming) continue;  // nothing to decompress
+
+      // Get uncompressed size of block
+      int output_size=0;
       assert(b.start>0);
-      assert(b.start<job.jd.ht.size());
-      assert(b.size>=0);
-      assert(b.start+b.size<=job.jd.ht.size());
-      in.seek(job.jd.ht[b.start].csize, SEEK_SET);
-      libzpaq::Decompresser d;
-      d.setInput(&in);
-      out.reset();
-      d.setOutput(&out);
-      if (!d.findBlock()) error("archive block not found");
-      while (d.findFilename()) {
-        d.readComment();
-        while (size(out)<output_size && d.decompress(1<<14));
-        if (!quiet)
-          printf("Job %d: decompressed %d bytes\n", jobNumber, size(out));
-        d.readSegmentEnd();
+      for (int j=0; j<b.size; ++j) {
+        assert(b.start+j<job.jd.ht.size());
+        assert(job.jd.ht[b.start+j].usize>=0);
+        output_size+=job.jd.ht[b.start+j].usize;
       }
-      if (size(out)<output_size)
-        error("unexpected end of compressed data");
 
-      // Verify checksums if present
-      const char* q=out.c_str();
-      for (unsigned j=b.start; j<b.start+b.size; ++j) {
-        libzpaq::SHA1 sha1;
-        for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
-        if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
-          for (int k=0; k<20; ++k) {
-            if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
-              fprintf(stderr, 
-                     "Job %d: fragment %d size %d checksum failed\n",
-                     jobNumber, j, job.jd.ht[j].usize);
-              error("bad checksum");
-            }
-          }
+      // Decompress
+      try {
+        assert(b.start>0);
+        assert(b.start<job.jd.ht.size());
+        assert(b.size>=0);
+        assert(b.start+b.size<=job.jd.ht.size());
+        in.seek(job.jd.ht[b.start].csize, SEEK_SET);
+        libzpaq::Decompresser d;
+        d.setInput(&in);
+        out.reset();
+        d.setOutput(&out);
+        if (!d.findBlock()) error("archive block not found");
+        while (d.findFilename()) {
+          d.readComment();
+          while (size(out)<output_size && d.decompress(1<<14));
+          if (!quiet)
+            printf("Job %d: decompressed %d bytes\n", jobNumber, size(out));
+          d.readSegmentEnd();
         }
-      }
-    }
-    catch (std::exception& e) {
-      fprintf(stderr, "Job %d: skipping block: %s\n", jobNumber, e.what());
-      continue;
-    }
+        if (size(out)<output_size)
+          error("unexpected end of compressed data");
 
-    // Write the files in dt that point to this block
-    lock(job.write_mutex);
-    for (DTMap::iterator p=job.jd.dt.begin();p!=job.jd.dt.end();++p){
-      DT& dtr=p->second;
-      if (dtr.written<0 || size(dtr.dtv)==0 
-          || dtr.written>=size(dtr.dtv.back().ptr))
-        continue;  // don't write
-
-      // Look for pointers to this block
-      vector<unsigned>& ptr=dtr.dtv.back().ptr;
-      string filename="";
-      int64_t offset=0;  // write offset
-      for (unsigned j=0; j<ptr.size(); ++j) {
-        if (ptr[j]<b.start || ptr[j]>=b.start+b.size) {
-          offset+=job.jd.ht[ptr[j]].usize;
-          continue;
-        }
-
-        // Close last opened file if different
-        if (p!=job.lastdt) {
-          if (job.outf.isopen()) {
-            assert(job.lastdt!=job.jd.dt.end());
-            assert(job.lastdt->second.dtv.size()>0);
-            assert(job.lastdt->second.dtv.back().date);
-            job.outf.close(job.lastdt->second.dtv.back().date);
-          }
-          job.lastdt=job.jd.dt.end();
-        }
-
-        // Open file for output
-        if (!job.outf.isopen()) {
-          filename=job.jd.rename(p->first);
-          if (dtr.written==0) {
-            makepath(filename);
-            if (!quiet) {
-              printf("Job %d: extracting ", jobNumber);
-              printUTF8(filename.c_str());
-              printf("\n");
-            }
-            if (job.outf.open(filename.c_str()))  // create new file
-              job.outf.truncate();
-          }
-          else
-            job.outf.open(filename.c_str());  // update existing file
-          if (!job.outf.isopen()) break;  // skip file if error
-          else job.lastdt=p;
-        }
-        assert(job.outf.isopen());
-        assert(job.lastdt==p);
-
-        // Find block offset of fragment
+        // Verify checksums if present
         const char* q=out.c_str();
-        for (unsigned k=b.start; k<ptr[j]; ++k)
-          q+=job.jd.ht[k].usize;
-        assert(q>=out.c_str());
-        assert(q<=out.c_str()+out.size()-job.jd.ht[ptr[j]].usize);
-
-        // Write the fragment and any consecutive fragments that follow
-        assert(offset>=0);
-        ++dtr.written;
-        int usize=job.jd.ht[ptr[j]].usize;
-        while (j+1<ptr.size() && ptr[j+1]==ptr[j]+1
-               && ptr[j+1]<b.start+b.size) {
-          ++dtr.written;
-          assert(dtr.written<=size(ptr));
-          usize+=job.jd.ht[ptr[++j]].usize;
-        }
-        assert(q+usize<=out.c_str()+out.size());
-        job.outf.write(q, offset, usize);
-        offset+=usize;
-        if (dtr.written==size(ptr)) {  // close file
-          assert(dtr.dtv.size()>0);
-          assert(dtr.dtv.back().date);
-          assert(job.outf.isopen());
-          assert(job.lastdt!=job.jd.dt.end());
-          job.outf.close(dtr.dtv.back().date, dtr.dtv.back().attr);
-          job.lastdt=job.jd.dt.end();
+        for (unsigned j=b.start; j<b.start+b.size; ++j) {
+          libzpaq::SHA1 sha1;
+          for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
+          if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
+            for (int k=0; k<20; ++k) {
+              if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
+                fprintf(stderr, 
+                       "Job %d: fragment %d size %d checksum failed\n",
+                       jobNumber, j, job.jd.ht[j].usize);
+                error("bad checksum");
+              }
+            }
+          }
         }
       }
+      catch (std::exception& e) {
+        fprintf(stderr, "Job %d: skipping block: %s\n", jobNumber, e.what());
+        continue;
+      }
+
+      // Write the files in dt that point to this block
+      lock(job.write_mutex);
+      for (DTMap::iterator p=job.jd.dt.begin();p!=job.jd.dt.end();++p){
+        DT& dtr=p->second;
+        if (dtr.written<0 || size(dtr.dtv)==0 
+            || dtr.written>=size(dtr.dtv.back().ptr))
+          continue;  // don't write
+
+        // Look for pointers to this block
+        vector<unsigned>& ptr=dtr.dtv.back().ptr;
+        string filename="";
+        int64_t offset=0;  // write offset
+        for (unsigned j=0; j<ptr.size(); ++j) {
+          if (ptr[j]<b.start || ptr[j]>=b.start+b.size) {
+            offset+=job.jd.ht[ptr[j]].usize;
+            continue;
+          }
+
+          // Close last opened file if different
+          if (p!=job.lastdt) {
+            if (job.outf.isopen()) {
+              assert(job.lastdt!=job.jd.dt.end());
+              assert(job.lastdt->second.dtv.size()>0);
+              assert(job.lastdt->second.dtv.back().date);
+              job.outf.close(job.lastdt->second.dtv.back().date);
+            }
+            job.lastdt=job.jd.dt.end();
+          }
+
+          // Open file for output
+          if (!job.outf.isopen()) {
+            filename=job.jd.rename(p->first);
+            if (dtr.written==0) {
+              makepath(filename);
+              if (!quiet) {
+                printf("Job %d: extracting ", jobNumber);
+                printUTF8(filename.c_str());
+                printf("\n");
+              }
+              if (job.outf.open(filename.c_str()))  // create new file
+                job.outf.truncate();
+            }
+            else
+              job.outf.open(filename.c_str());  // update existing file
+            if (!job.outf.isopen()) break;  // skip file if error
+            else job.lastdt=p;
+          }
+          assert(job.outf.isopen());
+          assert(job.lastdt==p);
+
+          // Find block offset of fragment
+          const char* q=out.c_str();
+          for (unsigned k=b.start; k<ptr[j]; ++k)
+            q+=job.jd.ht[k].usize;
+          assert(q>=out.c_str());
+          assert(q<=out.c_str()+out.size()-job.jd.ht[ptr[j]].usize);
+
+          // Write the fragment and any consecutive fragments that follow
+          assert(offset>=0);
+          ++dtr.written;
+          int usize=job.jd.ht[ptr[j]].usize;
+          while (j+1<ptr.size() && ptr[j+1]==ptr[j]+1
+                 && ptr[j+1]<b.start+b.size) {
+            ++dtr.written;
+            assert(dtr.written<=size(ptr));
+            usize+=job.jd.ht[ptr[++j]].usize;
+          }
+          assert(q+usize<=out.c_str()+out.size());
+          job.outf.write(q, offset, usize);
+          offset+=usize;
+          if (dtr.written==size(ptr)) {  // close file
+            assert(dtr.dtv.size()>0);
+            assert(dtr.dtv.back().date);
+            assert(job.outf.isopen());
+            assert(job.lastdt!=job.jd.dt.end());
+            job.outf.close(dtr.dtv.back().date, dtr.dtv.back().attr);
+            job.lastdt=job.jd.dt.end();
+          }
+        }
+      }
+
+      // Last file
+      release(job.write_mutex);
     }
 
-    // Last file
-    release(job.write_mutex);
+    // Last block
+    in.close();
   }
-
-  // Last block
-  in.close();
+  catch (std::exception& e) {
+    fprintf(stderr, "Exiting with exception: %s\n", e.what());
+    exit(1);
+  }
   return 0;
 }
 
@@ -3609,12 +3693,13 @@ void Jidac::extract() {
   // Wait for threads to finish
   for (int i=0; i<size(tid); ++i) join(tid[i]);
 
-  // Create empty directories
-  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+  // Create empty directories and set directory dates and attributes
+  for (DTMap::reverse_iterator p=dt.rbegin(); p!=dt.rend(); ++p) {
     if (p->second.written==0 && p->first!=""
         && p->first[p->first.size()-1]=='/') {
       string s=rename(p->first);
-      makepath(s);
+      if (p->second.dtv.size())
+        makepath(s, p->second.dtv.back().date, p->second.dtv.back().attr);
     }
   }
 }
