@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.19 implementation - Jan. 22, 2012.
+/* libzpaq.cpp - LIBZPAQ Version 6.22 implementation - Feb. 12, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -2188,18 +2188,18 @@ int ZPAQL::assemble() {
   if (S==8) {
     put2l(0x48b8, &outbuf[0]);// mov rax, outbuf.p
     put2l(0x49ba, &bufptr);   // mov r10, &bufptr
-    put3(0x418b0a);           // mov ecx, [r10]
-    put3(0x891408);           // mov [rax+rcx], edx
-    put2(0xffc1);             // inc ecx
+    put3(0x418b0a);           // mov rcx, [r10]
+    put3(0x881408);           // mov [rax+rcx], dl
+    put2(0xffc1);             // inc rcx
     put3(0x41890a);           // mov [r10], ecx
-    put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
+    put2a(0x81f9, outbuf.size());  // cmp rcx, outbuf.size()
     put2(0x7401);             // jz L1
     put1(0xc3);               // ret
-    put4(0x4883ec30);         // L1: sub esp, 48  ; call flush1(this)
-    put4(0x48893c24);         // mov [rsp], rdi
-    put5(0x48897424,8);       // mov [rsp+8], rsi
-    put5(0x48895424,16);      // mov [rsp+16], rdx
-    put5(0x48894c24,24);      // mov [rsp+24], rcx
+    put4(0x4883ec48);         // L1: sub rsp, 72  ; call flush1(this)
+    put5(0x48897c24,64);      // mov [rsp+64], rdi
+    put5(0x48897424,56);      // mov [rsp+56], rsi
+    put5(0x48895424,48);      // mov [rsp+48], rdx
+    put5(0x48894c24,40);      // mov [rsp+40], rcx
 #ifdef unix
     put2l(0x48bf, this);      // mov rdi, this
 #else  // Windows
@@ -2207,17 +2207,17 @@ int ZPAQL::assemble() {
 #endif
     put2l(0x49bb, &flush1);   // mov r11, &flush1
     put3(0x41ffd3);           // call r11
-    put5(0x488b4c24,24);      // mov rcx, [rsp+24]
-    put5(0x488b5424,16);      // mov rdx, [rsp+16]
-    put5(0x488b7424,8);       // mov rsi, [rsp+8]
-    put4(0x488b3c24);         // mov rdi, [rsp]
-    put4(0x4883c430);         // add esp, 48
+    put5(0x488b4c24,40);      // mov rcx, [rsp+40]
+    put5(0x488b5424,48);      // mov rdx, [rsp+48]
+    put5(0x488b7424,56);      // mov rsi, [rsp+56]
+    put5(0x488b7c24,64);      // mov rdi, [rsp+64]
+    put4(0x4883c448);         // add rsp, 72
     put1(0xc3);               // ret
   }
   else {
     put1a(0xb8, &outbuf[0]);  // mov eax, outbuf.p
     put2a(0x8b0d, &bufptr);   // mov ecx, [bufptr]
-    put3(0x891408);           // mov [eax+ecx], edx
+    put3(0x881408);           // mov [eax+ecx], dl
     put2(0xffc1);             // inc ecx
     put2a(0x890d, &bufptr);   // mov [bufptr], ecx
     put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
