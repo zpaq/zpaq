@@ -1,4 +1,4 @@
-/* zpaqd v6.19 - ZPAQ compression development tool - Jan. 22, 2013.
+/* zpaqd v6.22 - ZPAQ compression development tool - Feb. 12, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -112,8 +112,12 @@ using std::map;
 #define fseeko(a,b,c) _fseeki64(a,b,c)
 #define ftello(a) _ftelli64(a)
 #else
+#ifndef fseeko
 #define fseeko(a,b,c) fseeko64(a,b,c)
+#endif
+#ifndef ftello
 #define ftello(a) ftello64(a)
+#endif
 #endif
 #endif
 
@@ -501,7 +505,7 @@ int Predictor::stat(int id) {
 // Print help message
 void usage() {
   printf(
-    "zpaqd v6.19 ZPAQ development tool, " __DATE__ "\n"
+    "zpaqd v6.22 ZPAQ development tool, " __DATE__ "\n"
     "To compress: zpaqd {a|c}[i|n|s|t]... config [arg]... archive files...\n"
     "  a - append to existing archive.zpaq\n"
     "  c - create new archive.zpaq\n"

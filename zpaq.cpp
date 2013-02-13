@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.21 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.22 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -149,31 +149,110 @@ or the limit according to -method, whichever is less. The number of cores
 is detected from the environment variable %NUMBER_OF_PROCESSORS% in
 Windows or /proc/cpuinfo in Linux.
 
-  -method 0..9
+  -method M[n|e][C[N1][,N2]...]...
 
-Compress faster...better. The default is -method 1. The following
-table shows the memory required per thread, block size, maximum number of
-threads (if compiled for 32 bit OS), and algorithm used. The same
-memory per thread is required to decompress. For a 32 bit OS, the number
-of threads is limited to not exceed 2 GB of memory. When compiled for a
-64 bit OS, there is no limit on the number of threads. Blocks are compressed
-and decompressed indepenently in separate threads. Larger blocks usually
-compress better, but reduce the number of threads it is possible to run
-at the same time.
+Select compression method, where M is a digit, possibly followed by
+a list of arguments. Each argument consists of a single letter C
+followed by a list of 0 or more non-negative integers separated by
+commas or periods with no spaces. The default is "1". The meanings are
+as follows:
 
-                           Thread limit
-  Method   Memory  Block   (32 bit)      Algorithm
-  ------   ------  ------  ------------  ---------
-    0        1 MB   16 MB  64            Not compressed
-    1       16 MB   16 MB  64            LZ77
-    2       17 MB   16 MB  64            LZ77 + CM
-    3       84 MB   16 MB  20            BWT + CM
-    4      111 MB   16 MB  16            CM
-    5      188 MB   16 MB   8            CM
-    6      360 MB   32 MB   4            CM
-    7      704 MB   64 MB   2            CM
-    8     1392 MB  128 MB   1            CM
-    9     2800 MB  256 MB   0            CM
+  M
+
+M ranges from 0 to 9. Higher numbers compress better but are slower
+and require more memory. M selects the base algorithm and block size
+as follows:
+
+  0 = No compression.
+  1 = LZ77 with variable length codes and no context modeling.
+  2 = LZ77 with byte aligned codes and a context model.
+  3 = BWT (Burrows-Wheeler transform).
+  4..9 = CM (Context mixing).
+
+The block size is 16 MB for M=0..4 and 2^M MB for M=4..9.
+
+No other arguments are required. If omitted, then the compression algorithm
+will be selected based on an analysis of the input data and may vary from
+block to block. Otherwise, any arguments override the analysis and exactly
+specify the compression algorithm for all blocks. The arguments are as
+follows:
+
+  n - No further preprocessing.
+  e - E8E8 preprocessing (M=1..9 only).
+
+The E8E9 preprocessor replaces input sequences of the form
+(E8|E9 xx xx xx 00|FF) by adding the sequence offset from the
+start of the block to the 3 middle bytes (LSB first), mod 2^24. This
+improves compression of x86 code (.exe and .dll files).
+
+Additional options apply to M=3..9 only.
+
+  c - Context model (CM or ICM).
+  i - ISSE chain.
+  a - MATCH.
+  m - MIX.
+  t - MIX2.
+  s - SSE
+  w - Word model ISSE chain.
+
+Memory usage per component is generally limited to the block size, but
+may be less for small contexts. The numeric arguments to each model
+are as follows:
+
+  c
+
+N1 is 0 for an ICM and 1..256 to specify a CM with limit argument N1-1.
+Higher values are better for stationary sources. Default is 0.
+
+N2 in 1..255 includes (offset mod N2) in the context hash. N2 in 1000..1255
+includes the distance to the last occurrence of N2-1000 in the context
+hash. The default is 0 which includes neither of these contexts.
+
+N3,... in 0..255 specifies a list of byte context masks reading back from
+the most recently coded byte. Each mask is ANDed with the context byte
+before hashing. a value of 1000 or more is equivalent to a sequence
+of N-1000 zeros. Only the last 65536 bytes of context are saved.
+
+  i
+
+ISSE chain. Each ISSE takes a prediction from the previous component
+as input. There must be a previous component. The arguments N,...
+specify an increase of N in the context order from previous component's
+context, which is hashed together with the most recently coded bytes.
+
+  a
+
+Specifies a MATCH. The context hash is computed as hash := hash*N1+c+1
+where c is the most recently coded byte. The range of N1 is 0..255 and
+the default is 24, which gives an order 8 context for a block size
+of 2^24. N2 and N3 specify how many times to halve the memory usage
+of the buffer and hash table, respectively. The default for each is
+the block size.
+
+  m
+
+Specifies a MIX. The input is all previous components. N1 is the context
+size in bits. The context is not hashed. If N1 is not a multiple of 8
+then the low bits of the oldest byte are discarded. The default is 8.
+N2 specifies the update rate. The default is 24.
+
+  t
+
+Specifies a MIX2. The input is the previous 2 components. N1 and N2
+are the same as MIX.
+
+  s
+
+Specifies an SSE. The input is the previous component. N1 is the context
+size in bits as in a MIX or MIX2. N2 and N3 are the start and limit
+arguments. The default is 8,32,255.
+
+  w
+
+Word-model ICM-ISSE chain for modeling text. N1 is the length of the
+chain, with word-level context orders of 0..N1-1. A word is defined
+as a sequence of characters in the range N2..N2+N3-1 after ANDing
+with N4. The default is 1,65,26,223, representing the set [A-Za-z].
 
   -summary N
 
@@ -251,13 +330,8 @@ archive. It will ignore anything that follows, and the next -add command
 will overwrite it.
 
 Method 0 deduplicates file fragments but does not otherwise compress.
-Methods 1 through 9 preprocess the input block with a E8E9 transform
-before compression. The transform scans the block from back to front
-for 5 byte sequences of (E8|E9 XX XX XX 00|FF) hex and adds the offset
-(distance from the start of the block) to the middle 3 bytes (mod 2^24),
-assuming LSB first. This improves the compression of .exe and .dll files
-containing x86 or x86-64 code by replacing CALL and JMP operands with
-absolute addresses.
+Methods 1e through 9e preprocess the input block with a E8E9 transform
+before compression, while 1n through 9n do not.
 
 Method 1 is LZ77 using variable length bit codes without context
 modeling. Literals are coded as 2 bits 00, followed by the literal
@@ -289,66 +363,6 @@ high 2 bits of the first byte:
   01 = match of length 4..11 and offset 1..2048.
   10 = match of length 1..64 and offset of 1..65536.
   11 = match of length 1..64 and offset of 1..16777216.
-
-These codes are arithmetic coded using an indirect context model (ICM).
-The context depends on the parse state and in the case of literals, on the
-previous byte. An ICM maps this context to a 219 state bit history and
-then to a bit predition.
-
-Method 3 uses a Burrows-Wheeler transform (BWT) modeled by an order 0-1
-ICM-ISSE chain. An ISSE (indirect secondary symbol estimator) mixes
-the order 0 prediction with a constant 1 by weighted averaging in the
-logistic (log p1/p0) domain, such that the mixing weights are selected
-by the bit history of the order 1 context (i.e. the previous byte
-and the previous bits of the current byte), then adjusting the weights
-to reduce the prediction error by about 0.001.
-
-Method 4 directly models the data using an order 0-5 ICM-ISSE chain,
-an order 7 match model, and an order 1 mixer which produces the bit
-prediction by mixing the predictions of all other components. The 6
-components in the chain each mix the next lower order prediction using a
-hash of the next higher order context to select a bit history for that
-context, which selects the mixing weights. A match model has a 16 MB
-history buffer and a 4M hash table of the previous occurrence of the
-current context. If a match is found, it predicts the bit that followed
-the match with probability 1 - 1/(length in bits). The outputs of
-all 7 models are then mixed as with an ISSE except with a vector of
-7 weights selected by an order 1 (16 bit) context, and with a faster
-weight update rate of about 0.01.
-
-Methods 5 through 9 are identical except for memory usage, which is
-16, 32, 64, 128, 256 MB for 5..9 respectively. These mix 21 bit predictors
-using a pair of order 0 and 1 mixers, then mix those two mixer outputs
-(order 0), then adjust that prediction with an order 0 SSE, an finally mix
-the SSE input and output. An SSE adjusts a prediction using an interpolated
-table indexed by the input prediction and a context.
-
-The 21 bit predictors are an order 0-6 ICM-ISSE chain, a word order 0-1
-ICM-ISSE chain for modeling text, an order 8 MATCH, 3 order 1 sparse
-ICMs with context gaps of 1, 2, and 3, a model for CCITT fax images,
-order 1 and 2 ICM text column models, two order 1 ICMs for 2-dimensional
-modeling of periodic data, two order 0 CMs with different update rates,
-and one fixed bias (CONST).
-
-A word order-n context is a hash of the last n whole words, defined as
-a sequence of 1 to 16 byte values in the range 65..255 with upper case
-letters (65..90) mapped to lower case, and all intervening characters
-mapped to a single space.
-
-A text column model counts from the last newline (range 0..255) and
-combines the count with an order 1 or 2 context).
-
-The CCITT model assumes a bit mapped binary image width of 1728 pixels
-(216 bytes). The context for the current row of 8 pixels is the 12
-pixels in the two scan lines above (8 in the next row and middle 4
-in the second row above).
-
-The 2-D model assumes a width of n bytes. The context is the column
-number (0..n-1) and either the previous byte or the current byte in
-the previous row. To find n, the block is first scanned to count gaps
-of length n between consecutive occurrences of the same byte value.
-Then n (at least 2) is chosen to maximize the number of gaps relative
-to the sum of the counts of all gaps greater than n.
 
 
 TO COMPILE:
@@ -537,8 +551,12 @@ private:
 #define ftello(a) _ftelli64(a)
 #else
 #ifndef unix
+#ifndef fseeko
 #define fseeko(a,b,c) fseeko64(a,b,c)
+#endif
+#ifndef ftello
 #define ftello(a) ftello64(a)
+#endif
 #endif
 #endif
 
@@ -553,23 +571,6 @@ private:
 // signed size of a string or vector
 template <typename T> int size(const T& x) {
   return x.size();
-}
-
-// In Windows convert 8 bit ASCII to UTF-8 and \ to /
-string atou(const char* s) {
-  assert(s);
-#ifdef unix
-  return s;
-#else
-  string r;
-  for (; *s; ++s) {
-    int c=*s&255;
-    if (c=='\\') r+='/';
-    else if (c<128) r+=c;
-    else r+=192+c/64, r+=128+c%64;
-  }
-  return r;
-#endif
 }
 
 // In Windows, convert 16-bit wide string to UTF-8 and \ to /
@@ -617,7 +618,8 @@ void printUTF8(const char* s, FILE* f=stdout) {
   fprintf(f, "%s", s);
 #else
   const HANDLE h=(HANDLE)_get_osfhandle(_fileno(f));
-  if (h!=INVALID_HANDLE_VALUE && GetFileType(h)==FILE_TYPE_CHAR) {
+  DWORD ft=GetFileType(h);
+  if (ft==FILE_TYPE_CHAR) {
     std::wstring w=utow(s);  // Windows console: convert to UTF-16
     DWORD n;
     WriteConsole(h, w.c_str(), w.size(), &n, 0);
@@ -709,7 +711,7 @@ time_t unix_time(int64_t date) {
 // Base class of InputFile and OutputFile (OS independent)
 class File {
 protected:
-  enum {BUFSIZE=1<<18};  // buffer size
+  enum {BUFSIZE=1<<16};  // buffer size
   int ptr;  // next byte to read or write in buf
   libzpaq::Array<char> buf;  // I/O buffer
   File(): ptr(0), buf(BUFSIZE) {}
@@ -1331,7 +1333,7 @@ class CompressJob;
 // Do everything
 class Jidac {
 public:
-  void doCommand(int argc, char** argv);
+  void doCommand(int argc, const char** argv);
   friend ThreadReturn decompressThread(void* arg);
   friend struct ExtractJob;
 private:
@@ -1348,7 +1350,7 @@ private:
   int threads;              // default is number of cores
   int since;                // First version to -list
   int summary;              // Arg to -summary
-  int method;               // 0..9, default 1
+  string method;            // 0..9, default "1"
   bool force;               // true if -force selected
   bool compare;             // true if -compare selected
 
@@ -1361,7 +1363,6 @@ private:
   void add();
   void extract();
   void list();
-  void runtrace(int argc, char** argv);  // run|trace hcomp|pcomp args...
   void usage();
 
   // Support functions
@@ -1372,7 +1373,7 @@ private:
   void scandir(const char* filename);   // scan dirs and add args to dt
   void addfile(const char* filename, int64_t edate, int64_t esize,
                int64_t eattr);
-  void write_fragments(CompressJob& job, StringBuffer& b, int method,
+  void write_fragments(CompressJob& job, StringBuffer& b, string method,
                        unsigned& block_start, int& misses);
   void list_versions(int64_t csize);
 };
@@ -1380,7 +1381,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.21 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.22 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
@@ -1451,7 +1452,7 @@ string expandOption(const char* opt) {
 }
 
 // Parse the command line
-void Jidac::doCommand(int argc, char** argv) {
+void Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
@@ -1461,7 +1462,7 @@ void Jidac::doCommand(int argc, char** argv) {
   summary=0;
   version=9999999999999LL;
   threads=0; // 0 = auto-detect
-  method=1;  // 0..9
+  method="1";  // 0..9
 
   // Get optional options
   for (int i=1; i<argc; ++i) {
@@ -1471,7 +1472,7 @@ void Jidac::doCommand(int argc, char** argv) {
       command=opt;
       archive=argv[++i];
       while (++i<argc && argv[i][0]!='-')
-        files.push_back(atou(argv[i]));
+        files.push_back(argv[i]);
       --i;
     }
     else if (opt=="-quiet") quiet=true;
@@ -1491,12 +1492,12 @@ void Jidac::doCommand(int argc, char** argv) {
     }
     else if (opt=="-to") {
       while (++i<argc && argv[i][0]!='-')
-        tofiles.push_back(atou(argv[i]));
+        tofiles.push_back(argv[i]);
       --i;
     }
     else if (opt=="-not") {
       while (++i<argc && argv[i][0]!='-')
-        notfiles.push_back(atou(argv[i]));
+        notfiles.push_back(argv[i]);
       --i;
     }
     else if ((opt=="-version" || opt=="-until") && i<argc-1) {
@@ -1516,8 +1517,8 @@ void Jidac::doCommand(int argc, char** argv) {
       }
     }
     else if (opt=="-method" && i<argc-1) {
-      method=atoi(argv[++i]);
-      if (method<0 || method>9) usage();
+      method=argv[++i];
+      if (method=="" || method[0]<'0' || method[0]>'9') usage();
     }
     else usage();
   }
@@ -1526,10 +1527,10 @@ void Jidac::doCommand(int argc, char** argv) {
   if (!threads) {
     threads=numberOfProcessors();
     if (sizeof(char*)<8) {
-      assert(method>=0 && method<=9);
+      assert(method!="" && method[0]>='0' && method[0]<='9');
       static const int limit[10]={64,64,64,20,16,8,4,2,1,0};
-      if (method==9) error("-method 9 requires 64 bit compile");
-      if (threads>limit[method]) threads=limit[method];
+      if (method[0]=='9') error("-method 9 requires 64 bit compile");
+      if (threads>limit[method[0]-'0']) threads=limit[method[0]-'0'];
     }
   }
   if (!quiet) printf("Using %d threads\n", threads);
@@ -1627,7 +1628,8 @@ int64_t Jidac::read_archive() {
           fdate=0;
           for (unsigned i=3; i<17 && isdigit(filename.s[i]); ++i)
             fdate=fdate*10+filename.s[i]-'0';
-          for (unsigned i=18; i<filename.s.size() && isdigit(filename.s[i]);++i)
+          for (unsigned i=18; i<filename.s.size() && isdigit(filename.s[i]);
+               ++i)
             num=num*10+filename.s[i]-'0';
 
           // Decompress the block
@@ -1946,7 +1948,7 @@ void e8e9(unsigned char* buf, int n) {
   }
 }
 
-// BWT Preprocessor preprocessed with e8e9.
+// BWT Preprocessor preprocessed with e8e9 if doE8 is true.
 // Format is a Burrows-Wheeler transform with the terminal symbol -1
 // included and encoded as 255. The location of this symbol (idx) is
 // encoded by appending it as 4 bytes LSB first.
@@ -1957,16 +1959,16 @@ class BWTBuffer: public libzpaq::Reader {
   unsigned rpos, n;
 public:
   int get() {return rpos<n ? buf[rpos++] : -1;}
-  BWTBuffer(StringBuffer& in);
+  BWTBuffer(StringBuffer& in, bool doE8);
   size_t size() const {return n;}  
 };
 
-BWTBuffer::BWTBuffer(StringBuffer& in):
+BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8):
     buf(N), rpos(0), n(in.size()) {
   libzpaq::Array<int> w(N);
   assert(n+5<=N);
   memcpy(&buf[0], in.c_str(), n);
-  e8e9(&buf[0], n);
+  if (doE8) e8e9(&buf[0], n);
   int idx=divbwt(&buf[0], &buf[0], &w[0], n);
   assert(idx>=0 && idx<=int(n));
   memmove(&buf[idx+1], &buf[idx], n-idx);
@@ -1994,11 +1996,18 @@ BWTBuffer::BWTBuffer(StringBuffer& in):
 // 10xxxxxx yyyyyyyy yyyyyyyy          copy x+1 (1..64), offset y+1 (1..65536)
 // 11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+1 (1..64), offset y+1 (1..2^24)
 
-// return 0..32 bits in x not counting leading 0 bits
+// return 0..32 bits in x not counting leading 0 bits = floor(log2(x))+1
 int lg(unsigned x) {
   for (unsigned i=0; i<32; ++i)
     if ((1u<<i)>x) return i;
   return 32;
+}
+
+// return number of 1 bits in x
+int nbits(unsigned x) {
+  int r;
+  for (r=0; x; x>>=1) r+=x&1;
+  return r;
 }
 
 class LZBuffer: public libzpaq::Reader {
@@ -2023,7 +2032,7 @@ class LZBuffer: public libzpaq::Reader {
     bits=nbits=0;
   }
 public:
-  LZBuffer(StringBuffer& inbuf, int level);  // input to compress
+  LZBuffer(StringBuffer& inbuf, int level, bool doE8); // input to compress
   int get() {return buf.get();}   // return 1 byte of compressed output
   size_t size() const {return buf.size();}  
 };
@@ -2106,7 +2115,9 @@ void LZBuffer::write_match2(unsigned len, unsigned off) {
   }
 }
 
-LZBuffer::LZBuffer(StringBuffer& inbuf, int level_):
+// Encode inbuf to buf using LZ77 level 1 or 2.
+// If doE8 is true then do E8E9 transform on inbuf first.
+LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
     in((const unsigned char*)inbuf.c_str()), n(inbuf.size()),
     buf(inbuf.size()*9/8), level(level_), bits(0), nbits(0) {
   assert(level==1 || level==2);
@@ -2125,7 +2136,8 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_):
   int h[2]={0};  // context hashes of in[i..]
 
   // e8e9 transform
-  e8e9(inbuf.data(), n);
+  if (doE8)
+    e8e9(inbuf.data(), n);
 
   // Scan the input
   unsigned lit=0;  // number of output literals pending
@@ -2195,26 +2207,19 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_):
   flush();
 }
 
-// Compress from in to out in 1 block. method is 0..0
-// with args[9] or 0.  jobNumber is unique among threads in order to
-// create unique temporary file names. filename is saved in the segment
-// header. comment is appended to the decimal size
-void compressBlock(StringBuffer* in, libzpaq::Writer* out,
-                   const int method, const int jobNumber=0,
-                   const char* filename=0) {
+// Generate a config file from the method argument with syntax:
+// [0..9][e|n][{ciamtsw}[N1[,N2]]...]...
+string makeConfig(const char* method) {
+  assert(method);
+  assert(isdigit(*method));
 
-  assert(in);
-  assert(out);
-  assert(method>=0 && method<=9);
-  if (!quiet)
-    printf("Job %d compressing %d bytes to %s\n", jobNumber,
-           size(*in), filename?filename:"");
+  // Generate the base algorithm. 0 = no compression
+  if (*method=='0')
+    return "comp 0 0 0 0 0 hcomp post 0 end\n";
 
-  // Built in ZPAQL code for -method 0..9
-  const char* cfg[6]={
-    "(method 0 - store uncompressed) "
-    "comp 0 0 0 0 0 hcomp post 0 end ",
-
+  // 1e or 1n: LZ77, no modeling, with or without E8E9
+  if (*method=='1') {
+    string cfg=
     "(method 1 - lazy2 = e8e9 + LZ77) "
     "comp 0 0 0 $1 0 (for files up to 2^$1 = 2^24 bytes) "
     "hcomp "
@@ -2226,28 +2231,30 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  c = bits - input buffer "
     "  d = n - number of bits in c) "
     " "
-    "  (At EOF, do e8e9 transform of (e8|e9 xx xx xx 00|ff) and output) "
-    "  a> 255 if "
-    "    b=0 d=r 4 do (for b=0..d-1, d = end of buf) "
-    "      a=b a==d ifnot "
-    "        a+= 4 a<d if "
-    "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-    "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-    "              b-- a=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              a-=b a++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a b++ "
-    "            endif "
-    "            b=c "
-    "          endif "
-    "        endif "
-    "        a=*b out b++ "
-    "      forever "
-    "    endif "
-    " "
+    "  a> 255 if ";
+    if (method[1]=='e')
+      cfg+=
+      "    b=0 d=r 4 do (for b=0..d-1, d = end of buf) "
+      "      a=b a==d ifnot "
+      "        a+= 4 a<d if "
+      "          a=*b a&= 254 a== 232 if (e8 or e9?) "
+      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
+      "              b-- a=*b "
+      "              b-- a<<= 8 a+=*b "
+      "              b-- a<<= 8 a+=*b "
+      "              a-=b a++ "
+      "              *b=a a>>= 8 b++ "
+      "              *b=a a>>= 8 b++ "
+      "              *b=a b++ "
+      "            endif "
+      "            b=c "
+      "          endif "
+      "        endif "
+      "        a=*b out b++ "
+      "      forever "
+      "    endif "
+      " ";
+    cfg+=
     "    (reset state) "
     "    a=0 b=0 c=0 d=0 r=a 1 r=a 2 r=a 3 r=a 4 "
     "    halt "
@@ -2299,7 +2306,9 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "     "
     "    (while len-- (copy and output match)) "
     "    d=r 2 do a=d a> 0 if d-- "
-    "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++]) "
+    "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++]) ";
+    if (method[1]!='e') cfg+=" out ";
+    cfg+=
     "    forever endif "
     "    a=b r=a 4 "
     " "
@@ -2324,16 +2333,24 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     " "
     "  (if state==4 && n>=8 (expect len literals)) "
     "  a=r 1 a== 4 if a=d a> 7 if "
-    "    b=r 4 a=c *b=a b++ a=b r=a 4  (buf[ptr++]=bits) "
-    "    a=c a>>= 8 c=a               (bits>>=8) "
-    "    a=d a-= 8 d=a                (n-=8) "
-    "    a=r 2 a-- r=a 2 a== 0 if     (if --len<1) "
-    "      a=0 r=a 1                    (state=0) "
+    "    b=r 4 a=c *b=a ";
+    if (method[1]!='e') cfg+=" out ";
+    cfg+=
+    "    b++ a=b r=a 4                 (buf[ptr++]=bits) "
+    "    a=c a>>= 8 c=a                (bits>>=8) "
+    "    a=d a-= 8 d=a                 (n-=8) "
+    "    a=r 2 a-- r=a 2 a== 0 if      (if --len<1) "
+    "      a=0 r=a 1                     (state=0) "
     "    endif "
     "  endif endif "
     "  halt "
-    "end ",
+    "end ";
+    return cfg;
+  }
 
+  // 2e or 2n: Byte aligned LZ77 with parse state as context.
+  if (*method=='2') {
+    string cfg=
     "(method 2 - LZ77 + ICM) "
     "comp 0 0 0 $1 1 "
     "  0 icm 12 (sometimes \"0 cm 20 48\" will compress better) "
@@ -2371,26 +2388,29 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "  halt "
     "pcomp lzpre c ; "
     "  (Decode LZ77: d=state, M=output buffer, b=size) "
-    "  a> 255 if (at EOF decode e8e9 and output) "
-    "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-    "      a=b a==d ifnot "
-    "        a+= 4 a<d if "
-    "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-    "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-    "              b-- a=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              a-=b a++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a b++ "
-    "            endif "
-    "            b=c "
-    "          endif "
-    "        endif "
-    "        a=*b out b++ "
-    "      forever "
-    "    endif "
+    "  a> 255 if (at EOF decode e8e9 and output) ";
+    if (method[1]=='e')
+      cfg+=
+      "    d=b b=0 do (for b=0..d-1, d = end of buf) "
+      "      a=b a==d ifnot "
+      "        a+= 4 a<d if "
+      "          a=*b a&= 254 a== 232 if (e8 or e9?) "
+      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
+      "              b-- a=*b "
+      "              b-- a<<= 8 a+=*b "
+      "              b-- a<<= 8 a+=*b "
+      "              a-=b a++ "
+      "              *b=a a>>= 8 b++ "
+      "              *b=a a>>= 8 b++ "
+      "              *b=a b++ "
+      "            endif "
+      "            b=c "
+      "          endif "
+      "        endif "
+      "        a=*b out b++ "
+      "      forever "
+      "    endif ";
+    cfg+=
     "    b=0 c=0 d=0 a=0 r=a 1 r=a 2 (reset state) "
     "  halt "
     "  endif "
@@ -2409,7 +2429,9 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "    endif "
     "  else "
     "    a== 1 if (writing literal) "
-    "      a=c *b=a b++ "
+    "      a=c *b=a b++ ";
+    if (method[1]!='e') cfg+=" out ";
+    cfg+=
     "      a=r 1 a-- a== 0 if d=0 endif r=a 1 (if (--len==0) state=0) "
     "    else "
     "      a> 2 if (reading offset) "
@@ -2418,276 +2440,389 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
     "        a=r 2 a<<= 8 a|=c c=a a=b a-=c a-- c=a (c=i-off-1) "
     "        d=r 1 (d=len) "
     "        do (copy and output d=len bytes) "
-    "          a=*c *b=a c++ b++ "
+    "          a=*c *b=a c++ b++ ";
+    if (method[1]!='e') cfg+=" out ";
+    cfg+=
     "        d-- a=d a> 0 while "
     "        (d=state=0. off, len don\'t matter) "
     "      endif "
     "    endif "
     "  endif "
     "  halt "
-    "end ",
+    "end ";
+    return cfg;
+  }
 
-    "(method 3 - BWT) "
-    "comp 1 0 $1 $1 2 "  // 2^$1 >= block size + 257
-    "  0 icm 5 "
-    "  1 isse 12 0 "
-    "hcomp "
-    "  d= 1 *d=0 hashd halt "
-    "pcomp bwtrle c ; "
-    " "
-    "  (read BWT, index into M, size in b) "
-    "  a> 255 ifnot "
-    "    *b=a b++ "
-    " "
-    "  (inverse BWT) "
-    "  elsel "
-    " "
-    "    (index in last 4 bytes, put in c and R1) "
-    "    b-- a=*b "
-    "    b-- a<<= 8 a+=*b "
-    "    b-- a<<= 8 a+=*b "
-    "    b-- a<<= 8 a+=*b c=a r=a 1 "
-    " "
-    "    (save size in R2) "
-    "    a=b r=a 2 "
-    " "
-    "    (count bytes in H[~1..~255, ~0]) "
-    "    do "
-    "      a=b a> 0 if "
-    "        b-- a=*b a++ a&= 255 d=a d! *d++ "
-    "      forever "
-    "    endif "
-    " "
-    "    (cumulative counts: H[~i=0..255] = count of bytes before i) "
-    "    d=0 d! *d= 1 a=0 "
-    "    do "
-    "      a+=*d *d=a d-- "
-    "    d<>a a! a> 255 a! d<>a until "
-    " "
-    "    (build first part of linked list in H[0..idx-1]) "
-    "    b=0 do "
-    "      a=c a>b if "
-    "        d=*b d! *d++ d=*d d-- *d=b "
-    "      b++ forever "
-    "    endif "
-    " "
-    "    (rest of list in H[idx+1..n-1]) "
-    "    b=c b++ c=r 2 do "
-    "      a=c a>b if "
-    "        d=*b d! *d++ d=*d d-- *d=b "
-    "      b++ forever "
-    "    endif "
-    " "
-    "    (copy M to low 8 bits of H to reduce cache misses in next loop) "
-    "    b=0 do "
-    "      a=c a>b if "
-    "        d=b a=*d a<<= 8 a+=*b *d=a "
-    "      b++ forever "
-    "    endif "
-    " "
-    "    (traverse list and copy to M) "
-    "    d=r 1 b=0 do "
-    "      a=d a== 0 ifnot "
-    "        a=*d a>>= 8 d=a "
-    "        *b=*d b++ "
-    "      forever "
-    "    endif "
-    " "
-    "    (e8e9 transform to out) "
-    "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-    "      a=b a==d ifnot "
-    "        a+= 4 a<d if "
-    "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-    "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-    "              b-- a=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              b-- a<<= 8 a+=*b "
-    "              a-=b a++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a a>>= 8 b++ "
-    "              *b=a b++ "
-    "            endif "
-    "            b=c "
-    "          endif "
-    "        endif "
-    "        a=*b out b++ "
-    "      forever "
-    "    endif "
-    " "
-    "  endif "
-    "  halt "
-    "end "
-    " ",
+  // 3e or 3n: BWT with or without E8E9
+  if (*method>='3' && *method<='9') {
+    string pcomp;
+    string hdr;
+    if (*method=='3') {  // IBWT
+      hdr="comp 9 16 $1 $1 ";  // 2^$1 = block size
+      pcomp=
+      "pcomp bwtrle c ; "
+      " "
+      "  (read BWT, index into M, size in b) "
+      "  a> 255 ifnot "
+      "    *b=a b++ "
+      " "
+      "  (inverse BWT) "
+      "  elsel "
+      " "
+      "    (index in last 4 bytes, put in c and R1) "
+      "    b-- a=*b "
+      "    b-- a<<= 8 a+=*b "
+      "    b-- a<<= 8 a+=*b "
+      "    b-- a<<= 8 a+=*b c=a r=a 1 "
+      " "
+      "    (save size in R2) "
+      "    a=b r=a 2 "
+      " "
+      "    (count bytes in H[~1..~255, ~0]) "
+      "    do "
+      "      a=b a> 0 if "
+      "        b-- a=*b a++ a&= 255 d=a d! *d++ "
+      "      forever "
+      "    endif "
+      " "
+      "    (cumulative counts: H[~i=0..255] = count of bytes before i) "
+      "    d=0 d! *d= 1 a=0 "
+      "    do "
+      "      a+=*d *d=a d-- "
+      "    d<>a a! a> 255 a! d<>a until "
+      " "
+      "    (build first part of linked list in H[0..idx-1]) "
+      "    b=0 do "
+      "      a=c a>b if "
+      "        d=*b d! *d++ d=*d d-- *d=b "
+      "      b++ forever "
+      "    endif "
+      " "
+      "    (rest of list in H[idx+1..n-1]) "
+      "    b=c b++ c=r 2 do "
+      "      a=c a>b if "
+      "        d=*b d! *d++ d=*d d-- *d=b "
+      "      b++ forever "
+      "    endif "
+      " "
+      "    (copy M to low 8 bits of H to reduce cache misses in next loop) "
+      "    b=0 do "
+      "      a=c a>b if "
+      "        d=b a=*d a<<= 8 a+=*b *d=a "
+      "      b++ forever "
+      "    endif "
+      " "
+      "    (traverse list and output or copy to M) "
+      "    d=r 1 b=0 do "
+      "      a=d a== 0 ifnot "
+      "        a=*d a>>= 8 d=a ";
+      if (method[1]=='e') pcomp+=" *b=*d b++ ";
+      else                pcomp+=" a=*d out ";
+      pcomp+=
+      "      forever "
+      "    endif "
+      " ";
+      if (method[1]=='e')  // IBWT+E8E9
+        pcomp+=
+        "    (e8e9 transform to out) "
+        "    d=b b=0 do (for b=0..d-1, d = end of buf) "
+        "      a=b a==d ifnot "
+        "        a+= 4 a<d if "
+        "          a=*b a&= 254 a== 232 if "
+        "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if "
+        "              b-- a=*b "
+        "              b-- a<<= 8 a+=*b "
+        "              b-- a<<= 8 a+=*b "
+        "              a-=b a++ "
+        "              *b=a a>>= 8 b++ "
+        "              *b=a a>>= 8 b++ "
+        "              *b=a b++ "
+        "            endif "
+        "            b=c "
+        "          endif "
+        "        endif "
+        "        a=*b out b++ "
+        "      forever "
+        "    endif ";
+      pcomp+=
+      "  endif "
+      "  halt "
+      "end ";
+    }
+    else {  // 4..9: context model
+      hdr="comp 9 16 0 0 ";
+      if (method[1]=='e') { // E8E9?
+        pcomp=
+        "pcomp e8e9 d ;\n"
+        "  a> 255 if\n"
+        "    a=c a> 4 if\n"
+        "      c= 4\n"
+        "    else\n"
+        "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a\n"
+        "    endif\n"
+        "    do a=c a> 0 if\n"
+        "      a=b out a>>= 8 b=a c--\n"
+        "    forever endif\n"
+        "  else\n"
+        "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++\n"
+        "    a=c a> 4 if\n"
+        "      a=*b out\n"
+        "      a&= 254 a== 232 if\n"
+        "        a=b a>>= 24 a++ a&= 254 a== 0 if\n"
+        "          a=b a>>= 24 a<<= 24 d=a\n"
+        "          a=b a-=c a+= 5\n"
+        "          a<<= 8 a>>= 8 a|=d b=a\n"
+        "        endif\n"
+        "      endif\n"
+        "    endif\n"
+        "  endif\n"
+        "  halt\n"
+        "end\n";
+      }
+      else
+        pcomp="post 0 end\n";
+    }
+  
+    // Buid context model assuming:
+    // H[0..254] = contexts
+    // H[255..511] = location of last byte i-255
+    // M = last 64K bytes, filling backward
+    // C = pointer to most recent byte
+    int ncomp=0;  // number of components
+    const int membits=20+method[0]-'0'; // log(memory size) = 24..29
+    int sb=5;  // bits in last context
+    string hcomp="hcomp\nc-- *c=a a+= 255 d=a *d=c\n";
+    string comp;
+    method+=2;
+    while (*method && ncomp<254) {
 
-    "(method 4 mid.cfg with e8e9 postprocessing) "
-    "comp 3 3 0 0 8 (hh hm ph pm n) "
-    "  0 icm 5        (order 0...5 chain) "
-    "  1 isse 13 0 "
-    "  2 isse $1+17 1 "
-    "  3 isse $1+18 2 "
-    "  4 isse $1+18 3 "
-    "  5 isse $1+19 4 "
-    "  6 match $1+22 24  (order 7) "
-    "  7 mix 16 0 7 24 255  (order 1) "
-    "hcomp "
-    "  c++ *c=a b=c a=0 (save in rotating buffer M) "
-    "  d= 1 hash *d=a   (orders 1...5 for isse) "
-    "  b-- d++ hash *d=a "
-    "  b-- d++ hash *d=a "
-    "  b-- d++ hash *d=a "
-    "  b-- d++ hash *d=a "
-    "  b-- d++ hash b-- hash *d=a (order 7 for match) "
-    "  d++ a=*c a<<= 8 *d=a (order 1 for mix) "
-    "  halt "
-    "pcomp e8e9 d ; "
-    "  (inverse E8E9 transform. Assume input < 4 GB) "
-    "  (E8|E9 xx xx xx 00|FF -> subtract offset from middle 3 bytes) "
-    "  (b=last 4 bytes, c=offset) "
-    " "
-    "  a> 255 if (flush b at EOF) "
-    "    a=c a> 4 if "
-    "      c= 4 "
-    "    else "
-    "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a "
-    "    endif "
-    "    do a=c a> 0 if "
-    "      a=b out a>>= 8 b=a c-- "
-    "    forever endif "
-    "  else "
-    "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++ (shift a into b|*b) "
-    "    a=c a> 4 if "
-    "      a=*b out "
-    "      a&= 254 a== 232 if (E8 or E9) "
-    "        a=b a>>= 24 a++ a&= 254 a== 0 if (00 or FF) "
-    "          a=b a>>= 24 a<<= 24 d=a  (high byte of b) "
-    "          a=b a-=c a+= 5 (subtract offset) "
-    "          a<<= 8 a>>= 8 a|=d b=a (restore high byte) "
-    "        endif "
-    "      endif "
-    "    endif "
-    "  endif "
-    "  halt "
-    "end ",
+      // parse command C[N1[,N2]...] into v = {C, N1, N2...}
+      vector<int> v;
+      v.push_back(*method++);
+      if (isdigit(*method)) {
+        v.push_back(*method++-'0');
+        while (isdigit(*method) || *method==',' || *method=='.') {
+          if (isdigit(*method))
+            v.back()=v.back()*10+*method++-'0';
+          else {
+            v.push_back(0);
+            ++method;
+          }
+        }
+      }
 
-    // methods 5..9. $1 = 0..4 = method-5
-    " "
-    "comp 5 16 0 0 26 (hh hm ph pm n) "
-    "  0 const 160 "
-    "  1 icm 5  (orders 0-6) "
-    "  2 isse 13 1 (sizebits j) "
-    "  3 isse $1+16 2 "
-    "  4 isse $1+18 3 "
-    "  5 isse $1+19 4 "
-    "  6 isse $1+19 5 "
-    "  7 isse $1+19 6 "
-    "  8 match $1+21 $1+24 "
-    "  9 icm $1+17 (order 0 word) "
-    "  10 isse $1+18 9 (order 1 word) "
-    "  11 icm 13 (sparse with gaps 1-3) "
-    "  12 icm 13 "
-    "  13 icm 13 "
-    "  14 icm 14 (pic) "
-    "  15 icm 14 (text column order 1) "
-    "  16 icm 16 (text column order 2) "
-    "  17 icm 14 (record pos order 1) "
-    "  18 icm 14 (record pos above) "
-    "  19 cm 9 128 "
-    "  20 cm 9 12 "
-    "  21 mix 8 0 21 24 255 (mix orders 1 and 0) "
-    "  22 mix 16 0 22 16 255 (including last mixer) "
-    "  23 mix2 8 21 22 24 255 "
-    "  24 sse 8 23 32 255 (order 0) "
-    "  25 mix2 8 23 24 32 255 "
-    "hcomp "
-    "  c++ *c=a b=c a=0 (save in rotating buffer) "
-    "  d= 2 hash *d=a b-- (orders 1,2,3,4,5,7) "
-    "  d++ hash *d=a b-- "
-    "  d++ hash *d=a b-- "
-    "  d++ hash *d=a b-- "
-    "  d++ hash *d=a b-- "
-    "  d++ hash b-- hash *d=a b-- "
-    "  d++ hash *d=a b-- (match, order 8) "
-    "  d++ a=*c (lowercase words) "
-    "  a> 64 if "
-    "    a< 91 if a+= 32 endif "
-    "    d++ hashd d-- (update order 1 word hash) "
-    "    *d<>a a+=*d a*= 20 *d=a (order 0 word hash) "
-    "  else "
-    "    a=*d a== 0 ifnot (move word order 0 to 1) "
-    "      d++ *d=a d-- "
-    "    endif "
-    "    *d=0  (clear order 0 word hash) "
-    "  endif "
-    " "
-    "  d++ "
-    "  d++ b=c b-- a=0 hash *d=a (sparse 2) "
-    "  d++ b-- a=0 hash *d=a (sparse 3) "
-    "  d++ b-- a=0 hash *d=a (sparse 4) "
-    "  d++ a=b a-= 212 b=a a=0 hash "
-    "    *d=a b<>a a-= 216 b<>a a=*b a&= 60 hashd (pic) "
-    " "
-    "  (r1=text column) "
-    "  d++ a=*c a== 10 if "
-    "    a=0 "
-    "  else "
-    "    a=r 1 a< 255 if "
-    "      a++ "
-    "    endif "
-    "  endif r=a 1 "
-    "  b=c hash *d=a "
-    "  d++ b-- hash *d=a "
-    " "
-    "  (-r2=fixed column $3*256+$2) "
-    "  d++ a= $3 a<<= 8 a+= $2 b=a a=c a%=b a! a++ r=a 2 b=c hash *d=a (left) "
-    "  d++ a=r 2 a+=c b=a a=r 2 hash *d=a (above) "
-    " "
-    "  d++ (cm) "
-    "  d++ "
-    " "
-    "  d++ (mix order 0) "
-    "  d++ a=*c a<<= 9 *d=a (mix order 1) "
-    "  halt "
-    " "
-    "pcomp e8e9 e ; "
-    "  (inverse E8E9 transform. Assume input < 4 GB) "
-    "  (E8|E9 xx xx xx 00|FF -> subtract offset from middle 3 bytes) "
-    "  (b=last 4 bytes, c=offset) "
-    " "
-    "  a> 255 if (flush b at EOF) "
-    "    a=c a> 4 if "
-    "      c= 4 "
-    "    else "
-    "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a "
-    "    endif "
-    "    do a=c a> 0 if "
-    "      a=b out a>>= 8 b=a c-- "
-    "    forever endif "
-    "  else "
-    "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++ (shift a into b|*b) "
-    "    a=c a> 4 if "
-    "      a=*b out "
-    "      a&= 254 a== 232 if (E8 or E9) "
-    "        a=b a>>= 24 a++ a&= 254 a== 0 if (00 or FF) "
-    "          a=b a>>= 24 a<<= 24 d=a  (high byte of b) "
-    "          a=b a-=c a+= 5 (subtract offset) "
-    "          a<<= 8 a>>= 8 a|=d b=a (restore high byte) "
-    "        endif "
-    "      endif "
-    "    endif "
-    "  endif "
-    "  halt "
-    "end "
-  };
+      // c: context model
+      // N1: 0=ICM 1..256=CM limit N1-1
+      // N2: 1..255=offset mod N2. 1000..1255=distance to N2-1000
+      // N3...: 0..255=byte mask. 1000+=run of N3-1000 zeros.
+      if (v[0]=='c') {
+        while (v.size()<3) v.push_back(0);
+        comp+=itos(ncomp)+" ";
+        sb=11;  // count context bits
+        if (v[2]<256) sb+=nbits(v[2]);
+        else sb+=6;
+        for (unsigned i=3; i<v.size(); ++i)
+          if (v[i]<256) sb+=nbits(v[i])*3/4;
+        if (sb>membits) sb=membits;
+        if (v[1]==0) comp+="icm "+itos(sb-6)+"\n";
+        else comp+="cm "+itos(sb-2)+" "+itos(v[1]-1)+"\n";
 
-  assert(method>=0 && method<=9);
-  const char* config=cfg[5];
-  if (method<5) config=cfg[method];
+        // periodic or distance context
+        hcomp+="d= " +itos(ncomp)+" *d=0\n";
+        if (v[2]>1 && v[2]<=255) {  // periodic context
+          if (lg(v[2])!=lg(v[2]-1))
+            hcomp+="a=c a&= "+itos(v[2]-1)+" hashd\n";
+          else
+            hcomp+="a=c a%= "+itos(v[2])+" hashd\n";
+        }
+        else if (v[2]>=1000 && v[2]<=1255)  // distance context
+          hcomp+="a= 255 a+= "+itos(v[2]-1000)+
+                 " d=a a=*d a-=c a> 255 if a= 255 endif d= "+
+                 itos(ncomp)+" hashd\n";
+
+        // Masked context
+        hcomp+="b=c ";
+        for (unsigned i=3; i<v.size(); ++i) {
+          if (v[i]==255)
+            hcomp+="a=*b hashd\n";
+          else if (v[i]>0 && v[i]<255)
+            hcomp+="a=*b a&= "+itos(v[i])+" hashd\n";
+          else if (v[i]>=1256)
+            hcomp+="a= "+itos(((v[i]-1000)>>8)&255)+" a<<= 8 a+= "
+                 +itos((v[i]-1000)&255)+
+            " a+=b b=a\n";
+          else if (v[i]>1000)
+            hcomp+="a= "+itos(v[i]-1000)+" a+=b b=a\n";
+          if (v[i]<256 && i<v.size()-1)
+            hcomp+="b++ ";
+        }
+      }
+
+      // m,8,24: MIX, size, rate
+      // t,8,24: MIX2, size, rate
+      // s,8,32,255: SSE, size, start, limit
+      if (strchr("mts", v[0]) && ncomp>int(v[0]=='t')) {
+        if (v.size()<=1) v.push_back(8);
+        if (v.size()<=2) v.push_back(24+8*(v[0]=='s'));
+        if (v[0]=='s' && v.size()<=3) v.push_back(255);
+        comp+=itos(ncomp);
+        sb=5+v[1]*3/4;
+        if (v[0]=='m')
+          comp+=" mix "+itos(v[1])+" 0 "+itos(ncomp)+" "+itos(v[2])+" 255\n";
+        else if (v[0]=='t')
+          comp+=" mix2 "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(ncomp-2)
+              +" "+itos(v[2])+" 255\n";
+        else // s
+          comp+=" sse "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(v[2])+" "
+              +itos(v[3])+"\n";
+        if (v[1]>8) {
+          hcomp+="d= "+itos(ncomp)+" *d=0 b=c a=0\n";
+          for (; v[1]>=16; v[1]-=8) {
+            hcomp+="a<<= 8 a+=*b";
+            if (v[1]>16) hcomp+=" b++";
+            hcomp+="\n";
+          }
+          if (v[1]>8)
+            hcomp+="a<<= 8 a+=*b a>>= "+itos(16-v[1])+"\n";
+          hcomp+="a<<= 8 *d=a\n";
+        }
+      }
+
+      // i: ISSE chain with order increasing by N1,N2...
+      if (v[0]=='i' && ncomp>0) {
+        assert(sb>=5);
+        hcomp+="d= "+itos(ncomp-1)+" b=c a=*d d++\n";
+        for (unsigned i=1; i<v.size() && ncomp<254; ++i) {
+          for (int j=0; j<v[i]; ++j) {
+            hcomp+="hash ";
+            if (i<v.size()-1 || j<v[i]-1) hcomp+="b++ ";
+            sb+=6;
+          }
+          hcomp+="*d=a";
+          if (i<v.size()-1) hcomp+=" d++";
+          hcomp+="\n";
+          if (sb>membits) sb=membits;
+          comp+=itos(ncomp)+" isse "+itos(sb-6)+" "+itos(ncomp-1)+"\n";
+          ++ncomp;
+        }
+        --ncomp;
+      }
+
+      // a24,0,0: MATCH. N1=hash multiplier. N2,N3=halve buf, table.
+      if (v[0]=='a') {
+        if (v.size()<=1) v.push_back(24);
+        while (v.size()<4) v.push_back(0);
+        comp+=itos(ncomp)+" match "+itos(membits-v[3]-2)+" "
+            +itos(membits-v[2])+"\n";
+        hcomp+="d= "+itos(ncomp)+" a=*d a*= "+itos(v[1])
+             +" a+=*c a++ *d=a\n";
+        sb=5+(membits-v[2])*3/4;
+      }
+
+      // w1,65,26,223: ICM-ISSE chain of length N1 with word contexts,
+      // where a word is a sequence of c such that c&N4 is in N2..N2+N3-1.
+      // Word is hashed by: hash := hash*N5+c+1
+      if (v[0]=='w') {
+        if (v.size()<=1) v.push_back(1);
+        if (v.size()<=2) v.push_back(65);
+        if (v.size()<=3) v.push_back(26);
+        if (v.size()<=4) v.push_back(223);
+        if (v.size()<=5) v.push_back(20);
+        comp+=itos(ncomp)+" icm "+itos(membits-6)+"\n";
+        for (int i=1; i<v[1]; ++i)
+          comp+=itos(ncomp+i)+" isse "+itos(membits-6)+" "
+              +itos(ncomp+i-1)+"\n";
+        hcomp+="a=*c a&= "+itos(v[4])+" a-= "+itos(v[2])+" a&= 255 a< "
+             +itos(v[3])+" if\n";
+        for (int i=0; i<v[1]; ++i) {
+          if (i==0) hcomp+="  d= "+itos(ncomp);
+          else hcomp+="  d++";
+          hcomp+=" a=*d a*= "+itos(v[5])+" a+=*c a++ *d=a\n";
+        }
+        hcomp+="else\n";
+        for (int i=v[1]-1; i>0; --i)
+          hcomp+="  d= "+itos(ncomp+i-1)+" a=*d d++ *d=a\n";
+        hcomp+="  d= "+itos(ncomp)+" *d=0\n"
+             "endif\n";
+        ncomp+=v[1]-1;
+        sb=membits;
+      }
+
+      ++ncomp;
+    }
+    return hdr+itos(ncomp)+"\n"+comp+hcomp+"halt\n"+pcomp;
+  }
+  error("Unsupported method");
+  return "";
+}
+
+// Compress from in to out in 1 block. method is "0".."9" with extra
+// parameters to describe specific algorithms. filename is saved in the
+// segment header. jobNumber is optional to display status.
+void compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
+                   const char* filename, const int jobNumber=0) {
+  assert(in);
+  assert(out);
+  assert(method!="" && isdigit(method[0]));
+  assert(filename && *filename);
   const int n=in->size();  // input size
-  assert(method!=1 || n<(1<<24));
-  assert(method!=2 || n<(1<<24));
-  assert(method!=3 || n<=(1<<24)-257);
-  assert(method!=4 || n<(1<<24));
-  assert(method<5  || n<(1<<(24+method-5)));
+  assert(method[0]!='1' || n<(1<<24));
+  assert(method[0]!='2' || n<(1<<24));
+  assert(method[0]!='3' || n<=(1<<24)-257);
+
+  // Expand default methods
+  if (method.size()==1) {
+    if (method=="1") method="1e";
+    else if (method=="2") method="2e";
+    else if (method=="3") method="3eci1";
+    else if (method=="4") method="4eci1,1,1,1,2am";
+    else if (method[0]>'4') {
+      const int NR=1<<12;
+      int pt[256]={0}, r[NR]={0};  // count repetition gaps of length r
+      const unsigned char* p=in->data();
+      int e8=0, text=0;
+      for (int i=0; i<n; ++i) {
+        const int k=i-pt[p[i]];
+        if (k>0 && k<NR) ++r[k];
+        pt[p[i]]=i;
+        e8+=(p[i]==0xe8)+(p[i]==0xe9)+(p[i]==0x8b)+(p[i]==0x8d);  // x86?
+        text+=(p[i]==' ')+(p[i]>='a' && p[i]<='z');  // text
+      }
+      if (e8>n/32) method+="e";
+      else method+="n";
+      if (text>n/4) method+="w2c0,1010,255i1";
+      else method+="w1i1";
+      method+="c256ci1,1,1,1,1,1,2a";
+
+      // Add periodic models
+      int n1=n-r[1]-r[2]-r[3];
+      for (int i=0; i<2; ++i) {
+        int period=0;
+        double score=0;
+        int t=0;
+        for (int j=5; j<NR && t<n1; ++j) {
+          const double s=r[j]/(256.0+n1-t);
+          if (s>score) score=s, period=j;
+          t+=r[j];
+        }
+        if (period>4 && score>0.1) {
+          method+="c0,0,"+itos(999+period)+",255i1";
+          if (period<=255)
+            method+="c0,"+itos(period)+"i1";
+          n1-=r[period];
+          r[period]=0;
+        }
+        else
+          break;
+      }
+      method+="c0,2,0,255i1c0,3,0,0,255i1c0,4,0,0,0,255i1mm16ts19t0";
+    }
+  }
+
+  string config=makeConfig(method.c_str());
+  if (!quiet)
+    printf("Job %d compressing %d bytes to %s method %s\n", jobNumber,
+           n, filename?filename:"", method.c_str());
 
   // Get hash of input
   libzpaq::SHA1 sha1;
@@ -2705,57 +2840,31 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   StringBuffer pcomp_cmd;
   co.writeTag();
 
-  // For methods 5..9 get length of periodic data
+  // For methods 1..3 use the smallest buffer size possible as $1
   int args[9]={0};
-  if (method>=5 && method<=9) {
-    const int NR=1<<12;
-    int pt[256]={0}, r[NR]={0};  // count repetition gaps of length r
-    const unsigned char* p=in->data();
-    for (int i=0; i<n; ++i) {
-      const int k=i-pt[p[i]];
-      if (k>0 && k<NR) ++r[k];
-      pt[p[i]]=i;
-    }
-    int period=0;
-    double score=0;
-    int t=0;
-    for (int i=2; i<NR && t<n-r[1]; ++i) {
-      const double s=r[i]/(256.0+n-t-r[1]);
-      if (s>score) score=s, period=i;
-      t+=r[i];
-    }
-    args[0]=method-5;
-    args[1]=period&255;
-    args[2]=(period>>8)&255;
-    if (!quiet)
-      printf("Job %d: period = %d (%1.4f/%d)\n",
-             jobNumber, period, double(score), n);
-  }
-
-  // For methods 1..3 choose memory size
-  if (method>=1 && method<=3 && n>0) {
-    args[0]=lg(n-1+257*(method==3));
+  if (method[0]>='1' && method[0]<='3' && n>0) {
+    args[0]=lg(n-1+257*(method[0]=='3'));
     assert(args[0]>=0 && args[0]<=24);
-    assert(method!=3 || args[0]>=9);
+    assert(method[0]!='3' || args[0]>=9);
   }
 
   // Compress with appropriate preprocessor depending on method
-  co.startBlock(config, args, &pcomp_cmd);
+  co.startBlock(config.c_str(), args, &pcomp_cmd);
   string cs=itos(n)+" jDC\x01";
+  const bool doE8=method.size()>1 && method[1]=='e';  // e8e9?
   co.startSegment(filename, cs.c_str());
-  if (method==1 || method==2) {  // preprocess with built-in LZ77
-    LZBuffer lz(*in, method);
+  if (method[0]=='1' || method[0]=='2') {  // preprocess with built-in LZ77
+    LZBuffer lz(*in, method[0]-'0', doE8);
     co.setInput(&lz);
     co.compress();
   }
-  else if (method==3) {  // preprocess with built-in BWT
-    BWTBuffer bwt(*in);
+  else if (method[0]=='3') {  // preprocess with built-in BWT
+    BWTBuffer bwt(*in, doE8);
     co.setInput(&bwt);
     co.compress();
   }
   else {  // compress method 4 with e8e9 else without preprocessing
-    if (method>=4 && method<=9)
-      e8e9(in->data(), in->size());
+    if (doE8) e8e9(in->data(), in->size());
     co.setInput(in);
     co.compress();
   }
@@ -2765,8 +2874,8 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out,
   const char* sha1result=co.endSegmentChecksum(&outsize);
   assert(sha1result);
   if (memcmp(sha1result, sha1ptr, 20)!=0) {
-    fprintf(stderr, "Job %d: pre size=%d post size=%1.0f\n", jobNumber, 
-            n, double(outsize));
+    fprintf(stderr, "Job %d: pre size=%d post size=%1.0f method=%s\n",
+            jobNumber, n, double(outsize), method.c_str());
     error("Pre/post-processor test failed");
   }
   if (!quiet)
@@ -2790,10 +2899,10 @@ struct CJ {
   enum {EMPTY, FILLING, FULL, COMPRESSING, COMPRESSED, WRITING} state;
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
-  int method;            // compression level 0..9 or -1 to mark end of data
+  string method;         // compression level or "" to mark end of data
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
-  CJ(): state(EMPTY), in(1<<24), out(1<<24), method(0) {}
+  CJ(): state(EMPTY), in(1<<24), out(1<<24) {}
 };
 
 // Instructions to a compression job
@@ -2823,13 +2932,13 @@ public:
     }
     destroy_mutex(mutex);
   }      
-  void write(const StringBuffer& s, const char* filename, int method);
+  void write(const StringBuffer& s, const char* filename, string method);
   vector<int> csize;  // compressed block sizes
 };
 
 // Write s at the back of the queue. Signal end of input with method=-1
-void CompressJob::write(const StringBuffer& s, const char* fn, int method) {
-  for (unsigned k=(method<0)?q.size():1; k>0; --k) {
+void CompressJob::write(const StringBuffer& s, const char* fn, string method){
+  for (unsigned k=(method=="")?q.size():1; k>0; --k) {
     empty.wait();
     lock(mutex);
     unsigned i, j;
@@ -2870,7 +2979,7 @@ ThreadReturn compressThread(void* arg) {
       lock(job.mutex);
 
       // Check for end of input
-      if (cj.method<0) {
+      if (cj.method=="") {
         cj.compressed.signal();
         release(job.mutex);
         return 0;
@@ -2880,8 +2989,8 @@ ThreadReturn compressThread(void* arg) {
       assert(cj.state==CJ::FULL);
       cj.state=CJ::COMPRESSING;
       release(job.mutex);
-      compressBlock(&cj.in, &cj.out, cj.method,
-                    jobNumber+1, cj.filename.c_str());
+      compressBlock(&cj.in, &cj.out, cj.method, cj.filename.c_str(),
+                    jobNumber+1);
       lock(job.mutex);
       cj.in.reset();
       cj.state=CJ::COMPRESSED;
@@ -2910,7 +3019,7 @@ ThreadReturn writeThread(void* arg) {
 
       // Quit if end of input
       lock(job.mutex);
-      if (cj.method<0) {
+      if (cj.method=="") {
         release(job.mutex);
         return 0;
       }
@@ -2951,7 +3060,7 @@ void writeJidacHeader(libzpaq::Writer *out, int64_t date,
   libzpaq::Compressor co;
   StringBuffer is;
   is+=ltob(cdata);
-  compressBlock(&is, out, 0, 0,
+  compressBlock(&is, out, "0",
                 ("jDC"+itos(date, 14)+"c"+itos(htsize, 10)).c_str());
 }
 
@@ -2959,9 +3068,10 @@ void writeJidacHeader(libzpaq::Writer *out, int64_t date,
 // using method and args with list of fragment sizes appended.
 // Select method 0 if misses is near b.size() and reset misses=0.
 void Jidac::write_fragments(CompressJob& job, StringBuffer& b,
-                            int method, unsigned& block_start, int& misses) {
+                            string method, unsigned& block_start,
+                            int& misses) {
   bool iscompressed=true;
-  switch(method) {
+  switch(method[0]-'0') {
     case 1: iscompressed=b.size()-misses>b.size()/16; break;
     case 2: iscompressed=b.size()-misses>b.size()/32; break;
     case 3: iscompressed=b.size()-misses>b.size()/64; break;
@@ -2972,7 +3082,7 @@ void Jidac::write_fragments(CompressJob& job, StringBuffer& b,
            block_start, size(ht), misses, size(b), misses*100.0/size(b),
            iscompressed ? "compressed" : "stored");
   }
-  if (!iscompressed) method=0;
+  if (!iscompressed) method="0";
   if (block_start>=ht.size()) return;
   for (unsigned i=block_start; i<ht.size(); ++i)
     b+=itob(ht[i].usize);
@@ -3135,8 +3245,8 @@ void Jidac::add() {
       }
 
       // Set block size
-      int blocksize=(1<<24)-257*(method==3);
-      if (method>5) blocksize=1<<(24+method-5);
+      int blocksize=(1<<24)-257*(method[0]=='3');
+      if (method[0]>'4') blocksize=1<<(24+method[0]-'0'-4);
 
       // Split the file into fragments on content-dependent
       // boundaries and group into blocks. For each fragment, look up its
@@ -3201,7 +3311,7 @@ void Jidac::add() {
   write_fragments(job, b, method, block_start, misses);
 
   // Wait for jobs to finish
-  job.write(b, 0, -1);  // signal end of input
+  job.write(b, 0, "");  // signal end of input
   for (int i=0; i<threads; ++i)
     join(tid[i]);
   join(wid);
@@ -3221,7 +3331,7 @@ void Jidac::add() {
   for (unsigned i=htsize; i<=ht.size(); ++i) {
     if ((i==ht.size() || ht[i].csize>0) && is.size()>0) {  // write a block
       assert(block_start>=htsize && block_start<i);
-      compressBlock(&is, &out, 0, 0,
+      compressBlock(&is, &out, "0",
                     ("jDC"+itos(date, 14)+"h"+itos(block_start, 10)).c_str());
       assert(is.size()==0);
     }
@@ -3274,8 +3384,8 @@ void Jidac::add() {
     }
     ++p;
     if (is.size()>16000 || (is.size()>0 && p==dt.end())) {
-      compressBlock(&is, &out, 1, 0,
-        ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
+      compressBlock(&is, &out, "1n",
+                    ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
       assert(is.size()==0);
     }
     if (p==dt.end()) break;
@@ -3864,7 +3974,26 @@ void Jidac::list() {
   list_versions(csize);
 }
 
-int main(int argc, char** argv) {
+// Convert argv to UTF-8 and replace \ with /
+#ifdef unix
+int main(int argc, const char** argv) {
+#else
+#ifdef _MSC_VER
+int wmain(int argc, LPWSTR* argw) {
+#else
+int main() {
+  int argc=0;
+  LPWSTR* argw=CommandLineToArgvW(GetCommandLine(), &argc);
+#endif
+  vector<string> args(argc);
+  libzpaq::Array<const char*> argp(argc);
+  for (int i=0; i<argc; ++i) {
+    args[i]=wtou(argw[i]);
+    argp[i]=args[i].c_str();
+  }
+  const char** argv=&argp[0];
+#endif
+
   clock_t start=clock();  // get start time
   int errorcode=0;
   try {
