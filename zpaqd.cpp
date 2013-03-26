@@ -1,4 +1,4 @@
-/* zpaqd v6.22 - ZPAQ compression development tool - Feb. 12, 2013.
+/* zpaqd v6.23 - ZPAQ compression development tool - Mar. 25, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -52,7 +52,7 @@ command, which is not saved. If the archive is in journaling
 format (created by zpaq), then the contents of the header, hash
 table, and index blocks is shown.
 
-  zpaqd d archive [output [B [N [S]]]]
+  zpaqd d[s] archive [output [B [N [S]]]]
 
 Decompress N (default all) blocks or S (default all) segments of
 archive.zpaq (whichever comes first) to output (default: discard output)
@@ -60,7 +60,8 @@ starting at block B (default 1 = first block). For each block decompressed,
 list the offset, block number and memory required to decompress. For each
 segment, list the first 32 bits of the stored and computed SHA1 checksums,
 file name, comment, compressed size, output size, and whether the
-stored and computed checksums match (if both exist).
+stored and computed checksums match (if both exist). Command "ds" does
+not verify the checksum, which is a little faster.
 
   zpaqd r config [args...] {h|p} [input [output]]
 
@@ -92,6 +93,7 @@ For Linux, Unix, Mac, etc., compile with -Dunix
 
 */
 #define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
+#define _CRT_DISABLE_PERFCRIT_LOCKS  // make getc() faster
 #include "libzpaq.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,21 +141,144 @@ class Stdout: public libzpaq::Writer {
   void put(int c) {putchar(c);}
 };
 
-// For libzpaq file I/O
-class File: public libzpaq::Reader, public libzpaq::Writer {
-  FILE* f;
-public:
-  File(): f(0) {}
-  void open(const char* filename, const char* mode) {f=fopen(filename, mode);}
-  bool isopen() const {return f!=0;}
-  int get() {return getc(f);}
-  void put(int c) {putc(c, f);}
-  int read(char* buf, int n) {return fread(buf, 1, n, f);}
-  void write(const char* buf, int n) {fwrite(buf, 1, n, f);}
-  void seek(int64_t pos, int whence) {fseeko(f, pos, whence);}
-  int64_t tell() {return ftello(f);}
-  void close() {if (f) fclose(f), f=0;}
+// Base class of InputFile and OutputFile (OS independent)
+class File {
+protected:
+  enum {BUFSIZE=1<<16};  // buffer size
+  int ptr;  // next byte to read or write in buf
+  libzpaq::Array<char> buf;  // I/O buffer
+  File(): ptr(0), buf(BUFSIZE) {}
 };
+
+class InputFile: public File, public libzpaq::Reader {
+  FILE* in;
+  int n;  // number of bytes in buf
+public:
+  InputFile(): in(0), n(0) {}
+
+  // Open file for reading. Return true if successful
+  bool open(const char* filename) {
+    in=fopen(filename, "rb");
+    if (!in) perror(filename);
+    n=ptr=0;
+    return in!=0;
+  }
+
+  // True if open
+  bool isopen() {return in!=0;}
+
+  // Read and return 1 byte (0..255) or EOF
+  int get() {
+    assert(in);
+    if (ptr>=n) {
+      assert(ptr==n);
+      n=fread(&buf[0], 1, BUFSIZE, in);
+      ptr=0;
+      if (!n) return EOF;
+    }
+    assert(ptr<n);
+    return buf[ptr++]&255;
+  }
+
+  // Return file position
+  int64_t tell() {
+    return ftello(in)-n+ptr;
+  }
+
+  // Set file position
+  void seek(int64_t pos, int whence) {
+    if (whence==SEEK_CUR) {
+      whence=SEEK_SET;
+      pos+=tell();
+    }
+    fseeko(in, pos, whence);
+    n=ptr=0;
+  }
+
+  // Close file if open
+  void close() {if (in) fclose(in), in=0;}
+  ~InputFile() {close();}
+};
+
+class OutputFile: public File, public libzpaq::Writer {
+  FILE* out;
+public:
+  OutputFile(): out(0) {}
+
+  // Return true if file is open
+  bool isopen() {return out!=0;}
+
+  // Open for append/update or create if needed.
+  bool open(const char* filename, const char* mode) {
+    assert(!isopen());
+    ptr=0;
+    out=fopen(filename, mode);
+    if (!out) perror(filename);
+    return isopen();
+  }
+
+  // Flush pending output
+  void flush() {
+    if (ptr) {
+      assert(isopen());
+      assert(ptr>0 && ptr<=BUFSIZE);
+      int n=fwrite(&buf[0], 1, ptr, out);
+      if (n!=ptr) error("write failed");
+      ptr=0;
+    }
+  }
+
+  // Write 1 byte
+  void put(int c) {
+    assert(isopen());
+    if (ptr>=BUFSIZE) {
+      assert(ptr==BUFSIZE);
+      flush();
+    }
+    assert(ptr>=0 && ptr<BUFSIZE);
+    buf[ptr++]=c;
+  }
+
+  // Write bufp[0..size-1]
+  void write(const char* bufp, int size);
+
+  // Seek to pos. whence is SEEK_SET, SEEK_CUR, or SEEK_END
+  void seek(int64_t pos, int whence) {
+    assert(isopen());
+    flush();
+    fseeko(out, pos, whence);
+  }
+
+  // return position
+  int64_t tell() {
+    assert(isopen());
+    return ftello(out)+ptr;
+  }
+
+  // Close file
+  void close() {
+    if (out) {
+      flush();
+      fclose(out);
+    }
+  }
+  ~OutputFile() {close();}
+};
+
+// Write bufp[0..size-1]
+void OutputFile::write(const char* bufp, int size) {
+  if (ptr==BUFSIZE) flush();
+  while (size>0) {
+    assert(ptr>=0 && ptr<BUFSIZE);
+    int n=BUFSIZE-ptr;  // number of bytes to copy to buf
+    if (n>size) n=size;
+    memcpy(&buf[ptr], bufp, n);
+    size-=n;
+    bufp+=n;
+    ptr+=n;
+    if (ptr==BUFSIZE) flush();
+  }
+}
 
 // Read a file into a string
 string getFile(const char* filename) {
@@ -244,8 +369,8 @@ void decompile(const string& hcomp, const string& pcomp) {
 // List contents
 void list(const char* archive) {
 
-  File in;
-  in.open(archive, "rb");
+  InputFile in;
+  in.open(archive);
   if (!in.isopen()) perror(archive), exit(1);
   libzpaq::Decompresser d;
   d.setInput(&in);
@@ -505,7 +630,7 @@ int Predictor::stat(int id) {
 // Print help message
 void usage() {
   printf(
-    "zpaqd v6.22 ZPAQ development tool, " __DATE__ "\n"
+    "zpaqd v6.23 ZPAQ development tool, " __DATE__ "\n"
     "To compress: zpaqd {a|c}[i|n|s|t]... config [arg]... archive files...\n"
     "  a - append to existing archive.zpaq\n"
     "  c - create new archive.zpaq\n"
@@ -514,7 +639,8 @@ void usage() {
     "  s - don't save SHA-1 checksums or test post-processor\n"
     "  t - don't save header locator tag\n"
     "  config.cfg with args $1...$9 - see libzpaq.h\n"
-    "To decompress:   zpaqd d archive [output [block [blocks [segments]]]]\n"
+    "To decompress:   zpaqd d[s] archive [output [block [blocks [segments]]]]\n"
+    "  s - don't verify SHA-1 checksums\n"
     "To list:         zpaqd l archive\n"
     "To run:          zpaqd r config [arg]... {h|p} [input [output]]\n"
     "To trace:        zpaqd t config [arg]... {h|p} [N|xN]...\n"
@@ -587,7 +713,7 @@ int main(int argc, char** argv) {
     case 'a':
     {
       const char* options=argv[1]+1;
-      File out;
+      OutputFile out;
       StringWriter pcomp_cmd;
       int errors=0;
       out.open(archive.c_str(), cmd=='c' ? "wb" : "ab");
@@ -604,8 +730,8 @@ int main(int argc, char** argv) {
       // Compress each file
       for (; i<argc; ++i) {
         libzpaq::SHA1 sha1;
-        File in;
-        in.open(argv[i], "rb");
+        InputFile in;
+        in.open(argv[i]);
         if (!in.isopen()) continue;
         co.setInput(&in);
 
@@ -621,8 +747,7 @@ int main(int argc, char** argv) {
 
         // Get checksum
         if (!strchr(options,'s')) {
-          int c;
-          while ((c=in.get())!=EOF) sha1.put(c);
+          for (int c; (c=in.get())!=EOF;) sha1.put(c);
           in.seek(0, SEEK_SET);
         }
 
@@ -634,7 +759,7 @@ int main(int argc, char** argv) {
           string syscmd=pcomp_cmd.s+" \""+argv[i]+"\" "+tmpfile;
           printf("%s\n", syscmd.c_str());
           system(syscmd.c_str());
-          in.open(tmpfile.c_str(), "rb");
+          in.open(tmpfile.c_str());
           if (!in.isopen()) perror(tmpfile.c_str()), exit(1);
         }
 
@@ -701,7 +826,7 @@ int main(int argc, char** argv) {
 
         // open input and output (default stdin, stdout)
         FILE* in=stdin;
-        File out;
+        OutputFile out;
         Stdout outc;
         if (i+1<argc) {
           in=fopen(argv[i+1], "rb");
@@ -736,7 +861,9 @@ int main(int argc, char** argv) {
           perror(argv[i]);
           continue;
         }
-        for (int c; (c=getc(in))!=EOF; sha1.put(c));
+        unsigned char buf[4096];
+        for (int n; (n=fread(buf, 1, 4096, in))>0;)
+          for (int j=0; j<n; ++j) sha1.put(buf[j]);
         int64_t size=sha1.usize();
         const char* s=sha1.result();
         fclose(in);
@@ -755,19 +882,20 @@ int main(int argc, char** argv) {
       if (argc>5) blocks=atoi(argv[5]);
       int segments=0x7fffffff;
       if (argc>6) segments=atoi(argv[6]);
-      File in;
-      in.open(archive.c_str(), "rb");
+      InputFile in;
+      in.open(archive.c_str());
       if (!in.isopen()) perror(archive.c_str()), exit(1);
       libzpaq::Decompresser de;
       de.setInput(&in);
-      File out;
+      OutputFile out;
       if (argc>3) {
         out.open(argv[3], "wb");
         if (!out.isopen()) perror(argv[3]), exit(1);
         de.setOutput(&out);
       }
       libzpaq::SHA1 sha1;
-      de.setSHA1(&sha1);
+      if (argv[1][1]!='s')
+        de.setSHA1(&sha1);
       StringWriter filename, comment;
       double memory=0;
       int64_t offset=0;
@@ -796,8 +924,9 @@ int main(int argc, char** argv) {
             memcpy(sha1result, sha1.result(), 20);
             de.readSegmentEnd(check);
             printf("  ");
-            for (int j=0; j<4; ++j)
-              printf("%02x", sha1result[j]&255);
+            if (argv[1][1]!='s')
+              for (int j=0; j<4; ++j)
+                printf("%02x", sha1result[j]&255);
             printf(" ");
             if (check[0]) {
               for (int j=0; j<4; ++j)
@@ -807,7 +936,7 @@ int main(int argc, char** argv) {
               printf("        ");
             printf(" %s %s %1.0f -> %1.0f", filename.s.c_str(),
                    comment.s.c_str(), in.tell()-inStart, size);
-            if (check[0]) {
+            if (check[0] && argv[1][1]!='s') {
               if (memcmp(check+1, sha1result, 20)) {
                 printf(" VERIFY ERROR!\n");
                 ++errors;

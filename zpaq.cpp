@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.22 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.23 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -253,6 +253,14 @@ Word-model ICM-ISSE chain for modeling text. N1 is the length of the
 chain, with word-level context orders of 0..N1-1. A word is defined
 as a sequence of characters in the range N2..N2+N3-1 after ANDing
 with N4. The default is 1,65,26,223, representing the set [A-Za-z].
+
+  -method config.cfg
+
+If the argument to -method does not start with a digit, then use the
+ZPAQL model in the file config.cfg. ZPAQL is described in libzpaq.h.
+Pre-processing (PCOMP section) is not supported. Numeric arguments
+($1..$9) are not supported and default to 0. Filename extension .cfg
+will be appended if not present.
 
   -summary N
 
@@ -1381,7 +1389,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.22 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.23 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
@@ -1518,7 +1526,7 @@ void Jidac::doCommand(int argc, const char** argv) {
     }
     else if (opt=="-method" && i<argc-1) {
       method=argv[++i];
-      if (method=="" || method[0]<'0' || method[0]>'9') usage();
+      if (method=="") usage();
     }
     else usage();
   }
@@ -1527,10 +1535,11 @@ void Jidac::doCommand(int argc, const char** argv) {
   if (!threads) {
     threads=numberOfProcessors();
     if (sizeof(char*)<8) {
-      assert(method!="" && method[0]>='0' && method[0]<='9');
+      assert(method!="");
       static const int limit[10]={64,64,64,20,16,8,4,2,1,0};
       if (method[0]=='9') error("-method 9 requires 64 bit compile");
-      if (threads>limit[method[0]-'0']) threads=limit[method[0]-'0'];
+      if (isdigit(method[0]) && threads>limit[method[0]-'0'])
+        threads=limit[method[0]-'0'];
     }
   }
   if (!quiet) printf("Using %d threads\n", threads);
@@ -2209,13 +2218,31 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
 
 // Generate a config file from the method argument with syntax:
 // [0..9][e|n][{ciamtsw}[N1[,N2]]...]...
+// Or read from config.cfg file is first char is not a digit.
 string makeConfig(const char* method) {
   assert(method);
-  assert(isdigit(*method));
+
+  // Read from config file
+  if (!isdigit(*method)) {
+    string filename=method;  // append .cfg if not already
+    int len=filename.size();
+    if (len<=4 || filename.substr(len-4)!=".cfg") filename+=".cfg";
+    FILE* in=fopen(filename.c_str(), "r");
+    if (!in) {
+      perror(filename.c_str());
+      error("Config file not found");
+    }
+    string cfg;
+    int c;
+    while ((c=getc(in))!=EOF) cfg+=(char)c;
+    fclose(in);
+    return cfg;
+  }
 
   // Generate the base algorithm. 0 = no compression
+  assert(isdigit(*method));
   if (*method=='0')
-    return "comp 0 0 0 0 0 hcomp post 0 end\n";
+    return "comp 0 0 0 0 0 hcomp end\n";
 
   // 1e or 1n: LZ77, no modeling, with or without E8E9
   if (*method=='1') {
@@ -2580,7 +2607,7 @@ string makeConfig(const char* method) {
         "end\n";
       }
       else
-        pcomp="post 0 end\n";
+        pcomp="end\n";
     }
   
     // Buid context model assuming:
@@ -2763,7 +2790,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
                    const char* filename, const int jobNumber=0) {
   assert(in);
   assert(out);
-  assert(method!="" && isdigit(method[0]));
+  assert(method!="");
   assert(filename && *filename);
   const int n=in->size();  // input size
   assert(method[0]!='1' || n<(1<<24));
@@ -2771,7 +2798,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   assert(method[0]!='3' || n<=(1<<24)-257);
 
   // Expand default methods
-  if (method.size()==1) {
+  if (method.size()==1 && isdigit(method[0])) {
     if (method=="1") method="1e";
     else if (method=="2") method="2e";
     else if (method=="3") method="3eci1";

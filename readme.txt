@@ -1,15 +1,15 @@
-zpaq v6.22, Feb.13, 2013. Contents:
+zpaq v6.23, Feb.13, 2013. Contents:
 
-zpaq.exe      6.22   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.22   For 64 bit Windows.
-zpaq.cpp      6.22   zpaq user's guide and source code.
+zpaq.exe      6.23   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.23   For 64 bit Windows.
+zpaq.cpp      6.23   zpaq user's guide and source code.
 
-zpaqd.exe     6.22   Development tool, 32 bit Windows command line executable.
-zpaqd64.exe   6.22   For 64 bit Windows.
-zpaqd.cpp     6.22   zpaqd user's guide and source code.
+zpaqd.exe     6.23   Development tool, 32 bit Windows command line executable.
+zpaqd64.exe   6.23   For 64 bit Windows.
+zpaqd.cpp     6.23   zpaqd user's guide and source code.
 
-libzpaq.h     6.19   libzpaq API documentation and header.
-libzpaq.cpp   6.22   libzpaq API source code.
+libzpaq.h     6.23   libzpaq API documentation and header.
+libzpaq.cpp   6.23   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
 divsofsort.c  2.00   libdivsufsort-lite source code.
 
@@ -55,11 +55,11 @@ It is needed to compile zpaq.
 zpaq.exe and zpaqd.exe were compiled with MinGW g++ 4.7.0 and compressed
 with upx 3.08w as follows:
 
-  g++ -O3 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
-  g++ -O3 -s -static -Wall zpaqd.cpp libzpaq.cpp -o zpaqd
+  g++ -O3 -msse2 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
+  g++ -O3 -msse2 -s -static -Wall zpaqd.cpp libzpaq.cpp -o zpaqd
   upx zpaq.exe zpaqd.exe
 
-To compile the 64 bit versions, use -m64  (upx will not work)
+To compile the 64 bit versions, use -m64 instead of -msse2  (upx will not work)
 To compile zpaq for Linux, include the options: -Dunix -fopenmp
 To compile zpaqd for Linux, use -Dunix
 To compile either program for non-x86, use -DNOJIT
