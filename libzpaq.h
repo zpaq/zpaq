@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.19 header - Jan. 22, 2012.
+/* libzpaq.h - LIBZPAQ Version 6.23 header - Mar. 8, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -183,7 +183,7 @@ algorithm:
     "  d=0 hash b-- hash *d=a (put order 2 context hash in H[0] pointed by D)"
     "  d++ b-- hash b-- hash *d=a (put order 4 context in H[1]) "
     "  halt "
-    "post 0 end " (no pre/post processing) ",
+    "end " (no pre/post processing) ",
     args,     // Arguments $1 through $9 to ZPAQL code (unused, can be NULL)
     &out);    // Writer* to write pcomp command (default is NULL)
 
@@ -380,7 +380,7 @@ A config argument without a postprocessor has the following syntax:
     i COMP args...
   HCOMP
     zpaql...
-  POST 0 END
+  END (or POST 0 END for backward compatibility)
 
 With a postprocessor:
 
@@ -666,12 +666,8 @@ struct Component {
 
 ////////////////////////// StateTable ////////////////////////
 
-// Next state table generator
+// Next state table
 class StateTable {
-  enum {N=64}; // sizes of b, t
-  int num_states(int n0, int n1);  // compute t[n0][n1][1]
-  void discount(int& n0);  // set new value of n0 after 1 or n1 after 0
-  void next_state(int& n0, int& n1, int y);  // new (n0,n1) after bit y
 public:
   U8 ns[1024]; // state*4 -> next state if 0, if 1, n0, n1
   int next(int state, int y) {  // next state for bit y
