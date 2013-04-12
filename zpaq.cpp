@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.23 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.24 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -37,6 +37,7 @@ Commands:
   a    Add changed files to archive.zpaq
   x    Extract latest versions of files
   l    List contents
+  d    Mark as deleted
 Options (may be abbreviated):
   -not <file|dir>...   Do not add/extract/list
   -to <file|dir>...    Rename external files
@@ -81,6 +82,15 @@ the archive. When a directory is added, any files that existed in
 the old version of the directory but not the new version are marked
 as deleted in the current version but remain in the archive.
 
+For all commands, file names and directories may be specified with
+wildcards. A * matches any string of length 0 or more up to the
+next slash. A ? matches exactly one character. In Linux, names with
+wildcards must be quoted to protect them from the shell. In Windows,
+the forward (/) and back (\) slash are equivalent and stored as (/).
+When adding directories, a trailing slash like c:\ is eqivalent
+to all of the files in that directory but not the directory itself,
+as in c:\*
+
   x or -extract
 
 Extract files and directores (default: all) from the archive.
@@ -104,6 +114,12 @@ of MB added before and after compression. Attributes are shown as
 a string of characters like "DASHRI" in Windows (directory, archive,
 system, hidden, read-only, indexed), or an octal number like "100644"
 (as passed to chmod(), meaning rw-r--r--) in Linux.
+
+  d or -delete
+
+Mark files and directories in the archive as deleted. This actually
+makes the archive slightly larger. The files can still be extracted
+by rolling back to an earlier version using -until.
 
   -not
 
@@ -474,6 +490,7 @@ using libzpaq::error;
 // run(tid, thread, &arg); // runs in parallel
 // join(tid);              // wait for thread to return
 // destroy_mutex(mutex);   // deallocate resources used by mutex
+// sem.destroy();          // deallocate resources used by semaphore
 
 #ifdef PTHREAD
 #include <pthread.h>
@@ -715,6 +732,20 @@ time_t unix_time(int64_t date) {
 }
 
 /////////////////////////////// File //////////////////////////////////
+
+// Return true if a file or directory (UTF-8 without trailing /) exists
+bool exists(string filename) {
+  int len=filename.size();
+  if (len<1) return false;
+  if (filename[len-1]=='/') filename=filename.substr(0, len-1);
+#ifdef unix
+  struct stat sb;
+  return !lstat(filename.c_str(), &sb);
+#else
+  return GetFileAttributes(utow(filename.c_str()).c_str())
+         !=INVALID_FILE_ATTRIBUTES;
+#endif
+}
 
 // Base class of InputFile and OutputFile (OS independent)
 class File {
@@ -1195,22 +1226,41 @@ public:
   }
 };
 
-// convert \ to /. In Windows also convert upper case to lower case.
-int tolowerslash(int c) {
-  if (c=='\\') return '/';
+// In Windows convert upper case to lower case.
+inline int tolowerW(int c) {
 #ifndef unix
-  else if (c>='A' && c<='Z') return c-'A'+'a';
+  if (c>='A' && c<='Z') return c-'A'+'a';
 #endif
-  else return c;
+  return c;
 }
 
 // Return true if path a is a prefix of path b.
+// Match ? in a to any char in b except / or NUL
+// Match * in a to any string in b up to / or NUL
+// Otherwise a must match b up to a / or NUL in b.
 // In Windows, not case sensitive.
 bool ispath(const char* a, const char* b) {
-  if (!*a) return !*b;
-  for (;*a && *b; ++a, ++b)
-    if (tolowerslash(*a)!=tolowerslash(*b)) return false;
-  return *a==0 && (*b==0 || *b=='/' || *b=='\\');
+  for (;*a && *b; ++a, ++b) {
+    const int ca=tolowerW(*a);
+    const int cb=tolowerW(*b);
+    if (ca==0 || (ca=='/' && !a[1]))
+      return cb==0 || cb=='/';
+    else if (ca=='?') {
+      if (cb==0 || cb=='/') return false;
+    }
+    else if (ca=='*') {
+      while (true) {
+        if (ispath(a+1, b)) return true;
+        if (!*b) return false;
+        if (*b=='/') return false;
+        ++b;
+      }
+    }
+    else if (ca!=cb)
+      return false;
+  }
+  if (*a) return false;
+  return *b==0 || *b=='/';
 }
 
 // Convert string to lower case
@@ -1389,16 +1439,17 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.23 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.24 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
   "Commands:\n"
-  "  a    Add changed files to archive.zpaq\n"
-  "  x    Extract latest versions of files\n"
-  "  l    List contents\n"
+  "  a  add               Add changed files to archive.zpaq\n"
+  "  x  extract           Extract latest versions of files\n"
+  "  l  list              List contents\n"
+  "  d  delete            Mark as deleted in a new version of archive\n"
   "Options (may be abbreviated):\n"
-  "  -not <file|dir>...   Do not add/extract/list\n"
+  "  -not <file|dir>...   Do not add/extract/list/delete\n"
   "  -to <file|dir>...    Rename external files\n"
   "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
   "  -force               a: Add even if unchanged. x: output clobbers\n"
@@ -1438,8 +1489,8 @@ string Jidac::unrename(const string& name) {
 // Expand an abbreviated option (with or without a leading "-")
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
-  const char* opts[]={"list","add","extract","method",
-    "force","quiet", "summary","since","above","compare",
+  const char* opts[]={"list","add","extract","delete",
+    "method","force","quiet", "summary","since","above","compare",
     "to","not","version","until","threads",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
@@ -1451,7 +1502,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<3 && result!="") return result;
+      if (i<4 && result!="") return result;
     }
   }
   if (result=="")
@@ -1471,11 +1522,13 @@ void Jidac::doCommand(int argc, const char** argv) {
   version=9999999999999LL;
   threads=0; // 0 = auto-detect
   method="1";  // 0..9
+  ht.resize(1);  // element 0 not used
+  ver.resize(1); // version 0
 
   // Get optional options
   for (int i=1; i<argc; ++i) {
     const string opt=expandOption(argv[i]);
-    if ((opt=="-add" || opt=="-extract" || opt=="-list")
+    if ((opt=="-add" || opt=="-extract" || opt=="-list" || opt=="-delete")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       command=opt;
       archive=argv[++i];
@@ -1489,7 +1542,7 @@ void Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-since" && i<argc-1)
       since=atoi(argv[++i]);
     else if (opt=="-above" && i<argc-1 && isdigit(argv[i+1][0]))
-      above=atof(argv[++i]);
+      above=int64_t(atof(argv[++i]));
     else if (opt=="-summary") {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
@@ -1509,7 +1562,7 @@ void Jidac::doCommand(int argc, const char** argv) {
       --i;
     }
     else if ((opt=="-version" || opt=="-until") && i<argc-1) {
-      version=atof(argv[++i]);
+      version=int64_t(atof(argv[++i]));
       if (version>=19000000LL     && version<=29991231LL)
         version=version*100+23;
       if (version>=1900000000LL   && version<=2999123123LL)
@@ -1550,7 +1603,7 @@ void Jidac::doCommand(int argc, const char** argv) {
 
   // Execute command
   if (size(files)<size(tofiles)) usage();
-  if (command=="-add") {
+  if (command=="-add" || command=="-delete") {
     if (size(files)<1) usage();
     add();
   }
@@ -1561,23 +1614,11 @@ void Jidac::doCommand(int argc, const char** argv) {
 
 // Read archive up to -date into ht, dt, ver. Return place to append.
 int64_t Jidac::read_archive() {
-  ht.resize(1);  // element 0 not used
-  ver.resize(1); // version 0
 
   // Open archive or archive.zpaq
   InputFile in;
-  if (!in.open(archive.c_str())) {
-    if (command=="-add") {
-      if (!quiet) {
-        printf("Creating new archive ");
-        printUTF8(archive.c_str());
-        printf("\n");
-      }
-      return 0;
-    }
-    else
-      exit(1);
-  }
+  if (!in.open(archive.c_str()))
+    return 0;
   if (!quiet) {
     printf("Reading archive ");
     printUTF8(archive.c_str());
@@ -1810,7 +1851,7 @@ int64_t Jidac::read_archive() {
   return block_offset;
 }
 
-// Mark each file in dt that matches the args to -add, -extract, -list
+// Mark each file in dt that matches the command args
 // (in files[]) and not matched to -not (in notfiles[])
 // using written=0 for each match. Match all files in dt if no args
 // (files[] is empty). If all is true, then mark deleted files too.
@@ -1894,7 +1935,9 @@ void Jidac::scandir(const char* filename) {
 
   // Expand wildcards
   WIN32_FIND_DATA ffd;
-  HANDLE h=FindFirstFile(utow(filename).c_str(), &ffd);
+  string t=filename;
+  if (t.size()>0 && t[t.size()-1]=='/') t+="*";
+  HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
   while (h!=INVALID_HANDLE_VALUE) {
 
     // For each file, get name, date, size, attributes
@@ -1907,7 +1950,7 @@ void Jidac::scandir(const char* filename) {
     const int64_t eattr='w'+(int64_t(ffd.dwFileAttributes)<<8);
 
     // Ignore the names "." and ".." or any path/name in notfiles
-    string t=wtou(ffd.cFileName);
+    t=wtou(ffd.cFileName);
     if (t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
     for (int i=0; i<size(notfiles); ++i)
@@ -2957,6 +3000,7 @@ public:
       q[i].compressed.destroy();
       q[i].full.destroy();
     }
+    empty.destroy();
     destroy_mutex(mutex);
   }      
   void write(const StringBuffer& s, const char* filename, string method);
@@ -3168,7 +3212,7 @@ bool compareFilename(DTMap::iterator ap, DTMap::iterator bp) {
   return strcmp(as, bs)<0;
 }
 
-// Add files to archive
+// Add or delete files from archive
 void Jidac::add() {
 
   // Get transaction date
@@ -3186,9 +3230,23 @@ void Jidac::add() {
   if (now==-1 || date<20120000000000LL || date>30000000000000LL)
     error("date is incorrect");
 
-  // Read archive index list into ht, dt.
-  const int64_t header_pos=read_archive();
-  read_args(true);
+  // Read archive index list into ht, dt, ver.
+  const int64_t header_pos=exists(archive) ? read_archive() : 0;
+  if (header_pos==0 && !quiet) {
+    printf("Creating new archive ");
+    printUTF8(archive.c_str());
+    printf("\n");
+  }
+
+  // Adjust date to maintain sequential order
+  if (ver.size() && ver.back().date>=date) {
+    fprintf(stderr, "Warning: adjusting date from %s to %s\n",
+      dateToString(date).c_str(), dateToString(ver.back().date+1).c_str());
+    date=ver.back().date+1;
+  }
+
+  // Make list of files to add or delete
+  read_args(command=="-add");
 
   // Build htinv for fast lookups of sha1 in ht
   HTIndex htinv(ht);
@@ -3375,7 +3433,8 @@ void Jidac::add() {
     const DT& dtr=p->second;
 
     // Remove file if external does not exist and is currently in archive
-    if (dtr.written==0 && !dtr.edate && dtr.dtv.size() && dtr.dtv.back().date) {
+    if (dtr.written==0 && !dtr.edate && dtr.dtv.size()
+        && dtr.dtv.back().date) {
       is+=ltob(0)+p->first+'\0';
       if (!quiet) {
         printf("Removing ");
@@ -3700,25 +3759,12 @@ ThreadReturn decompressThread(void* arg) {
   return 0;
 }
 
-// Return true if a file or directory (UTF-8 without trailing /) exists
-bool exists(string filename) {
-  int len=filename.size();
-  if (len<1) return false;
-  if (filename[len-1]=='/') filename=filename.substr(0, len-1);
-#ifdef unix
-  struct stat sb;
-  return !lstat(filename.c_str(), &sb);
-#else
-  return GetFileAttributes(utow(filename.c_str()).c_str())
-         !=INVALID_FILE_ATTRIBUTES;
-#endif
-}
-
 // Extract files from archive
 void Jidac::extract() {
 
   // Read HT, DT
-  read_archive();
+  if (!read_archive())
+    exit(1);
   read_args(false);
 
   // Map fragments to blocks
@@ -3868,8 +3914,9 @@ void Jidac::list() {
 
   // Summary. Show only the largest files and directories, sorted by size,
   // and block and fragment usage statistics.
+  const int64_t csize=read_archive();
+  if (csize==0) exit(1);
   if (summary) {
-    const int64_t csize=read_archive();
     read_args(false);
 
     // Report biggest files, directories, and extensions
@@ -3930,8 +3977,8 @@ void Jidac::list() {
       if (j>10) j=10;
       fr[j].inc(ht[i].usize);
       fr[-1].inc(ht[i].usize);
-      frc[j].inc(ht[i].usize*frag[i]);
-      frc[-1].inc(ht[i].usize*frag[i]);
+      frc[j].inc(int64_t(ht[i].usize)*frag[i]);
+      frc[-1].inc(int64_t(ht[i].usize)*frag[i]);
       if (ht[i].usize<0) ++unknown_size;
     }
     for (map<unsigned, TOP>::const_iterator p=fr.begin(); p!=fr.end(); ++p) {
@@ -3969,7 +4016,6 @@ void Jidac::list() {
   }
 
   // Ordinary list
-  int64_t csize=read_archive();  // read into ht, dt
   int64_t usize=0;
   int nfiles=0;
   read_args(false, true);
