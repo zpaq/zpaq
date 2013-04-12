@@ -1,4 +1,4 @@
-/* zpaqd v6.23 - ZPAQ compression development tool - Mar. 25, 2013.
+/* zpaqd v6.24 - ZPAQ compression development tool - Apr. 12, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -18,7 +18,8 @@ configuration files for debugging. To compress:
 Compress files to archive using the algorithm specified in config
 to a single block. See the specification at http://mattmahoney/zpaq
 for a description of the archive format. See libzpaq.h for config
-file syntax.
+file syntax. config can also be 1, 2, or 3 to select built-in
+compression levels fast, mid, or max without a config file.
 
 The first letter of the command is "a" to append to archive or "c"
 to overwrite it. The letters following are:
@@ -630,7 +631,7 @@ int Predictor::stat(int id) {
 // Print help message
 void usage() {
   printf(
-    "zpaqd v6.23 ZPAQ development tool, " __DATE__ "\n"
+    "zpaqd v6.24 ZPAQ development tool, " __DATE__ "\n"
     "To compress: zpaqd {a|c}[i|n|s|t]... config [arg]... archive files...\n"
     "  a - append to existing archive.zpaq\n"
     "  c - create new archive.zpaq\n"
@@ -638,7 +639,8 @@ void usage() {
     "  n - don't save file names\n"
     "  s - don't save SHA-1 checksums or test post-processor\n"
     "  t - don't save header locator tag\n"
-    "  config.cfg with args $1...$9 - see libzpaq.h\n"
+    "  config = 1..3 (compress faster..better)\n"
+    "      or ZPAQL file config.cfg with args $1...$9 - see libzpaq.h\n"
     "To decompress:   zpaqd d[s] archive [output [block [blocks [segments]]]]\n"
     "  s - don't verify SHA-1 checksums\n"
     "To list:         zpaqd l archive\n"
@@ -680,13 +682,17 @@ int main(int argc, char** argv) {
   int i=2;
   if (strchr("acrt", cmd)) {
     string config=argv[2];
-    if (config.size()<4 || config.substr(config.size()-4)!=".cfg")
-      config+=".cfg";
-    FILE* in=fopen(config.c_str(), "rb");  // read config file
-    if (!in) perror(config.c_str()), exit(1);
-    int c;
-    while ((c=getc(in))!=EOF) method+=c;
-    fclose(in);
+    if (config=="1" || config=="2" || config=="3")
+      method=config;
+    else {
+      if (config.size()<4 || config.substr(config.size()-4)!=".cfg")
+        config+=".cfg";
+      FILE* in=fopen(config.c_str(), "rb");  // read config file
+      if (!in) perror(config.c_str()), exit(1);
+      int c;
+      while ((c=getc(in))!=EOF) method+=c;
+      fclose(in);
+    }
     for (i=3; i<argc && i<12 && (argv[i][0]=='-' || isdigit(argv[i][0])); ++i)
       args[i-3]=atoi(argv[i]);  // read args
   }
@@ -724,7 +730,10 @@ int main(int argc, char** argv) {
       libzpaq::Compressor co;
       co.setOutput(&out);
       if (!strchr(options, 't')) co.writeTag();
-      co.startBlock(method.c_str(), args, &pcomp_cmd);
+      if (method=="1" || method=="2" || method=="3")
+        co.startBlock(method[0]-'0');
+      else
+        co.startBlock(method.c_str(), args, &pcomp_cmd);
       co.setVerify(!strchr(options, 's'));
 
       // Compress each file
