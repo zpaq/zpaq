@@ -1,4 +1,4 @@
-zpaq v6.24, Apr. 12, 2013. Contents:
+zpaq v6.24a, Apr. 14, 2013. Contents:
 
 zpaq.exe      6.24   Archiver, 32 bit Windows command line executable.
 zpaq64.exe    6.24   For 64 bit Windows.
