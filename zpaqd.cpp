@@ -1,4 +1,4 @@
-/* zpaqd v6.24 - ZPAQ compression development tool - Apr. 12, 2013.
+/* zpaqd v6.25 - ZPAQ compression development tool - Apr. 19, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -631,7 +631,7 @@ int Predictor::stat(int id) {
 // Print help message
 void usage() {
   printf(
-    "zpaqd v6.24 ZPAQ development tool, " __DATE__ "\n"
+    "zpaqd v6.25 ZPAQ development tool, " __DATE__ "\n"
     "To compress: zpaqd {a|c}[i|n|s|t]... config [arg]... archive files...\n"
     "  a - append to existing archive.zpaq\n"
     "  c - create new archive.zpaq\n"

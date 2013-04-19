@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.23 header - Mar. 8, 2013.
+/* libzpaq.h - LIBZPAQ Version 6.25 header - Apr 19, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into

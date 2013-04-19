@@ -1,15 +1,15 @@
-zpaq v6.24a, Apr. 14, 2013. Contents:
+zpaq v6.25, Apr. 19, 2013. Contents:
 
-zpaq.exe      6.24   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.24   For 64 bit Windows.
-zpaq.cpp      6.24   zpaq user's guide and source code.
+zpaq.exe      6.25   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.25   For 64 bit Windows.
+zpaq.cpp      6.25   zpaq user's guide and source code.
 
-zpaqd.exe     6.24   Development tool, 32 bit Windows command line executable.
-zpaqd64.exe   6.24   For 64 bit Windows.
-zpaqd.cpp     6.24   zpaqd user's guide and source code.
+zpaqd.exe     6.25   Development tool, 32 bit Windows command line executable.
+zpaqd64.exe   6.25   For 64 bit Windows.
+zpaqd.cpp     6.25   zpaqd user's guide and source code.
 
-libzpaq.h     6.23   libzpaq API documentation and header.
-libzpaq.cpp   6.23   libzpaq API source code.
+libzpaq.h     6.25   libzpaq API documentation and header.
+libzpaq.cpp   6.25   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
 divsufsort.c  2.00   libdivsufsort-lite source code.
 

@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.24 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.25 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -1439,7 +1439,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.24 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.25 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"

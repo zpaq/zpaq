@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.23 implementation - Mar. 8, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.25 implementation - Apr. 19, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -15,7 +15,6 @@ See libzpaq.h for additional documentation.
 #include "libzpaq.h"
 #include <string.h>
 #include <math.h>
-#include <stdio.h>  // debug
 
 #ifndef NOJIT
 #ifdef unix
@@ -2639,7 +2638,7 @@ int ZPAQL::assemble() {
   const int hlen=hend-hbegin+1;
   const int msize=m.size();
   const int hsize=h.size();
-  const int regcode[8]={2,6,7,5}; // a,b,c,d.. -> edx,esi,edi,ebp,eax..
+  static const int regcode[8]={2,6,7,5}; // a,b,c,d.. -> edx,esi,edi,ebp,eax..
   Array<int> it(hlen);            // hcomp -> rcode locations
   int done=0;  // number of instructions assembled (0..hlen)
   int o=5;  // rcode output index, reserve space for jmp
@@ -2718,13 +2717,13 @@ int ZPAQL::assemble() {
     put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
     put2(0x7401);             // jz L1
     put1(0xc3);               // ret
-    put3(0x83ec08);           // L1: sub esp, 8
+    put3(0x83ec0c);           // L1: sub esp, 12
     put4(0x89542404);         // mov [esp+4], edx
     put3a(0xc70424, this);    // mov [esp], this
     put1a(0xb8, &flush1);     // mov eax, &flush1
     put2(0xffd0);             // call eax
     put4(0x8b542404);         // mov edx, [esp+4]
-    put3(0x83c408);           // add esp, 8
+    put3(0x83c40c);           // add esp, 12
     put1(0xc3);               // ret
   }
 
@@ -2911,10 +2910,10 @@ int ZPAQL::assemble() {
                 put2(0x87d0+regcode[ddd]);   // xchg edx, ddd
                 break;
               case 1:  // ddd++
-                put2(0xffc0+regcode[ddd]);   // inc ddd
+                put3(0x83c001+256*regcode[ddd]); // add ddd, 1
                 break;
               case 2:  // ddd--
-                put2(0xffc8+regcode[ddd]);   // dec ddd
+                put3(0x83e801+256*regcode[ddd]);  // sub ddd, 1
                 break;
               case 3:  // ddd!
                 put2(0xf7d0+regcode[ddd]);   // not ddd
@@ -2937,10 +2936,10 @@ int ZPAQL::assemble() {
                 put2(0x8611);                // xchg dl, [ecx]
                 break;
               case 1:  // ddd++
-                put2(0xfe01);                // inc byte [ecx]
+                put3(0x800101);              // add byte [ecx], 1
                 break;
               case 2:  // ddd--
-                put2(0xfe09);                // dec byte [ecx]
+                put3(0x802901);              // sub byte [ecx], 1
                 break;
               case 3:  // ddd!
                 put2(0xf611);                // not byte [ecx]
@@ -2952,7 +2951,7 @@ int ZPAQL::assemble() {
               case 7:  // jt, jf
               {
                 assert(code>=0 && code<16);
-                const int jtab[2][4]={{5,4,2,7},{4,5,3,6}};
+                static const unsigned char jtab[2][4]={{5,4,2,7},{4,5,3,6}};
                                // jnz,je,jb,ja, jz,jne,jae,jbe
                 if (code<4) put2(0x84db);    // test bl, bl
                 if (arg>=128 && arg-257-i>=0 && o-it[arg-257-i]<120)
@@ -2969,10 +2968,10 @@ int ZPAQL::assemble() {
                 put2(0x8711);             // xchg edx, [ecx]
                 break;
               case 1:  // ddd++
-                put2(0xff01);             // inc dword [ecx]
+                put3(0x830101);           // add dword [ecx], 1
                 break;
               case 2:  // ddd--
-                put2(0xff09);             // dec dword [ecx]
+                put3(0x832901);           // sub dword [ecx], 1
                 break;
               case 3:  // ddd!
                 put2(0xf711);             // not dword [ecx]
@@ -3524,9 +3523,8 @@ int Predictor::assemble_p() {
             put4(0x660ff5c3);                  // pmaddwd xmm0, xmm3
           }
           else {  // accumulate sum in xmm0
-            put4(0xf30f6fd1);                  // movdqu xmm2, xmm1
-            put4(0x660ff5d3);                  // pmaddwd xmm2, xmm3
-            put4(0x660ffec2);                  // paddd, xmm0, xmm2
+            put4(0x660ff5cb);                  // pmaddwd xmm1, xmm3
+            put4(0x660ffec1);                  // paddd xmm0, xmm1
           }
         }
 
@@ -3539,13 +3537,13 @@ int Predictor::assemble_p() {
         put4(0x660ffec1);                      // paddd xmm0, xmm1
         put4(0x660f7ec0);                      // movd eax, xmm0 ; p[i]
         put3(0xc1f808);                        // sar eax, 8
-        put1a(0xb9, 2047);                     // mov ecx, 2047 ; clamp2k
-        put2(0x39c8);                          // cmp eax, ecx
-        put3(0x0f4fc1);                        // cmovg eax, ecx
-        put2(0xf7d1);                          // not ecx ; -2048
-        put2(0x39c8);                          // cmp eax, ecx
-        put3(0x0f4cc1);                        // cmovl eax, ecx
-        put2a(0x8987, off(p[i]));              // mov [edi+&p[i]], eax
+        put1a(0x3d, 2047);                     // cmp eax, 2047
+        put2(0x7e05);                          // jle L1
+        put1a(0xb8, 2047);                     // mov eax, 2047
+        put1a(0x3d, -2048);                    // L1: cmp eax, -2048
+        put2(0x7d05);                          // jge, L2
+        put1a(0xb8, -2048);                    // mov eax, -2048
+        put2a(0x8987, off(p[i]));              // L2: mov [edi+&p[i]], eax
         break;
 
       case SSE:  // sizebits j start limit
@@ -3733,23 +3731,23 @@ int Predictor::assemble_p() {
           put1a(0x05, (1<<12));        // add eax, 4096
           put3(0xc1f80d);              // sar eax, 13
           put3(0x0304d6);              // add eax, [esi+edx*8] ; wt[0]
-          put1a(0xbb, (1<<19)-1);      // mov ebx, 524287
-          put2(0x39d8);                // cmp eax, ebx
-          put3(0x0f4fc3);              // cmovg eax, ebx
-          put2(0xf7d3);                // not ebx ; -524288
-          put2(0x39d8);                // cmp eax, ebx
-          put3(0x0f4cc3);              // cmovl eax, ebx
-          put3(0x8904d6);              // mov [esi+edx*8], eax
+          put1a(0x3d, (1<<19)-1);      // cmp eax, (1<<19)-1
+          put2(0x7e05);                // jle L1
+          put1a(0xb8, (1<<19)-1);      // mov eax, (1<<19)-1
+          put1a(0x3d, -1<<19);         // cmp eax, -1<<19
+          put2(0x7d05);                // jge L2
+          put1a(0xb8, -1<<19);         // mov eax, -1<<19
+          put3(0x8904d6);              // L2: mov [esi+edx*8], eax
           put3(0x83c110);              // add ecx, 16 ; err
           put3(0xc1f905);              // sar ecx, 5
           put4(0x034cd604);            // add ecx, [esi+edx*8+4] ; wt[1]
-          put1a(0xb8, (1<<19)-1);      // mov eax, 524287
-          put2(0x39c1);                // cmp ecx, eax
-          put3(0x0f4fc8);              // cmovg ecx, eax
-          put2(0xf7d0);                // not eax ; -524288
-          put2(0x39c1);                // cmp ecx, eax
-          put3(0x0f4cc8);              // cmovl ecx, eax
-          put4(0x894cd604);            // mov [esi+edx*8+4], ecx
+          put2a(0x81f9, (1<<19)-1);    // cmp ecx, (1<<19)-1
+          put2(0x7e05);                // jle L3
+          put1a(0xb9, (1<<19)-1);      // mov ecx, (1<<19)-1
+          put2a(0x81f9, -1<<19);       // cmp ecx, -1<<19
+          put2(0x7d05);                // jge L4
+          put1a(0xb9, -1<<19);         // mov ecx, -1<<19
+          put4(0x894cd604);            // L4: mov [esi+edx*8+4], ecx
         }
         break;
 
@@ -3944,13 +3942,13 @@ int Predictor::assemble_p() {
           put1a(0x05, 1<<12);          // add eax, 1<<12
           put3(0xc1f80d);              // sar eax, 13
           put2(0x0306);                // add eax, [esi]
-          put1a(0xba, (1<<19)-1);      // mov edx, (1<<19)-1
-          put2(0x39d0);                // cmp eax, edx
-          put3(0x0f4fc2);              // cmovg eax, edx
-          put2(0xf7d2);                // not edx
-          put2(0x39d0);                // cmp eax, edx
-          put3(0x0f4cc2);              // cmovl eax, edx
-          put2(0x8906);                // mov [esi], eax
+          put1a(0x3d, (1<<19)-1);      // cmp eax, (1<<19)-1
+          put2(0x7e05);                // jge L1
+          put1a(0xb8, (1<<19)-1);      // mov eax, (1<<19)-1
+          put1a(0x3d, -1<<19);         // cmp eax, -1<<19
+          put2(0x7d05);                // jle L2
+          put1a(0xb8, -1<<19);         // mov eax, -1<<19
+          put2(0x8906);                // L2: mov [esi], eax
           if (k<cp[3]-1) {
             if (S==8) put1(0x48);      // rex.w
             put3(0x83c604);            // add esi, 4
