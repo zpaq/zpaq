@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.25 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.26 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -1170,59 +1170,90 @@ struct StringWriter: public libzpaq::Writer {
 // For (de)compressing to/from a string. Writing appends bytes
 // which can be later read.
 class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
-  string s;  // buffer: rpos <= wpos <= s.size()
-  unsigned rpos, wpos;  // number of bytes read, written
+  unsigned char* p;  // allocated memory, not NUL terminated
+  size_t al;         // number of bytes allocated, al > 0, p[wpos..al-1]==0.
+  size_t wpos;       // index of next byte to write, wpos < al
+  size_t rpos;       // index of next byte to read, rpos < wpos or return EOF.
+
+  // Enlarge al to make room to write at least n bytes.
+  void realloc(unsigned n) {
+    assert(p);
+    assert(wpos<al);
+    if (wpos+n<al) return;
+    while (wpos+n>=al) al=al*2+64;
+    unsigned char* q=(unsigned char*)malloc(al);
+    if (!q) throw std::bad_alloc();
+    memcpy(q, p, wpos);
+    free(p);
+    p=q;
+  }
+
+  // No assignment or copy
+  void operator=(const StringBuffer&);
+  StringBuffer(const StringBuffer&);
+
 public:
 
   // Direct access to data
-  unsigned char* data() {
-    return (unsigned char*)(char*)s.data();
-  }
+  unsigned char* data() {return p;}
 
   // Allocate n bytes initially and make the size 0. More memory will
   // be allocated later if needed.
-  StringBuffer(int n=0): s(n,'\0'), rpos(0), wpos(0) {}
+  StringBuffer(size_t n=0): al(n), wpos(0), rpos(0) {
+    if (al<64) al=64;
+    p=(unsigned char*)malloc(al);
+    if (!p) throw std::bad_alloc();
+  }
+
+  // Free memory
+  ~StringBuffer() {free(p);}
 
   // Return number of bytes written.
   size_t size() const {return wpos;}
 
   // Reset size to 0.
-  void reset() {rpos=wpos=0;}  // make size=0
+  void reset() {rpos=wpos=0;}
 
   // Write a single byte.
   void put(int c) {  // write 1 byte
-    if (wpos>=s.size()) s.resize(wpos*2+64);
-    s[wpos++]=c;
+    realloc(1);
+    p[wpos++]=c;
   }
 
   // Write buf[0..n-1]
-  void write(const char* buf, int n) {  // 
-    if (wpos+n>=s.size()) s.resize((wpos+n)*2+64);
-    memcpy((char*)s.c_str()+wpos, buf, n);
+  void write(const char* buf, int n) {
+    realloc(n);
+    memcpy(p+wpos, buf, n);
     wpos+=n;
   }
 
   // Read a single byte. Return EOF (-1) and reset at end of string.
-  int get() {return rpos<wpos ? s[rpos++]&255 : (reset(),-1);}
+  int get() {return rpos<wpos ? p[rpos++] : (reset(),-1);}
 
   // Read up to n bytes into buf[0..] or fewer if EOF is first.
   // Return the number of bytes actually read.
   int read(char* buf, int n) {
-    if (n>int(wpos-rpos)) n=wpos-rpos;
-    if (n>0) memcpy(buf, s.c_str()+rpos, n);
+    if (rpos+n>wpos) n=wpos-rpos;
+    if (n>0) memcpy(buf, p+rpos, n);
     rpos+=n;
     return n;
   }
 
   // Return the entire string as a read-only array.
-  const char* c_str() const {return s.c_str();}
+  const char* c_str() const {return (const char*)p;}
 
   // Truncate the string to size i.
-  void resize(int i) {wpos=i;}
+  void resize(size_t i) {wpos=i;}
 
   // Write a string.
-  void operator+=(const string& t) {
-    for (unsigned i=0; i<t.size(); ++i) put(t[i]);
+  void operator+=(const string& t) {write(t.data(), t.size());}
+
+  // Swap efficiently
+  void swap(StringBuffer& s) {
+    std::swap(p, s.p);
+    std::swap(al, s.al);
+    std::swap(wpos, s.wpos);
+    std::swap(rpos, s.rpos);
   }
 };
 
@@ -1431,15 +1462,13 @@ private:
   void scandir(const char* filename);   // scan dirs and add args to dt
   void addfile(const char* filename, int64_t edate, int64_t esize,
                int64_t eattr);
-  void write_fragments(CompressJob& job, StringBuffer& b, string method,
-                       unsigned& block_start, int& misses);
   void list_versions(int64_t csize);
 };
 
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.25 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.26 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
@@ -2170,7 +2199,7 @@ void LZBuffer::write_match2(unsigned len, unsigned off) {
 // Encode inbuf to buf using LZ77 level 1 or 2.
 // If doE8 is true then do E8E9 transform on inbuf first.
 LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
-    in((const unsigned char*)inbuf.c_str()), n(inbuf.size()),
+    in(inbuf.data()), n(inbuf.size()),
     buf(inbuf.size()*9/8), level(level_), bits(0), nbits(0) {
   assert(level==1 || level==2);
 
@@ -2966,7 +2995,7 @@ void compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
 
 // Buffer queue element
 struct CJ {
-  enum {EMPTY, FILLING, FULL, COMPRESSING, COMPRESSED, WRITING} state;
+  enum {EMPTY, FULL, COMPRESSING, COMPRESSED, WRITING} state;
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
   string method;         // compression level or "" to mark end of data
@@ -2979,7 +3008,8 @@ struct CJ {
 class CompressJob {
   Mutex mutex;           // protects state changes
   int job;               // number of jobs
-  vector<CJ> q;          // buffer queue
+  CJ* q;                 // buffer queue
+  unsigned qsize;        // number of elements in q
   int front;             // next to remove from queue
   libzpaq::Writer* out;  // archive
   Semaphore empty;       // number of empty buffers ready to fill
@@ -2987,7 +3017,9 @@ public:
   friend ThreadReturn compressThread(void* arg);
   friend ThreadReturn writeThread(void* arg);
   CompressJob(int t, libzpaq::Writer* f):
-      job(0), q(t), front(0), out(f) {
+      job(0), q(0), qsize(t), front(0), out(f) {
+    q=new CJ[t];
+    if (!q) throw std::bad_alloc();
     init_mutex(mutex);
     empty.init(t);
     for (int i=0; i<t; ++i) {
@@ -2996,38 +3028,37 @@ public:
     }
   }
   ~CompressJob() {
-    for (int i=size(q)-1; i>=0; --i) {
+    for (int i=qsize-1; i>=0; --i) {
       q[i].compressed.destroy();
       q[i].full.destroy();
     }
     empty.destroy();
     destroy_mutex(mutex);
+    delete[] q;
   }      
-  void write(const StringBuffer& s, const char* filename, string method);
+  void write(StringBuffer& s, const char* filename, string method);
   vector<int> csize;  // compressed block sizes
 };
 
 // Write s at the back of the queue. Signal end of input with method=-1
-void CompressJob::write(const StringBuffer& s, const char* fn, string method){
-  for (unsigned k=(method=="")?q.size():1; k>0; --k) {
+void CompressJob::write(StringBuffer& s, const char* fn, string method){
+  for (unsigned k=(method=="")?qsize:1; k>0; --k) {
     empty.wait();
     lock(mutex);
     unsigned i, j;
-    for (i=0; i<q.size(); ++i) {
-      if (q[j=(i+front)%q.size()].state==CJ::EMPTY) {
-        q[j].state=CJ::FILLING;
+    for (i=0; i<qsize; ++i) {
+      if (q[j=(i+front)%qsize].state==CJ::EMPTY) {
         q[j].filename=fn?fn:"";
         q[j].method=method;
-        release(mutex);
-        q[j].in=s;
-        lock(mutex);
+        q[j].in.reset();
+        q[j].in.swap(s);
         q[j].state=CJ::FULL;
         q[j].full.signal();
         break;
       }
     }
     release(mutex);
-    assert(i<q.size());  // queue should not be full
+    assert(i<qsize);  // queue should not be full
   }
 }  
 
@@ -3040,7 +3071,7 @@ ThreadReturn compressThread(void* arg) {
     // Get job number = assigned position in queue
     lock(job.mutex);
     jobNumber=job.job++;
-    assert(jobNumber>=0 && jobNumber<size(job.q));
+    assert(jobNumber>=0 && jobNumber<int(job.qsize));
     CJ& cj=job.q[jobNumber];
     release(job.mutex);
 
@@ -3110,7 +3141,7 @@ ThreadReturn writeThread(void* arg) {
       }
       cj.state=CJ::EMPTY;
       cj.out.reset();
-      job.front=(job.front+1)%job.q.size();
+      job.front=(job.front+1)%job.qsize;
       job.empty.signal();
       release(job.mutex);
     }
@@ -3135,52 +3166,21 @@ void writeJidacHeader(libzpaq::Writer *out, int64_t date,
                 ("jDC"+itos(date, 14)+"c"+itos(htsize, 10)).c_str());
 }
 
-// Compress fragments in b indexed by ht[block_start...] to job
-// using method and args with list of fragment sizes appended.
-// Select method 0 if misses is near b.size() and reset misses=0.
-void Jidac::write_fragments(CompressJob& job, StringBuffer& b,
-                            string method, unsigned& block_start,
-                            int& misses) {
-  bool iscompressed=true;
-  switch(method[0]-'0') {
-    case 1: iscompressed=b.size()-misses>b.size()/16; break;
-    case 2: iscompressed=b.size()-misses>b.size()/32; break;
-    case 3: iscompressed=b.size()-misses>b.size()/64; break;
-    case 4: iscompressed=b.size()-misses>b.size()/128; break;
-  }
-  if (!quiet) {
-    printf("Fragments %d-%d misses=%d/%d %1.2f%% (%s)\n",
-           block_start, size(ht), misses, size(b), misses*100.0/size(b),
-           iscompressed ? "compressed" : "stored");
-  }
-  if (!iscompressed) method="0";
-  if (block_start>=ht.size()) return;
-  for (unsigned i=block_start; i<ht.size(); ++i)
-    b+=itob(ht[i].usize);
-  b+=itob(block_start);
-  b+=itob(ht.size()-block_start);
-  job.write(b, ("jDC"+itos(date, 14)+"d"+itos(block_start,10)).c_str(),
-            method);
-  b.reset();
-  ht[block_start].csize=-1;  // to fill in later
-  block_start=ht.size();
-  misses=0;
-}
-
 // Maps sha1 -> fragment ID in ht
 class HTIndex {
   enum {N=1<<22};   // size of hash table t
   vector<HT>& htr;  // reference to ht
   vector<vector<unsigned> > t;  // sha1 prefix -> list of indexes
   unsigned htsize;  // number of IDs in t
-public:
-  HTIndex(vector<HT>& r): htr(r), t(N), htsize(0) {
-    update();
-  }
 
   // Compuate a hash index for sha1[20]
   unsigned hash(const unsigned char* sha1) {
     return (sha1[0]|(sha1[1]<<8)|(sha1[2]<<16))&(N-1);
+  }
+
+public:
+  HTIndex(vector<HT>& r): htr(r), t(N), htsize(0) {
+    update();
   }
 
   // Find sha1 in ht. Return its index or 0 if not found.
@@ -3217,16 +3217,9 @@ void Jidac::add() {
 
   // Get transaction date
   time_t now=time(NULL);
-#ifdef unix
-  date=decimal_time(now);
-#else
   tm* t=gmtime(&now);
   date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
       +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
-#endif
-  if (!quiet)
-    printf("Adding transaction dated %s (UT)\n",
-           dateToString(date).c_str());
   if (now==-1 || date<20120000000000LL || date>30000000000000LL)
     error("date is incorrect");
 
@@ -3240,9 +3233,11 @@ void Jidac::add() {
 
   // Adjust date to maintain sequential order
   if (ver.size() && ver.back().date>=date) {
+    const int64_t newdate=decimal_time(unix_time(ver.back().date)+1);
     fprintf(stderr, "Warning: adjusting date from %s to %s\n",
-      dateToString(date).c_str(), dateToString(ver.back().date+1).c_str());
-    date=ver.back().date+1;
+      dateToString(date).c_str(), dateToString(newdate).c_str());
+    assert(newdate>date);
+    date=newdate;
   }
 
   // Make list of files to add or delete
@@ -3255,10 +3250,10 @@ void Jidac::add() {
   if (!quiet) {
     printf("Appending to archive ");
     printUTF8(archive.c_str());
-    printf("\n");
+    printf(" with date %s\n", dateToString(date).c_str());
   }
   OutputFile out;
-  if (!out.open(archive.c_str())) exit(1);
+  if (!out.open(archive.c_str())) error("Archive open failed");
   int64_t archive_size=out.tell();
   if (archive_size!=header_pos) {
     if (!quiet)
@@ -3268,7 +3263,7 @@ void Jidac::add() {
   }
 
   // reserve space for the header block
-  const unsigned htsize=ht.size();
+  const unsigned htsize=ht.size();  // fragments at start of update
   writeJidacHeader(&out, date, -1, htsize);
   const int64_t header_end=out.tell();
 
@@ -3288,15 +3283,64 @@ void Jidac::add() {
   }
   std::sort(vf.begin(), vf.end(), compareFilename);
 
-  // Split input files into fragments and group into blocks.
-  unsigned block_start=ht.size();
-  StringBuffer b(1<<24);  // current block
-  int unmatchedFragments=0, totalFragments=0;  // counts
-  int misses=0, fmisses=0;  // mispredictions in block and fragment
-  for (unsigned i=0; i<vf.size(); ++i) {
-    DTMap::iterator p=vf[i];
-    {
-      // Add directory
+  // Compress until end of last file
+  assert(method!="");
+  const unsigned blocksize=(method[0]>='4' && method[0]<='9')  // max block
+    ? 1<<(24+method[0]-'0'-4) : (1<<24)-257*(method[0]=='3');
+  const unsigned MIN_FRAGMENT=4096;   // fragment size limits
+  const unsigned MAX_FRAGMENT=520192;
+  unsigned fi=0;  // file number in vf
+  unsigned fj=0;  // fragment number in file
+  InputFile in;   // currently open input file
+  StringBuffer sb;  // block to compress
+  unsigned frags=0;  // number of fragments in sb
+  unsigned hits=0;   // number of predicted bytes
+  while (fi<vf.size() || frags>0) {
+
+    // Test whether block should be compressed or stored
+    bool compressible=true;
+    if (method[0]>='1' && method[0]<='4') {
+      static const unsigned t[4]={16, 32, 64, 128};
+      compressible=hits*t[method[0]-'1']>=sb.size();
+    }
+
+    // Compress a block if (1) end of input, (2) block is full,
+    // (3) EOF, block is almost full, and next file won't fit, or
+    // (4) EOF, block is partly full and not compressible.
+    // In that case, store it uncompressed.
+    if (fi==vf.size() || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
+        || (fj==0 && sb.size()>blocksize*3/4
+            && sb.size()+vf[fi]->second.esize>blocksize-MAX_FRAGMENT-2048) 
+        || (fj==0 && sb.size()>blocksize/4 && !compressible)) {
+
+      // Pad sb with redundant fragment size list and compress
+      if (frags>0) {
+        assert(frags<ht.size());
+        for (unsigned i=ht.size()-frags; i<ht.size(); ++i)
+          sb+=itob(ht[i].usize);
+        sb+=itob(ht.size()-frags);
+        sb+=itob(frags);
+        if (!quiet)
+          printf("Compressing %d bytes in %d fragments\n",
+                 int(sb.size()), frags);
+        job.write(sb, ("jDC"+itos(date, 14)+"d"
+                  +itos(ht.size()-frags, 10)).c_str(),
+                  compressible ? method : "0");
+        assert(sb.size()==0);
+        ht[ht.size()-frags].csize=-1;  // compressed size to fill in later
+        frags=0;
+        hits=0;
+      }
+      continue;
+    }
+
+    // If no file is open then open the next one
+    assert(fi<vf.size());
+    if (!in.isopen()) {
+      assert(fj==0);
+  
+      // Skip directory
+      DTMap::iterator p=vf[fi];
       string filename=rename(p->first);
       if (filename!="" && filename[filename.size()-1]=='/') {
         if (!quiet) {
@@ -3304,13 +3348,14 @@ void Jidac::add() {
           printUTF8(p->first.c_str());
           printf("\n");
         }
+        ++fi;
         continue;
       }
 
       // Open input file
-      InputFile in;
-      if (!in.open(filename.c_str())) {
+      if (!in.open(filename.c_str())) {  // skip if not found
         p->second.edate=0;
+        ++fi;
         continue;
       }
       else if (!quiet) {
@@ -3328,75 +3373,69 @@ void Jidac::add() {
         }
         printf("\n");
       }
+    }
 
-      // Set block size
-      int blocksize=(1<<24)-257*(method[0]=='3');
-      if (method[0]>'4') blocksize=1<<(24+method[0]-'0'-4);
-
-      // Split the file into fragments on content-dependent
-      // boundaries and group into blocks. For each fragment, look up its
-      // hash in ht. If found, then omit it from the block, otherwise append
-      // the hash to ht. Save fragment pointers in dt.
-      {
-        libzpaq::SHA1 sha1;  // to compute SHA-1 hashes and sizes
-        int c, c1=0;  // current, previous bytes
-        const unsigned HM[2]={314159265, 271828182};  // must be odd and %4==2
-        unsigned h=0;  // rolling hash for finding fragment boundaries
-        unsigned char o1[256]={0};  // order-1 prediction
-        int fragment=0;  // size
-        if (size(b)>blocksize*3/4 && size(b)+p->second.esize>blocksize)
-          write_fragments(job, b, method, block_start, misses);
-        do {
-          c=in.get();
-          if (c!=EOF) {
-            sha1.put(c);
-            b.put(c);
-            ++fragment;
-            if (c!=o1[c1]) ++fmisses, h=(h+c+1)*HM[1];
-            else h=(h+c+1)*HM[0];
-            o1[c1]=c;
-            c1=c;
-          }
-          const int MIN_FRAGMENT=4096;
-          const int MAX_FRAGMENT=520192;
-          if (c==EOF || (h<65536 && fragment>=MIN_FRAGMENT)
-             || fragment>=MAX_FRAGMENT) {
-            ++totalFragments;
-            const char* sh=sha1.result();  // resets
-            unsigned j=htinv.find(sh);
-            if (j==0) {  // new hash
-              j=ht.size();
-              ht.push_back(HT(sh, fragment, 0));
-              htinv.update();
-              ++unmatchedFragments;
-              misses+=fmisses;
-            }
-            else
-              b.resize(b.size()-fragment);
-            p->second.eptr.push_back(j);
-            fragment=fmisses=0;
-            if (b.size()>=blocksize-MAX_FRAGMENT-8-(ht.size()-block_start)*4)
-              write_fragments(job, b, method, block_start, misses);
-            c1=h=0;
-            memset(o1, 0, sizeof(o1));
-          }
-        } while (c!=EOF);
+    // Read a fragment
+    assert(in.isopen());
+    int c=0;  // current byte
+    int c1=0;  // previous byte
+    unsigned h=0;  // rolling hash for finding fragment boundaries
+    unsigned sz=0;  // fragment size;
+    libzpaq::SHA1 sha1;
+    unsigned char o1[256]={0};
+    unsigned oldhits=hits;
+    while (true) {
+      c=in.get();
+      if (c!=EOF) {
+        sb.put(c);
+        if (c==o1[c1]) h=(h+c+1)*314159265u, ++hits;
+        else h=(h+c+1)*271828182u;
+        o1[c1]=c;
+        c1=c;
+        sha1.put(c);
+        ++sz;
       }
-      if (in.tell()!=p->second.esize)
-        fprintf(stderr, "Warning: %s size changed from %1.0f to %1.0f\n",
-                filename.c_str(), double(p->second.esize), double(in.tell()));
+      if (c==EOF || (h<65536 && sz>=MIN_FRAGMENT) || sz>=MAX_FRAGMENT)
+        break;
+    }
+
+    // Look for matching fragment
+    char sh[20];
+    assert(sz==sha1.usize());
+    memcpy(sh, sha1.result(), 20);
+    int j=htinv.find(sh);
+    if (j==0) {  // not matched, add 
+      j=ht.size();
+      ht.push_back(HT(sh, sz));
+      ++frags;
+      htinv.update();
+    }
+    else { // matched, discard
+      assert(sz<=sb.size());
+      sb.resize(sb.size()-sz);
+      hits=oldhits;
+    }
+
+    // Point file to this fragment
+    vector<unsigned>& eptr=vf[fi]->second.eptr;
+    while (eptr.size()<=fj) eptr.push_back(0);
+    eptr[fj++]=j;
+
+    // Close file at EOF
+    if (c==EOF) {
       in.close();
+      ++fi;
+      fj=0;
     }
   }
-  if (!quiet)
-    printf("Matched %d of %d fragments\n",
-           totalFragments-unmatchedFragments, totalFragments);
-
-  // compress last partial block
-  write_fragments(job, b, method, block_start, misses);
 
   // Wait for jobs to finish
-  job.write(b, 0, "");  // signal end of input
+  assert(frags==0);
+  assert(fi==vf.size());
+  assert(fj==0);
+  assert(sb.size()==0);
+  assert(!in.isopen());
+  job.write(sb, 0, "");  // signal end of input
   for (int i=0; i<threads; ++i)
     join(tid[i]);
   join(wid);
@@ -3412,7 +3451,7 @@ void Jidac::add() {
   if (!quiet) printf("Updating index\n");
   int64_t cdatasize=out.tell()-header_end;  // compressed size for header
   StringBuffer is;
-  block_start=0;
+  unsigned block_start=0;
   for (unsigned i=htsize; i<=ht.size(); ++i) {
     if ((i==ht.size() || ht[i].csize>0) && is.size()>0) {  // write a block
       assert(block_start>=htsize && block_start<i);

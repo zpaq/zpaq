@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.25 implementation - Apr. 19, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.26 implementation - Apr. 21, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -14,7 +14,7 @@ See libzpaq.h for additional documentation.
 
 #include "libzpaq.h"
 #include <string.h>
-#include <math.h>
+#include <stdio.h>  // debug
 
 #ifndef NOJIT
 #ifdef unix
@@ -420,19 +420,26 @@ void ZPAQL::flush() {
   bufptr=0;
 }
 
+// pow(2, x)
+static double pow2(int x) {
+  double r=1;
+  for (; x>0; x--) r+=r;
+  return r;
+}
+
 // Return memory requirement in bytes
 double ZPAQL::memory() {
-  double mem=pow(2.0,header[2]+2)+pow(2.0,header[3])  // hh hm
-            +pow(2.0,header[4]+2)+pow(2.0,header[5])  // ph pm
+  double mem=pow2(header[2]+2)+pow2(header[3])  // hh hm
+            +pow2(header[4]+2)+pow2(header[5])  // ph pm
             +header.size();
   int cp=7;  // start of comp list
   for (int i=0; i<header[6]; ++i) {  // n
     assert(cp<cend);
-    double size=pow(2.0, header[cp+1]); // sizebits
+    double size=pow2(header[cp+1]); // sizebits
     switch(header[cp]) {
       case CM: mem+=4*size; break;
       case ICM: mem+=64*size+1024; break;
-      case MATCH: mem+=4*size+pow(2.0, header[cp+2]); break; // bufbits
+      case MATCH: mem+=4*size+pow2(header[cp+2]); break; // bufbits
       case MIX2: mem+=2*size; break;
       case MIX: mem+=4*size*header[cp+3]; break; // m
       case ISSE: mem+=64*size+2048; break;
@@ -2751,7 +2758,7 @@ int ZPAQL::assemble() {
   } while (done>0);
 
   // Set it[i] bits 2-3 to 4, 8, or 12 if a comparison
-  //  (<, >, == respectively) does not need to save the result in f,
+  //  (==, <, > respectively) does not need to save the result in f,
   // or if a conditional jump (jt, jf) does not need to read f.
   // This is true if a comparison is followed directly by a jt/jf,
   // the jt/jf is not a jump target, the byte before is not a jump
@@ -2899,6 +2906,19 @@ int ZPAQL::assemble() {
           }
         }
 
+        // Code runs of up to 127 identical ++ or -- operations that are not
+        // otherwise jump targets as a single instruction. Mark all but
+        // the first as not reachable.
+        int inc=0;  // run length of identical ++ or -- instructions
+        if (op<=50 && (op%8==1 || op%8==2)) {
+          assert(code>=1 && code<=3);
+          inc=1;
+          for (int j=i+1; inc<127 && j<hlen && it[j]==1 && hcomp[j]==op; ++j){
+            ++inc;
+            it[j]=0;
+          }
+        }
+
         // Translate by opcode
         switch((op/8)&31) {
           case 0:  // ddd = a
@@ -2910,10 +2930,10 @@ int ZPAQL::assemble() {
                 put2(0x87d0+regcode[ddd]);   // xchg edx, ddd
                 break;
               case 1:  // ddd++
-                put3(0x83c001+256*regcode[ddd]); // add ddd, 1
+                put3(0x83c000+256*regcode[ddd]+inc); // add ddd, inc
                 break;
               case 2:  // ddd--
-                put3(0x83e801+256*regcode[ddd]);  // sub ddd, 1
+                put3(0x83e800+256*regcode[ddd]+inc); // sub ddd, inc
                 break;
               case 3:  // ddd!
                 put2(0xf7d0+regcode[ddd]);   // not ddd
@@ -2936,10 +2956,10 @@ int ZPAQL::assemble() {
                 put2(0x8611);                // xchg dl, [ecx]
                 break;
               case 1:  // ddd++
-                put3(0x800101);              // add byte [ecx], 1
+                put3(0x800100+inc);          // add byte [ecx], inc
                 break;
               case 2:  // ddd--
-                put3(0x802901);              // sub byte [ecx], 1
+                put3(0x802900+inc);          // sub byte [ecx], inc
                 break;
               case 3:  // ddd!
                 put2(0xf611);                // not byte [ecx]
@@ -2968,10 +2988,10 @@ int ZPAQL::assemble() {
                 put2(0x8711);             // xchg edx, [ecx]
                 break;
               case 1:  // ddd++
-                put3(0x830101);           // add dword [ecx], 1
+                put3(0x830100+inc);       // add dword [ecx], inc
                 break;
               case 2:  // ddd--
-                put3(0x832901);           // sub dword [ecx], 1
+                put3(0x832900+inc);       // sub dword [ecx], inc
                 break;
               case 3:  // ddd!
                 put2(0xf711);             // not dword [ecx]
@@ -3148,6 +3168,12 @@ int ZPAQL::assemble() {
           case 31:  // 255 = lj
             if (op==255) put1a(0xe9, 0);             // jmp near
             break;
+        }
+        if (inc>1) {  // skip run of identical ++ or --
+          i+=inc-1;
+          assert(i<hlen);
+          assert(it[i]==0);
+          assert(hcomp[i]==op);
         }
       }
     }
