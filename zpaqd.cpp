@@ -1,4 +1,4 @@
-/* zpaqd v6.26 - ZPAQ compression development tool - Apr. 26, 2013.
+/* zpaqd v6.27 - ZPAQ compression development tool - May 10, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -374,7 +374,9 @@ void list(const char* archive) {
   in.open(archive);
   if (!in.isopen()) perror(archive), exit(1);
   libzpaq::Decompresser d;
+  libzpaq::SHA1 sha1;
   d.setInput(&in);
+  d.setSHA1(&sha1);
   double mem;
   StringWriter filename, comment, buf;
   char sha1result[21];
@@ -406,11 +408,15 @@ void list(const char* archive) {
             && filename.s.size()==28
             && filename.s.substr(0, 3)=="jDC"
             && strchr("chi", filename.s[17])) {
+          sha1.result();  // init
           d.setOutput(&buf);
           d.decompress();
         }
       }
       d.readSegmentEnd(sha1result);
+      if (buf.s.size()>0 && sha1result[0]==1
+          && memcmp(sha1.result(), sha1result+1, 20))
+        printf("CHECKSUM ERROR!\n");
       printf("  ");
       for (int i=0; i<4; ++i) {
         if (sha1result[0]) printf("%02x", sha1result[i+1]&255);
@@ -631,7 +637,7 @@ int Predictor::stat(int id) {
 // Print help message
 void usage() {
   printf(
-    "zpaqd v6.26 ZPAQ development tool, " __DATE__ "\n"
+    "zpaqd v6.27 ZPAQ development tool, " __DATE__ "\n"
     "To compress: zpaqd {a|c}[i|n|s|t]... config [arg]... archive files...\n"
     "  a - append to existing archive.zpaq\n"
     "  c - create new archive.zpaq\n"
