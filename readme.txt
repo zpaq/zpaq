@@ -1,8 +1,8 @@
-zpaq v6.27, May 13, 2013. Contents:
+zpaq v6.28, May 22, 2013. Contents:
 
-zpaq.exe      6.27   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.27   For 64 bit Windows.
-zpaq.cpp      6.27   zpaq user's guide and source code.
+zpaq.exe      6.28   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.28   For 64 bit Windows.
+zpaq.cpp      6.28   zpaq user's guide and source code.
 
 zpaqd.exe     6.27   Development tool, 32 bit Windows command line executable.
 zpaqd64.exe   6.27   For 64 bit Windows.
@@ -19,7 +19,7 @@ All versions of this software can be found at
 http://mattmahoney.net/dc/zpaq.html
 Please report bugs to Matt Mahoney at mattmahoneyfl@gmail.com
 
-zpaq is (C) 2012, Dell Inc., written by Matt Mahoney.
+zpaq is (C) 2011-2013, Dell Inc., written by Matt Mahoney.
 Licensed under GPL v3. http://www.gnu.org/copyleft/gpl.html
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees. It supports 10 multi-threaded compression
@@ -54,14 +54,18 @@ source license (see source code). It is mirrored from
 http://code.google.com/p/libdivsufsort/ for your convenience.
 It is needed to compile zpaq.
 
-zpaq.exe and zpaqd.exe were compiled with MinGW g++ 4.7.0 and compressed
+zpaq.exe and zpaqd.exe were compiled with MinGW g++ 4.8.0 and compressed
 with upx 3.08w as follows:
 
-  g++ -O3 -msse2 -s -static -Wall zpaq.cpp libzpaq.cpp divsufsort.c -DNDEBUG -o zpaq
-  g++ -O3 -msse2 -s -static -Wall zpaqd.cpp libzpaq.cpp -o zpaqd
+  g++ -O3 -s -m64 -c libzpaq.cpp
+  g++ -O3 -s -m64 -static zpaq.cpp libzpaq.o divsufsort.c -DNDEBUG -o zpaq64
+  g++ -O3 -s -m64 -static zpaqd.cpp libzpaq.o -o zpaqd64
+  g++ -O3 -s -msse2 -c libzpaq.cpp
+  g++ -O3 -s -msse2 -static zpaq.cpp libzpaq.o divsufsort.c -DNDEBUG -o zpaq
   upx zpaq.exe zpaqd.exe
 
-To compile the 64 bit versions, use -m64 instead of -msse2  (upx will not work)
 To compile zpaq for Linux, include the options: -Dunix -fopenmp
 To compile zpaqd for Linux, use -Dunix
 To compile either program for non-x86, use -DNOJIT
+-DNDEBUG turns off run time checks in divsufsort. They are off by default
+in zpaq, zpaqd, and libzpaq. To turn them on use -DDEBUG
