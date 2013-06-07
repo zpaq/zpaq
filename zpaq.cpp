@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.29 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.30 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -168,6 +168,45 @@ is equivalent to -until.
 Add files even if the dates match. If a file really is identical,
 then it will not be added. When extracting, output files will be
 overwritten.
+
+  -attributes N1 N2
+
+Add only files whose attribute bits are clear for each bit clear in N1
+and set for each bit set in N2. N1 and N2 may be decimal, hex (with
+leading x) or octal (with leading o). The default in Windows
+is "-attributes xfffeffff 0" which selects all files except those
+for which bit 16 (FILE_ATTRIBUTE_VIRTUAL) is set. The default in
+Linux is "-attributes xffffffff 0" which selects all files.
+For example, -attributes -16 0 excludes directories and -attributes -1 16
+adds only directories. The useful bits in Windows are (see)
+http://msdn.microsoft.com/en-us/library/windows/desktop/gg258117(v=vs.85).aspx
+
+    1      x1     = read only
+    2      x2     = hidden
+    4      x4     = system
+    8      x8     = not used (normally 0)
+    16     x10    = directory
+    32     x20    = archive (usually set)
+    64     x40    = device
+    128    x80    = normal file (if no other bits are set)
+    256    x100   = temporary
+    512    x200   = sparse file
+    1024   x400   = reparse point
+    2048   x800   = compressed
+    4096   x1000  = offline
+    8192   x2000  = not content indexed
+    16384  x4000  = encrypted
+    32768  x8000  = integrity (Windows 8)
+    65536  x10000 = virtual (reserved)
+    131072 x20000 = no scrub data (Windows 8)
+
+For Linux, attributes (see man chmod), set permissions as follows:
+
+    o10000            = directory
+    o4000 o2000 o1000 = set user ID, set group ID, sticky
+    o400  o200  o100  = user read, write, execute permission
+    o40   o20   o10   = group read, write, execute permission
+    o4    o2    o1    = other read, write, execute permission
 
   -all
 
@@ -753,6 +792,11 @@ string attrToString(int64_t attrib) {
       r="0x    ";
       for (int i=0; i<4; ++i)
         r[5-i]="0123456789abcdef"[attrib>>(4*i)&15];
+      if (attrib>0x10000) {
+        r="0x        ";
+        for (int i=0; i<8; ++i)
+          r[9-i]="0123456789abcdef"[attrib>>(4*i)&15];
+      }
     }
     else {
       r="......";
@@ -1412,13 +1456,14 @@ string ltob(int64_t x) {
   return s;
 }
 
-// Convert decimal or hex string to int
+// Convert decimal, octal (leading o) or hex (leading x) string to int
 int ntoi(const char* s) {
   int n=0, base=10, sign=1;
   for (; *s; ++s) {
     int c=*s;
     if (isupper(c)) c=tolower(c);
     if (!n && c=='x') base=16;
+    else if (!n && c=='o') base=8;
     else if (!n && c=='-') sign=-1;
     else if (c>='0' && c<='9') n=n*base+c-'0';
     else if (base==16 && c>='a' && c<='f') n=n*base+c-'a'+10;
@@ -1517,6 +1562,7 @@ private:
   int threads;              // default is number of cores
   int since;                // First version to -list
   int summary;              // Arg to -summary
+  unsigned attr_on, attr_off;  // -attribute args
   string method;            // 0..9, default "1"
   bool force;               // -force option
   bool all;                 // -all option
@@ -1547,7 +1593,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.29 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.30 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -1568,6 +1614,7 @@ void Jidac::usage() {
   "  -quiet               Display only errors and warnings\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...9        Compress faster...better (default: 1)\n"
+  "  -attr xfffeffff 0    Select attribute bits set in arg1 and not arg2\n"
   "list options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
@@ -1611,7 +1658,7 @@ string Jidac::unrename(const string& name) {
 string expandOption(const char* opt) {
   const char* opts[]={"list","add","extract","delete","test",
     "method","force","quiet", "summary","since","above","compare",
-    "to","not","version","until","threads","all",0};
+    "to","not","version","until","threads","all","attributes",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -1640,6 +1687,12 @@ int Jidac::doCommand(int argc, const char** argv) {
   above=-1;
   summary=0;
   version=9999999999999LL;
+#ifdef unix
+  attr_on=0xffffffff;
+#else
+  attr_on=0xfffeffff;  // de-select FILE_ATTRIBUTE_VIRTUAL (reserved)
+#endif
+  attr_off=0;
   threads=0; // 0 = auto-detect
   method="1";  // 0..9
   ht.resize(1);  // element 0 not used
@@ -1680,6 +1733,10 @@ int Jidac::doCommand(int argc, const char** argv) {
       while (++i<argc && argv[i][0]!='-')
         notfiles.push_back(argv[i]);
       --i;
+    }
+    else if (opt=="-attributes" && i<argc-2) {
+      attr_on=ntoi(argv[++i]);
+      attr_off=ntoi(argv[++i]);
     }
     else if ((opt=="-version" || opt=="-until") && i<argc-1) {
       version=int64_t(atof(argv[++i]));
@@ -2198,13 +2255,17 @@ void Jidac::scandir(const char* filename) {
 }
 
 // Add external file and its date, size, and attributes to dt
+// if eattr satisfies -attribute args.
 void Jidac::addfile(const char* filename, int64_t edate,
                     int64_t esize, int64_t eattr) {
-  DT& d=dt[unrename(filename)];
-  d.edate=edate;
-  d.esize=esize;
-  d.eattr=eattr;
-  d.written=0;
+  unsigned attr=eattr>>8;
+  if ((attr&attr_on)==attr && (attr&attr_off)==attr_off) {
+    DT& d=dt[unrename(filename)];
+    d.edate=edate;
+    d.esize=esize;
+    d.eattr=eattr;
+    d.written=0;
+  }
 }
 
 /////////////////////////////// add ///////////////////////////////////
@@ -4049,8 +4110,9 @@ ThreadReturn decompressThread(void* arg) {
             assert(job.lastdt!=job.jd.dt.end());
             assert(job.lastdt->second.dtv.size()>0);
             assert(job.lastdt->second.dtv.back().date);
-            job.outf.close(job.lastdt->second.dtv.back().date,
-                           job.lastdt->second.dtv.back().attr);
+            assert(job.lastdt->second.written
+                   <size(job.lastdt->second.dtv.back().ptr));
+            job.outf.close();
           }
           job.lastdt=job.jd.dt.end();
         }
