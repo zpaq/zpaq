@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.28 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.29 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -117,20 +117,20 @@ a string of characters like "DASHRI" in Windows (directory, archive,
 system, hidden, read-only, indexed), or an octal number like "100644"
 (as passed to chmod(), meaning rw-r--r--) in Linux.
 
-  t or -test
-
-Test archive integrity by decompressing all data blocks and reporting
-any errors such as checksum mismatches. After checking the index and
-summarizing its contents, it decompresses the data blocks in separate
-threads and verifies checksums. Then it lists damaged files and returns
-a status of 1 if there are any, or else 0. If any filename or diretory
-arguments are given, then only those files are tested.
-
   d or -delete
 
 Mark files and directories in the archive as deleted. This actually
 makes the archive slightly larger. The files can still be extracted
 by rolling back to an earlier version using -until.
+
+  t or -test
+
+Print statistics about the archive and list any possibly corrupted
+files that match the command line arguments (default: all files in
+the current version). Return an exit status of 0 if no errors are
+detected, or 1 if the archive is corrupted in any way that would
+prevent any files (selected or not) in any version from being
+extracted properly.
 
   -not
 
@@ -149,7 +149,7 @@ replace them with the arguments of -to in order. For example,
 renaming, where a, b, c, d, e can be files or directory trees.
 With add, -to renames the external files. For example,
 "zpaq a arc a b c -to d e" compresses the files (or directories)
-d, e, and c, but saving the names as a, b, c respectively.
+d, e, c, saving the names as a, b, c respectively.
 
   -until N
   -until YYYYMMDD[HH[MM[SS]]]
@@ -188,18 +188,20 @@ or the limit according to -method, whichever is less. The number of cores
 is detected from the environment variable %NUMBER_OF_PROCESSORS% in
 Windows or /proc/cpuinfo in Linux.
 
-  -method M[n|e][C[N1][,N2]...]...
+  -method M[n|e][N1[,N2]...][[c|i|a|m|s|t|w][N1][,N2]...]...
+  -method config.cfg
 
 Select compression method, where M is a digit, possibly followed by
-a list of arguments. Each argument consists of a single letter C
+a list of arguments. Each argument consists of a single letter
 followed by a list of 0 or more non-negative integers separated by
-commas or periods with no spaces. The default is "1". The meanings are
-as follows:
+commas or periods with no spaces. The first letter must be n or e,
+and subsequent letters must c, i, a, m, s, t, or w, for example,
+"4ec0i1,1,2m" The default method is "1". The meanings are as follows:
 
   M
 
-M ranges from 0 to 9. Higher numbers compress better but are slower
-and require more memory. M selects the base algorithm and block size
+M ranges from 0 to 9. By itself, higher numbers compress better but are
+slower and require more memory. M selects the base algorithm and block size
 as follows:
 
   0 = No compression.
@@ -224,7 +226,38 @@ The E8E9 preprocessor replaces input sequences of the form
 start of the block to the 3 middle bytes (LSB first), mod 2^24. This
 improves compression of x86 code (.exe and .dll files).
 
-Additional options apply to M=3..9 only.
+Any numeric arguments to n or e apply only to M = 1..2 to control LZ77
+parameters as follows:
+
+N1 is the minimum match length, default 4. Shorter matches are coded as
+literals. It is possible that some longer matches are also coded as literals
+if the offset is long or the previous symbol was a literal. The allowed
+range for method 2 is 1..255.
+
+N2 is the secondary match length for longer contexts. Contexts
+of length N2 are searched first, and if no match is found, then contexts
+of length N1 are searched. If N2 is 0, then only contexts of length N1
+are searched. The default is 0.
+
+N3 is the log of the hash chain length. This means to search 2^N3
+contexts and pick the longest one to code as a match. Allowed range
+depends on available memory, which must be at least 4*(2^N3) bytes.
+Large values can result in very slow compression. The default is 3.
+
+N4 is the log of the hash table index size which maps contexts to
+previous occurrences to be searched. The default is 24, which uses
+64 MB memory. Allowed range depends on available memory. Each entry
+takes 4 bytes.
+
+N5 is the log of the minimum offset needed to increment the minimum
+match length (N1) by 1 after a literal. Default is 16. Allowed
+range is 0..24.
+
+N6 is the log of the minimum offset needed to increment the minimum
+match length (N1) by 1 after another match. Default is 18. Allowed
+range is 0..24.
+
+Additional options apply to M=1..9 only.
 
   c - Context model (CM or ICM).
   i - ISSE chain.
@@ -245,12 +278,15 @@ Higher values are better for stationary sources. Default is 0.
 
 N2 in 1..255 includes (offset mod N2) in the context hash. N2 in 1000..1255
 includes the distance to the last occurrence of N2-1000 in the context
-hash. The default is 0 which includes neither of these contexts.
+hash. The default is 0 which includes none of these contexts.
 
 N3,... in 0..255 specifies a list of byte context masks reading back from
 the most recently coded byte. Each mask is ANDed with the context byte
 before hashing. a value of 1000 or more is equivalent to a sequence
 of N-1000 zeros. Only the last 65536 bytes of context are saved.
+For method M = 2 only, N3,... in 256..511 specifies either the LZ77 parse
+state if a match/literal code or match offset byte is expected,
+or else a literal byte ANDed with the low 8 bits as with 0..255.
 
   i
 
@@ -292,8 +328,6 @@ Word-model ICM-ISSE chain for modeling text. N1 is the length of the
 chain, with word-level context orders of 0..N1-1. A word is defined
 as a sequence of characters in the range N2..N2+N3-1 after ANDing
 with N4. The default is 1,65,26,223, representing the set [A-Za-z].
-
-  -method config.cfg
 
 If the argument to -method does not start with a digit, then use the
 ZPAQL model in the file config.cfg. ZPAQL is described in libzpaq.h.
@@ -675,6 +709,7 @@ void printUTF8(const char* s, FILE* f=stdout) {
   const HANDLE h=(HANDLE)_get_osfhandle(_fileno(f));
   DWORD ft=GetFileType(h);
   if (ft==FILE_TYPE_CHAR) {
+    fflush(f);
     std::wstring w=utow(s);  // Windows console: convert to UTF-16
     DWORD n=0;
     WriteConsole(h, w.c_str(), w.size(), &n, 0);
@@ -1501,7 +1536,7 @@ private:
   // Support functions
   string rename(const string& name);    // replace files prefix with tofiles
   string unrename(const string& name);  // undo rename
-  int64_t read_archive();               // read index block chain
+  int64_t read_archive(int *errors=0);  // read index block chain
   void read_args(bool scan, bool mark_all=false);  // read args, scan dirs
   void scandir(const char* filename);   // scan dirs and add args to dt
   void addfile(const char* filename, int64_t edate, int64_t esize,
@@ -1512,8 +1547,11 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.28 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.29 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
+#ifndef NDEBUG
+  "DEBUG version\n"
+#endif
   "\n"
   "Usage: command archive.zpaq [file|dir]... -options...\n"
   "Commands:\n"
@@ -1695,7 +1733,9 @@ int Jidac::doCommand(int argc, const char** argv) {
 }
 
 // Read archive up to -date into ht, dt, ver. Return place to append.
-int64_t Jidac::read_archive() {
+// If errors is not NULL then set it to number of errors found.
+int64_t Jidac::read_archive(int *errors) {
+  if (errors) *errors=0;
 
   // Open archive or archive.zpaq
   InputFile in;
@@ -1815,7 +1855,7 @@ int64_t Jidac::read_archive() {
           // from input and jump over it.
           if (filename.s[17]=='c' && fdate>=19000000000000LL
               && fdate<30000000000000LL && pass!=RECOVER) {
-            data_offset=in.tell();
+            data_offset=in.tell()+1;
             bool isbreak=version<19000000000000LL ? size(ver)>version :
                          version<fdate;
             int64_t jmp=0;
@@ -1832,6 +1872,7 @@ int64_t Jidac::read_archive() {
             if (os.size()!=8) {
               fprintf(stderr, "Bad JIDAC header size: %d\n", size(os));
               isbreak=true;
+              if (*errors) ++*errors;
             }
             if (isbreak) {
               in.close();
@@ -1864,6 +1905,7 @@ int64_t Jidac::read_archive() {
               while (ht.size()<=num+i) ht.push_back(HT());
               memcpy(ht[num+i].sha1, s, 20);
               s+=20;
+              if (ht[num+i].csize!=HT_BAD) error("duplicate fragment ID");
               ht[num+i].usize=btoi(s);
               ht[num+i].csize=i?-int(i):data_offset;
             }
@@ -1916,9 +1958,10 @@ int64_t Jidac::read_archive() {
                    && num<ht.size()) {
             if (os.size()>=8 && ht[num].csize==HT_BAD) {
               const char* p=os.c_str()+os.size()-8;
-              unsigned n=btoi(p);  // first fragment == num
+              unsigned n=btoi(p);  // first fragment == num or 0
+              if (n==0) n=num;
               unsigned f=btoi(p);  // number of fragments
-              if (n==num && f*4+8<=os.size()) {
+              if (n==num && f && f*4+8<=os.size()) {
                 if (!quiet)
                   printf("Recovering fragments %d-%d at %1.0f\n",
                          n, n+f-1, double(block_offset));
@@ -1962,14 +2005,15 @@ int64_t Jidac::read_archive() {
           else if (pass!=RECOVER) {
             fprintf(stderr, "Bad JIDAC block ignored: %s %s\n",
                     filename.s.c_str(), comment.s.c_str());
+            if (errors) ++*errors;
           }
         }
 
         // Streaming format
         else if (pass!=RECOVER) {
 
-          // Each block is a new version
-          if (segs==0) {
+          // If previous version is dated or does not exist, start a new one
+          if (segs==0 && (size(ver)==1 || ver.back().date!=0)) {
             if (size(ver)>version) {
               in.close();
               return block_offset;
@@ -2007,10 +2051,11 @@ int64_t Jidac::read_archive() {
       block_offset=in.tell();
       fprintf(stderr, "Skipping block at %1.0f: %s\n", double(block_offset),
               e.what());
+      if (errors) ++*errors;
     }
   }
+  if (in.tell()>0 && !found_data) error("archive contains no data");
   in.close();
-  if (!found_data) error("archive contains no data");
 
   // Recompute file sizes in recover mode
   if (pass==RECOVER) {
@@ -2219,12 +2264,12 @@ BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8):
 // a 0. e.g. abc is written 1,b,1,c,0. Codes are packed LSB first and
 // padded with leading 0 bits in the last byte.
 //
-// Level 2 is byte oriented LZ77 as in the lzpre compressor.
-// Lengths and offsets are MSB first:
+// Level 2 is byte oriented LZ77 with minimum match length m = $4 = args[3]
+// with m in 1..64. Lengths and offsets are MSB first:
 // 00xxxxxx                            x+1 (1..64) literals follow
-// 01xxxyyy yyyyyyyy                   copy x+5 (5..12), offset y+1 (1..2048)
-// 10xxxxxx yyyyyyyy yyyyyyyy          copy x+1 (1..64), offset y+1 (1..65536)
-// 11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+1 (1..64), offset y+1 (1..2^24)
+// 01xxxyyy yyyyyyyy                   copy x+m (m..m+7)  offset y+1 (1..2048)
+// 10xxxxxx yyyyyyyy yyyyyyyy          copy x+m (m..m+63) offset y+1 (1..2^16)
+// 11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+m (m..m+63) offset y+1 (1..2^24)
 
 // return 0..32 bits in x not counting leading 0 bits = floor(log2(x))+1
 int lg(unsigned x) {
@@ -2244,12 +2289,12 @@ class LZBuffer: public libzpaq::Reader {
   const unsigned char* in;    // input
   const unsigned n;           // input length
   StringBuffer buf;           // compressed output
-  int level;                  // method (1 or 2)
+  int minMatch;               // minimum match length
   void write_literal1(unsigned i, unsigned& lit);  // level 1
   void write_match1(unsigned len, unsigned off);
   void write_literal2(unsigned i, unsigned& lit);  // level 2
-  void write_match2(unsigned len, unsigned off);
-  unsigned bits;              // pending output bits
+  void write_match2(int len, unsigned off);
+  unsigned bits;              // pending output bits (level 1)
   unsigned nbits;             // number of bits in bits
   void putb(unsigned x, int k) {  // write k bits of x
     x&=(1<<k)-1;
@@ -2262,8 +2307,9 @@ class LZBuffer: public libzpaq::Reader {
     bits=nbits=0;
   }
 public:
-  LZBuffer(StringBuffer& inbuf, int level, bool doE8); // input to compress
+  LZBuffer(StringBuffer& inbuf, int args[]); // input to compress
   int get() {return buf.get();}   // return 1 byte of compressed output
+  int read(char* b, int n_) {return buf.read(b, n_);}
   size_t size() const {return buf.size();}  
 };
 
@@ -2319,24 +2365,27 @@ void LZBuffer::write_literal2(unsigned i, unsigned& lit) {
   }
 }
 
-// Write match sequence of given length and offset (off in 1..2^24)
-void LZBuffer::write_match2(unsigned len, unsigned off) {
-  assert(off>0);
+// Write match sequence of given length and offset
+void LZBuffer::write_match2(int len, unsigned off) {
+  assert(minMatch>=1 && minMatch<=64);
+  assert(len>=minMatch && len<=(1<<24));
+  assert(off>0 && off<=(1<<24));
   --off;
-  while (len>0) {
-    int len1=len;
-    if (len1>64) len1=64;
-    if (off<2048 && len1>=3+level && len1<=10+level) {
-      buf.put(64+(len1-3-level)*8+(off>>8));
+  while (len>0) {  // Split long matches to len1=minMatch..minMatch+63
+    const int len1=len>minMatch*2+63 ? minMatch+63 :
+        len>minMatch+63 ? len-minMatch : len;
+    assert(len1>=minMatch && len1<minMatch+64);
+    if (off<2048 && len1<minMatch+8) {
+      buf.put(64+(len1-minMatch)*8+(off>>8));
       buf.put(off);
     }
     else if (off<65536) {
-      buf.put(128+len1-1);
+      buf.put(128+len1-minMatch);
       buf.put(off>>8);
       buf.put(off);
     }
     else {
-      buf.put(192+len1-1);
+      buf.put(192+len1-minMatch);
       buf.put(off>>16);
       buf.put(off>>8);
       buf.put(off);
@@ -2345,29 +2394,45 @@ void LZBuffer::write_match2(unsigned len, unsigned off) {
   }
 }
 
-// Encode inbuf to buf using LZ77 level 1 or 2.
-// If doE8 is true then do E8E9 transform on inbuf first.
-LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
-    in(inbuf.data()), n(inbuf.size()),
-    buf(inbuf.size()*9/8), level(level_), bits(0), nbits(0) {
-  assert(level==1 || level==2);
+// Encode inbuf to buf using LZ77. args are as follows:
+// args[0] in 0..24 is log2 buffer size.
+// args[1] in 1..2 is the level: 1=variable length codes, 2=byte aligned.
+// args[2] is 'e' if E8E9 preprocess is to be done.
+// args[3] is the minimum match length and context order.
+// args[4] is the higher context order to search first, or else 0.
+// args[5] is the log2 hash bucket size (number of searches).
+// args[6] is the log2 hash table size.
+// args[7] is the log2 min offset to increment min match after a literal.
+// args[8] is the log2 min offset to increment min match after a match.
 
-  // Tunable LZ77 parameters for levels 1 and 2
-  const int HASHES[3]={0,1,2};  // level -> number of hashes computed per byte
-  const unsigned HASHORDER[3][2]={{0},{4},{10,5}};  // context orders
-  const unsigned HASHMUL[3][2]={{0},{96},{44,48}};  // hash multipliers
-  const unsigned BUCKETBITS[3]={0,3,2};             // log bucket size
-  const int bb=BUCKETBITS[level];
-  const int bucket=1<<bb;
+LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
+    in(inbuf.data()), n(inbuf.size()),
+    buf(inbuf.size()*9/8), bits(0), nbits(0) {
+  assert(args[0]>=0 && args[0]<=24);
+  assert(args[1]==1 || args[1]==2);
+  assert(n<=(1<<24));
+  minMatch=args[3];
 
   // Allocate hashtable ht
-  // ht[h] low 24 bits points to in[i..i+HASHORDER-1], high 8 bits is in[i]
-  libzpaq::Array<unsigned> ht(1<<22);
-  int h[2]={0};  // context hashes of in[i..]
+  // ht[] low 24 bits points to in[i..i+order-1], high 8 bits is in[i]
+  const unsigned htsize=args[6]>args[5] ? 1<<args[6] : 1<<args[5];
+  libzpaq::Array<unsigned> ht(htsize);  // at least 1 bucket
+  unsigned h1=0, h2=0;  // low, high order context hashes of in[i..]
 
   // e8e9 transform
-  if (doE8)
+  if (args[2]=='e')
     e8e9(inbuf.data(), n);
+
+  const int level=args[1];
+  assert(level==1 || level==2);
+  const int minMatch2=args[4];
+  if (level==1 && minMatch<4) minMatch=4;
+  const unsigned bucket=1<<args[5];
+  const unsigned shift1=minMatch>0 ? (args[6]-1)/minMatch+1 : 1;
+  const unsigned shift2=minMatch2>0 ? (args[6]-1)/minMatch2+1 : 0;
+  const int maxMatch=minMatch>minMatch2 ? minMatch : minMatch2;
+  const unsigned inclit=1<<args[7];
+  const unsigned incmatch=1<<args[8];
 
   // Scan the input
   unsigned lit=0;  // number of output literals pending
@@ -2375,37 +2440,54 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
 
     // Search for longest match, or pick closest in case of tie
     // Try the longest context orders first. If a match is found, then
-    // skip the lower orders as a speed optimization.
-    unsigned blen=0, bp=0, len=0;
-    for (int j=0; j<HASHES[level]; ++j) {
-      for (int k=0; k<bucket; ++k) {
-        unsigned p=ht[h[j]+k];
-        if ((p>>24)==in[i]) {  // compare in ht first
-          p=(p&0xffffff)+(i&0xff000000);
-          if (p>i) p-=0x1000000;
-          if (p<i && p+(1<<24)>i) {
+    // skip the lower order as a speed optimization.
+    int blen=0;  // best match length
+    unsigned bp=0;  // pointer to best match
+    if (level==1 || minMatch<=64) {
+      if (minMatch2>0) {
+        for (unsigned k=0; k<bucket; ++k) {
+          unsigned p=ht[h2^k];
+          if (p && (p>>24)==in[i]) {  // compare in ht first
+            p&=0xffffff;
+            assert(i>p);
+            int len;
             for (len=0; i+len<n && in[p+len]==in[i+len]; ++len);
             if (len>blen || (len==blen && p>bp)) blen=len, bp=p;
           }
+          if (blen>=128) break;
         }
-        if (blen>=128) break;
       }
-      if (blen>=HASHORDER[level][j]) break;
+
+      // Search the lower order context
+      if (!minMatch2 || blen<minMatch2) {
+        for (unsigned k=0; k<bucket; ++k) {
+          unsigned p=ht[h1^k];
+          if (p && (p>>24)==in[i]) {
+            p&=0xffffff;
+            assert(i>p);
+            int len;
+            for (len=0; i+len<n && in[p+len]==in[i+len]; ++len);
+            if (len>blen || (len==blen && p>bp)) blen=len, bp=p;
+          }
+          if (blen>=128) break;
+        }
+      }
     }
 
     // If match is long enough, then output any pending literals first,
     // and then the match. blen is the length of the match.
     assert(i>=bp);
     const unsigned off=i-bp;  // offset
-    if (level==2 && off>0 && off<(1<<24)
-        && blen>=5u+(off>=2048)+(off>=65536)) {
-      write_literal2(i, lit);
-      write_match2(blen, off);
-    }
-    else if (level==1 && off>0 && off<(1<<24) 
-             && blen>=4u+(lit!=0 && off>=65536)) {
-      write_literal1(i, lit);
-      write_match1(blen, off);
+    assert(off<=(1<<24));
+    if (off>0 && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
+      if (level==1) {
+        write_literal1(i, lit);
+        write_match1(blen, off);
+      }
+      else {
+        write_literal2(i, lit);
+        write_match2(blen, off);
+      }
     }
 
     // Otherwise add to literal length
@@ -2416,18 +2498,16 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
 
     // Update index, advance blen bytes
     while (blen--) {
-      for (int j=0; j<HASHES[level]; ++j)
-        ht[h[j]+(i&(bucket-1))]=(i&0xffffff)|(in[i]<<24);
-      ++i;
-      for (int j=0; j<HASHES[level]; ++j) {
-        if (i+HASHORDER[level][j]<=n) {
-          h[j]>>=bb;
-          h[j]*=HASHMUL[level][j];
-          h[j]+=in[i+HASHORDER[level][j]-1]+1;
-          h[j]<<=bb;
-          h[j]&=ht.size()-1;
+      if (i+maxMatch<n) {
+        const unsigned j=i+(in[i]<<24);
+        if (minMatch2) {
+          ht[h2^(i&(bucket-1))]=j;
+          h2=(((h2*5)<<shift2)+(in[i+minMatch2]+1)*23456789)&(htsize-1);
         }
+        ht[h1^(i&(bucket-1))]=j;
+        h1=(((h1*3)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
       }
+      ++i;
     }
   }
 
@@ -2438,9 +2518,10 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int level_, bool doE8):
 }
 
 // Generate a config file from the method argument with syntax:
-// [0..9][e|n][{ciamtsw}[N1[,N2]]...]...
+// [0..9][e|n][N1[,N2]...][{ciamtsw}[N1[,N2]]...]...
+// Write the initial digit, e|n, N1..N6 into args[1..8].
 // Or read from config.cfg file is first char is not a digit.
-string makeConfig(const char* method) {
+string makeConfig(const char* method, int args[]) {
   assert(method);
 
   // Read from config file
@@ -2460,556 +2541,572 @@ string makeConfig(const char* method) {
     return cfg;
   }
 
-  // Generate the base algorithm. 0 = no compression
+  // Generate the postprocessor
+  string hdr;
+  string pcomp;
   assert(isdigit(*method));
-  if (*method=='0')
-    return "comp 0 0 0 0 0 hcomp end\n";
+  const bool doe8=method[1]=='e';
 
-  // 1e or 1n: LZ77, no modeling, with or without E8E9
-  if (*method=='1') {
-    string cfg=
-    "(method 1 - lazy2 = e8e9 + LZ77) "
-    "comp 0 0 0 $1 0 (for files up to 2^$1 = 2^24 bytes) "
-    "hcomp "
-    "pcomp lazy2 3 ; (can be 1..5 for fastest..best compression) "
-    " (r1 = state "
-    "  r2 = len - match or literal length "
-    "  r3 = m - number of offset bits expected "
-    "  r4 = ptr to buf "
-    "  c = bits - input buffer "
-    "  d = n - number of bits in c) "
-    " "
-    "  a> 255 if ";
-    if (method[1]=='e')
-      cfg+=
-      "    b=0 d=r 4 do (for b=0..d-1, d = end of buf) "
-      "      a=b a==d ifnot "
-      "        a+= 4 a<d if "
-      "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-      "              b-- a=*b "
-      "              b-- a<<= 8 a+=*b "
-      "              b-- a<<= 8 a+=*b "
-      "              a-=b a++ "
-      "              *b=a a>>= 8 b++ "
-      "              *b=a a>>= 8 b++ "
-      "              *b=a b++ "
-      "            endif "
-      "            b=c "
-      "          endif "
-      "        endif "
-      "        a=*b out b++ "
-      "      forever "
-      "    endif "
-      " ";
-    cfg+=
-    "    (reset state) "
-    "    a=0 b=0 c=0 d=0 r=a 1 r=a 2 r=a 3 r=a 4 "
-    "    halt "
-    "  endif "
-    " "
-    "  a<<=d a+=c c=a               (bits+=a<<n) "
-    "  a= 8 a+=d d=a                (n+=8) "
-    " "
-    "  (if state==0 (expect new code)) "
-    "  a=r 1 a== 0 if (match code jj,kkk) "
-    "    a= 1 r=a 2                 (len=1) "
-    "    a=c a&= 3 a> 0 if          (if (bits&3)) "
-    "      a-- a<<= 3 r=a 3           (m=((bits&3)-1)*8) "
-    "      a=c a>>= 2 c=a             (bits>>=2) "
-    "      b=r 3 a&= 7 a+=b r=a 3     (m+=bits&7) "
-    "      a=c a>>= 3 c=a             (bits>>=3) "
-    "      a=d a-= 5 d=a              (n-=5) "
-    "      a= 1 r=a 1                 (state=1) "
-    "    else (literal, discard 00) "
-    "      a=c a>>= 2 c=a             (bits>>=2) "
-    "      d-- d--                    (n-=2) "
-    "      a= 3 r=a 1                 (state=3) "
-    "    endif "
-    "  endif "
-    " "
-    "  (while state==1 && n>=3 (expect match length u,nn)) "
-    "  do a=r 1 a== 1 if a=d a> 2 if "
-    "    a=c a&= 1 a== 1 if         (if bits&1) "
-    "      a=c a>>= 1 c=a             (bits>>=1) "
-    "      b=r 2 a=c a&= 1 a+=b a+=b r=a 2 (len+=len+(bits&1)) "
-    "      a=c a>>= 1 c=a             (bits>>=1) "
-    "      d-- d--                    (n-=2) "
-    "    else "
-    "      a=c a>>= 1 c=a             (bits>>=1) "
-    "      a=r 2 a<<= 2 b=a           (len<<=2) "
-    "      a=c a&= 3 a+=b r=a 2       (len+=bits&3) "
-    "      a=c a>>= 2 c=a             (bits>>=2) "
-    "      d-- d-- d--                (n-=3) "
-    "      a= 2 r=a 1                 (state=2) "
-    "    endif "
-    "  forever endif endif "
-    " "
-    "  (if state==2 && n>=m) (expect m offset bits) "
-    "  a=r 1 a== 2 if a=r 3 a>d ifnot "
-    "    a=c r=a 6 a=d r=a 7          (save c=bits, d=n in r6,r7) "
-    "    b=r 3 a= 1 a<<=b d=a         (d=1<<m) "
-    "    a-- a&=c a+=d d=a            (d=offset=bits&((1<<m)-1)|(1<<m)) "
-    "    b=r 4 a=b a-=d c=a           (c=p=(b=ptr)-offset) "
-    "     "
-    "    (while len-- (copy and output match)) "
-    "    d=r 2 do a=d a> 0 if d-- "
-    "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++]) ";
-    if (method[1]!='e') cfg+=" out ";
-    cfg+=
-    "    forever endif "
-    "    a=b r=a 4 "
-    " "
-    "    a=r 6 b=r 3 a>>=b c=a        (bits>>=m) "
-    "    a=r 7 a-=b d=a               (n-=m) "
-    "    a=0 r=a 1                    (state=0) "
-    "  endif endif "
-    " "
-    "  (while state==3 && n>=2 (expect literal length)) "
-    "  do a=r 1 a== 3 if a=d a> 1 if "
-    "    a=c a&= 1 a== 1 if         (if bits&1) "
-    "      a=c a>>= 1 c=a              (bits>>=1) "
-    "      b=r 2 a&= 1 a+=b a+=b r=a 2 (len+=len+(bits&1)) "
-    "      a=c a>>= 1 c=a              (bits>>=1) "
-    "      d-- d--                     (n-=2) "
-    "    else "
-    "      a=c a>>= 1 c=a              (bits>>=1) "
-    "      d--                         (--n) "
-    "      a= 4 r=a 1                  (state=4) "
-    "    endif "
-    "  forever endif endif "
-    " "
-    "  (if state==4 && n>=8 (expect len literals)) "
-    "  a=r 1 a== 4 if a=d a> 7 if "
-    "    b=r 4 a=c *b=a ";
-    if (method[1]!='e') cfg+=" out ";
-    cfg+=
-    "    b++ a=b r=a 4                 (buf[ptr++]=bits) "
-    "    a=c a>>= 8 c=a                (bits>>=8) "
-    "    a=d a-= 8 d=a                 (n-=8) "
-    "    a=r 2 a-- r=a 2 a== 0 if      (if --len<1) "
-    "      a=0 r=a 1                     (state=0) "
-    "    endif "
-    "  endif endif "
-    "  halt "
-    "end ";
-    return cfg;
+  // 0: no compression
+  if (*method=='0') {
+    hdr="comp 0 0 0 0 ";
+    pcomp="end\n";
   }
 
-  // 2e or 2n: Byte aligned LZ77 with parse state as context.
-  if (*method=='2') {
-    string cfg=
-    "(method 2 - LZ77 + ICM) "
-    "comp 0 0 0 $1 1 "
-    "  0 icm 12 (sometimes \"0 cm 20 48\" will compress better) "
-    "hcomp "
-    "  (c=state: 0=init, 1=expect LZ77 literal or match code, "
-    "   2..4=expect n-1 offset bytes, "
-    "   5..68=expect n-4 literals) "
-    "  b=a (save input) "
-    "  a=c a== 1 if (expect code ccxxxxxx as input) "
-    "    (cc is number of offset bytes following) "
-    "    (00xxxxxx means x+1 literal bytes follow) "
-    "    a=b a>>= 6 a&= 3 a> 0 if "
-    "      a++ c=a (high 2 bits is code length) "
-    "      *d=0 a=b a>>= 3 hashd "
-    "    else "
-    "      a=b a&= 63 a+= 5 c=a (literal length) "
-    "      *d=0 a=b hashd "
-    "    endif "
-    "  else "
-    "    a== 5 if (end of literal) "
-    "      c= 1 *d=0 "
-    "    else "
-    "      a== 0 if (init) "
-    "        c= 124 *d=0 (5+length of postprocessor) "
-    "      else (literal or offset) "
-    "        c-- "
-    "        (model literals in order 1 context, offset order 0) "
-    "        a> 5 if *d=0 a=b hashd endif "
-    "      endif "
-    "    endif "
-    "  endif "
-    " "
-    "  (model parse state as context) "
-    "  a=c a> 5 if a= 5 endif hashd "
-    "  halt "
-    "pcomp lzpre c ; "
-    "  (Decode LZ77: d=state, M=output buffer, b=size) "
-    "  a> 255 if (at EOF decode e8e9 and output) ";
-    if (method[1]=='e')
-      cfg+=
-      "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-      "      a=b a==d ifnot "
-      "        a+= 4 a<d if "
-      "          a=*b a&= 254 a== 232 if (e8 or e9?) "
-      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff) "
-      "              b-- a=*b "
-      "              b-- a<<= 8 a+=*b "
-      "              b-- a<<= 8 a+=*b "
-      "              a-=b a++ "
-      "              *b=a a>>= 8 b++ "
-      "              *b=a a>>= 8 b++ "
-      "              *b=a b++ "
-      "            endif "
-      "            b=c "
-      "          endif "
-      "        endif "
-      "        a=*b out b++ "
-      "      forever "
-      "    endif ";
-    cfg+=
-    "    b=0 c=0 d=0 a=0 r=a 1 r=a 2 (reset state) "
-    "  halt "
-    "  endif "
-    " "
-    "  (in state d==0, expect a new code) "
-    "  c=a a=d a== 0 if "
-    "    a=c a>>= 6 a++ d=a "
-    "    a== 1 if (state?) "
-    "      a+=c r=a 1 a=0 r=a 2 (literal r1=len=c+1 r2=off=0) "
-    "    else "
-    "      a== 2 if a=c a&= 7 r=a 2 (short match: off=c&7) "
-    "        a=c a>>= 3 a-= 3 r=a 1 (len=(c>>3)-3) "
-    "      else (3 or 4 byte match) "
-    "        a=c a&= 63 a++ r=a 1 a=0 r=a 2 (off=0, len=(c&63)-1) "
-    "      endif "
-    "    endif "
-    "  else "
-    "    a== 1 if (writing literal) "
-    "      a=c *b=a b++ ";
-    if (method[1]!='e') cfg+=" out ";
-    cfg+=
-    "      a=r 1 a-- a== 0 if d=0 endif r=a 1 (if (--len==0) state=0) "
-    "    else "
-    "      a> 2 if (reading offset) "
-    "        a=r 2 a<<= 8 a|=c r=a 2 d-- (off=off<<8|c, --state) "
-    "      else (state==2, write match) "
-    "        a=r 2 a<<= 8 a|=c c=a a=b a-=c a-- c=a (c=i-off-1) "
-    "        d=r 1 (d=len) "
-    "        do (copy and output d=len bytes) "
-    "          a=*c *b=a c++ b++ ";
-    if (method[1]!='e') cfg+=" out ";
-    cfg+=
-    "        d-- a=d a> 0 while "
-    "        (d=state=0. off, len don\'t matter) "
-    "      endif "
-    "    endif "
-    "  endif "
-    "  halt "
-    "end ";
-    return cfg;
+  // 1e or 1n: LZ77+Huffman, with or without E8E9
+  else if (*method=='1') {
+    hdr="comp 9 16 0 $1 ";
+    pcomp=
+    "pcomp lazy2 3 ;\n"
+    " (r1 = state\n"
+    "  r2 = len - match or literal length\n"
+    "  r3 = m - number of offset bits expected\n"
+    "  r4 = ptr to buf\n"
+    "  c = bits - input buffer\n"
+    "  d = n - number of bits in c)\n"
+    "\n"
+    "  a> 255 if\n";
+    if (doe8)
+      pcomp+=
+      "    b=0 d=r 4 do (for b=0..d-1, d = end of buf)\n"
+      "      a=b a==d ifnot\n"
+      "        a+= 4 a<d if\n"
+      "          a=*b a&= 254 a== 232 if (e8 or e9?)\n"
+      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff)\n"
+      "              b-- a=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              a-=b a++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a b++\n"
+      "            endif\n"
+      "            b=c\n"
+      "          endif\n"
+      "        endif\n"
+      "        a=*b out b++\n"
+      "      forever\n"
+      "    endif\n"
+      "\n";
+    pcomp+=
+    "    (reset state)\n"
+    "    a=0 b=0 c=0 d=0 r=a 1 r=a 2 r=a 3 r=a 4\n"
+    "    halt\n"
+    "  endif\n"
+    "\n"
+    "  a<<=d a+=c c=a               (bits+=a<<n)\n"
+    "  a= 8 a+=d d=a                (n+=8)\n"
+    "\n"
+    "  (if state==0 (expect new code))\n"
+    "  a=r 1 a== 0 if (match code jj,kkk)\n"
+    "    a= 1 r=a 2                 (len=1)\n"
+    "    a=c a&= 3 a> 0 if          (if (bits&3))\n"
+    "      a-- a<<= 3 r=a 3           (m=((bits&3)-1)*8)\n"
+    "      a=c a>>= 2 c=a             (bits>>=2)\n"
+    "      b=r 3 a&= 7 a+=b r=a 3     (m+=bits&7)\n"
+    "      a=c a>>= 3 c=a             (bits>>=3)\n"
+    "      a=d a-= 5 d=a              (n-=5)\n"
+    "      a= 1 r=a 1                 (state=1)\n"
+    "    else (literal, discard 00)\n"
+    "      a=c a>>= 2 c=a             (bits>>=2)\n"
+    "      d-- d--                    (n-=2)\n"
+    "      a= 3 r=a 1                 (state=3)\n"
+    "    endif\n"
+    "  endif\n"
+    "\n"
+    "  (while state==1 && n>=3 (expect match length u,nn))\n"
+    "  do a=r 1 a== 1 if a=d a> 2 if\n"
+    "    a=c a&= 1 a== 1 if         (if bits&1)\n"
+    "      a=c a>>= 1 c=a             (bits>>=1)\n"
+    "      b=r 2 a=c a&= 1 a+=b a+=b r=a 2 (len+=len+(bits&1))\n"
+    "      a=c a>>= 1 c=a             (bits>>=1)\n"
+    "      d-- d--                    (n-=2)\n"
+    "    else\n"
+    "      a=c a>>= 1 c=a             (bits>>=1)\n"
+    "      a=r 2 a<<= 2 b=a           (len<<=2)\n"
+    "      a=c a&= 3 a+=b r=a 2       (len+=bits&3)\n"
+    "      a=c a>>= 2 c=a             (bits>>=2)\n"
+    "      d-- d-- d--                (n-=3)\n"
+    "      a= 2 r=a 1                 (state=2)\n"
+    "    endif\n"
+    "  forever endif endif\n"
+    "\n"
+    "  (if state==2 && n>=m) (expect m offset bits)\n"
+    "  a=r 1 a== 2 if a=r 3 a>d ifnot\n"
+    "    a=c r=a 6 a=d r=a 7          (save c=bits, d=n in r6,r7)\n"
+    "    b=r 3 a= 1 a<<=b d=a         (d=1<<m)\n"
+    "    a-- a&=c a+=d d=a            (d=offset=bits&((1<<m)-1)|(1<<m))\n"
+    "    b=r 4 a=b a-=d c=a           (c=p=(b=ptr)-offset)\n"
+    "     "
+    "    (while len-- (copy and output match))\n"
+    "    d=r 2 do a=d a> 0 if d--\n"
+    "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++])\n";
+    if (!doe8) pcomp+=" out\n";
+    pcomp+=
+    "    forever endif\n"
+    "    a=b r=a 4\n"
+    "\n"
+    "    a=r 6 b=r 3 a>>=b c=a        (bits>>=m)\n"
+    "    a=r 7 a-=b d=a               (n-=m)\n"
+    "    a=0 r=a 1                    (state=0)\n"
+    "  endif endif\n"
+    "\n"
+    "  (while state==3 && n>=2 (expect literal length))\n"
+    "  do a=r 1 a== 3 if a=d a> 1 if\n"
+    "    a=c a&= 1 a== 1 if         (if bits&1)\n"
+    "      a=c a>>= 1 c=a              (bits>>=1)\n"
+    "      b=r 2 a&= 1 a+=b a+=b r=a 2 (len+=len+(bits&1))\n"
+    "      a=c a>>= 1 c=a              (bits>>=1)\n"
+    "      d-- d--                     (n-=2)\n"
+    "    else\n"
+    "      a=c a>>= 1 c=a              (bits>>=1)\n"
+    "      d--                         (--n)\n"
+    "      a= 4 r=a 1                  (state=4)\n"
+    "    endif\n"
+    "  forever endif endif\n"
+    "\n"
+    "  (if state==4 && n>=8 (expect len literals))\n"
+    "  a=r 1 a== 4 if a=d a> 7 if\n"
+    "    b=r 4 a=c *b=a\n";
+    if (!doe8) pcomp+=" out\n";
+    pcomp+=
+    "    b++ a=b r=a 4                 (buf[ptr++]=bits)\n"
+    "    a=c a>>= 8 c=a                (bits>>=8)\n"
+    "    a=d a-= 8 d=a                 (n-=8)\n"
+    "    a=r 2 a-- r=a 2 a== 0 if      (if --len<1)\n"
+    "      a=0 r=a 1                     (state=0)\n"
+    "    endif\n"
+    "  endif endif\n"
+    "  halt\n"
+    "end\n";
+  }
+
+  // 2e or 2n: Byte aligned LZ77, with or without E8E9
+  else if (*method=='2') {
+    hdr="comp 9 16 0 $1 ";
+    pcomp=
+    "pcomp lzpre c ;\n"
+    "  (Decode LZ77: d=state, M=output buffer, b=size)\n"
+    "  a> 255 if (at EOF decode e8e9 and output)\n";
+    if (doe8)
+      pcomp+=
+      "    d=b b=0 do (for b=0..d-1, d = end of buf)\n"
+      "      a=b a==d ifnot\n"
+      "        a+= 4 a<d if\n"
+      "          a=*b a&= 254 a== 232 if (e8 or e9?)\n"
+      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if (00 or ff)\n"
+      "              b-- a=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              a-=b a++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a b++\n"
+      "            endif\n"
+      "            b=c\n"
+      "          endif\n"
+      "        endif\n"
+      "        a=*b out b++\n"
+      "      forever\n"
+      "    endif\n";
+    pcomp+=
+    "    b=0 c=0 d=0 a=0 r=a 1 r=a 2 (reset state)\n"
+    "  halt\n"
+    "  endif\n"
+    "\n"
+    "  (in state d==0, expect a new code)\n"
+    "  (put length in r1 and inital part of offset in r2)\n"
+    "  c=a a=d a== 0 if\n"
+    "    a=c a>>= 6 a++ d=a\n"
+    "    a== 1 if (literal?)\n"
+    "      a+=c r=a 1 a=0 r=a 2\n"
+    "    else\n"
+    "      a== 2 if a=c a&= 7 r=a 2 (short match)\n"
+    "        a=c a>>= 3 a-= 8 a+= $4 r=a 1\n"
+    "      else (3 or 4 byte match)\n"
+    "        a=c a&= 63 a+= $4 r=a 1 a=0 r=a 2\n"
+    "      endif\n"
+    "    endif\n"
+    "  else\n"
+    "    a== 1 if (writing literal)\n"
+    "      a=c *b=a b++\n";
+    if (!doe8) pcomp+=" out\n";
+    pcomp+=
+    "      a=r 1 a-- a== 0 if d=0 endif r=a 1 (if (--len==0) state=0)\n"
+    "    else\n"
+    "      a> 2 if (reading offset)\n"
+    "        a=r 2 a<<= 8 a|=c r=a 2 d-- (off=off<<8|c, --state)\n"
+    "      else (state==2, write match)\n"
+    "        a=r 2 a<<= 8 a|=c c=a a=b a-=c a-- c=a (c=i-off-1)\n"
+    "        d=r 1 (d=len)\n"
+    "        do (copy and output d=len bytes)\n"
+    "          a=*c *b=a c++ b++\n";
+    if (!doe8) pcomp+=" out\n";
+    pcomp+=
+    "        d-- a=d a> 0 while\n"
+    "        (d=state=0. off, len don\'t matter)\n"
+    "      endif\n"
+    "    endif\n"
+    "  endif\n"
+    "  halt\n"
+    "end\n";
   }
 
   // 3e or 3n: BWT with or without E8E9
-  if (*method>='3' && *method<='9') {
-    string pcomp;
-    string hdr;
-    if (*method=='3') {  // IBWT
-      hdr="comp 9 16 $1 $1 ";  // 2^$1 = block size
+  else if (*method=='3') {  // IBWT
+    hdr="comp 9 16 $1 $1 ";  // 2^$1 = block size
+    pcomp=
+    "pcomp bwtrle c ;\n"
+    "\n"
+    "  (read BWT, index into M, size in b)\n"
+    "  a> 255 ifnot\n"
+    "    *b=a b++\n"
+    "\n"
+    "  (inverse BWT)\n"
+    "  elsel\n"
+    "\n"
+    "    (index in last 4 bytes, put in c and R1)\n"
+    "    b-- a=*b\n"
+    "    b-- a<<= 8 a+=*b\n"
+    "    b-- a<<= 8 a+=*b\n"
+    "    b-- a<<= 8 a+=*b c=a r=a 1\n"
+    "\n"
+    "    (save size in R2)\n"
+    "    a=b r=a 2\n"
+    "\n"
+    "    (count bytes in H[~1..~255, ~0])\n"
+    "    do\n"
+    "      a=b a> 0 if\n"
+    "        b-- a=*b a++ a&= 255 d=a d! *d++\n"
+    "      forever\n"
+    "    endif\n"
+    "\n"
+    "    (cumulative counts: H[~i=0..255] = count of bytes before i)\n"
+    "    d=0 d! *d= 1 a=0\n"
+    "    do\n"
+    "      a+=*d *d=a d--\n"
+    "    d<>a a! a> 255 a! d<>a until\n"
+    "\n"
+    "    (build first part of linked list in H[0..idx-1])\n"
+    "    b=0 do\n"
+    "      a=c a>b if\n"
+    "        d=*b d! *d++ d=*d d-- *d=b\n"
+    "      b++ forever\n"
+    "    endif\n"
+    "\n"
+    "    (rest of list in H[idx+1..n-1])\n"
+    "    b=c b++ c=r 2 do\n"
+    "      a=c a>b if\n"
+    "        d=*b d! *d++ d=*d d-- *d=b\n"
+    "      b++ forever\n"
+    "    endif\n"
+    "\n"
+    "    (copy M to low 8 bits of H to reduce cache misses in next loop)\n"
+    "    b=0 do\n"
+    "      a=c a>b if\n"
+    "        d=b a=*d a<<= 8 a+=*b *d=a\n"
+    "      b++ forever\n"
+    "    endif\n"
+    "\n"
+    "    (traverse list and output or copy to M)\n"
+    "    d=r 1 b=0 do\n"
+    "      a=d a== 0 ifnot\n"
+    "        a=*d a>>= 8 d=a\n";
+    if (doe8) pcomp+=" *b=*d b++\n";
+    else      pcomp+=" a=*d out\n";
+    pcomp+=
+    "      forever\n"
+    "    endif\n"
+    "\n";
+    if (doe8)  // IBWT+E8E9
+      pcomp+=
+      "    (e8e9 transform to out)\n"
+      "    d=b b=0 do (for b=0..d-1, d = end of buf)\n"
+      "      a=b a==d ifnot\n"
+      "        a+= 4 a<d if\n"
+      "          a=*b a&= 254 a== 232 if\n"
+      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if\n"
+      "              b-- a=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              b-- a<<= 8 a+=*b\n"
+      "              a-=b a++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a a>>= 8 b++\n"
+      "              *b=a b++\n"
+      "            endif\n"
+      "            b=c\n"
+      "          endif\n"
+      "        endif\n"
+      "        a=*b out b++\n"
+      "      forever\n"
+      "    endif\n";
+    pcomp+=
+    "  endif\n"
+    "  halt\n"
+    "end\n";
+  }
+  else if (*method>='4' && *method<='9') {
+    hdr="comp 9 16 0 0 ";
+    if (doe8) { // E8E9?
       pcomp=
-      "pcomp bwtrle c ; "
-      " "
-      "  (read BWT, index into M, size in b) "
-      "  a> 255 ifnot "
-      "    *b=a b++ "
-      " "
-      "  (inverse BWT) "
-      "  elsel "
-      " "
-      "    (index in last 4 bytes, put in c and R1) "
-      "    b-- a=*b "
-      "    b-- a<<= 8 a+=*b "
-      "    b-- a<<= 8 a+=*b "
-      "    b-- a<<= 8 a+=*b c=a r=a 1 "
-      " "
-      "    (save size in R2) "
-      "    a=b r=a 2 "
-      " "
-      "    (count bytes in H[~1..~255, ~0]) "
-      "    do "
-      "      a=b a> 0 if "
-      "        b-- a=*b a++ a&= 255 d=a d! *d++ "
-      "      forever "
-      "    endif "
-      " "
-      "    (cumulative counts: H[~i=0..255] = count of bytes before i) "
-      "    d=0 d! *d= 1 a=0 "
-      "    do "
-      "      a+=*d *d=a d-- "
-      "    d<>a a! a> 255 a! d<>a until "
-      " "
-      "    (build first part of linked list in H[0..idx-1]) "
-      "    b=0 do "
-      "      a=c a>b if "
-      "        d=*b d! *d++ d=*d d-- *d=b "
-      "      b++ forever "
-      "    endif "
-      " "
-      "    (rest of list in H[idx+1..n-1]) "
-      "    b=c b++ c=r 2 do "
-      "      a=c a>b if "
-      "        d=*b d! *d++ d=*d d-- *d=b "
-      "      b++ forever "
-      "    endif "
-      " "
-      "    (copy M to low 8 bits of H to reduce cache misses in next loop) "
-      "    b=0 do "
-      "      a=c a>b if "
-      "        d=b a=*d a<<= 8 a+=*b *d=a "
-      "      b++ forever "
-      "    endif "
-      " "
-      "    (traverse list and output or copy to M) "
-      "    d=r 1 b=0 do "
-      "      a=d a== 0 ifnot "
-      "        a=*d a>>= 8 d=a ";
-      if (method[1]=='e') pcomp+=" *b=*d b++ ";
-      else                pcomp+=" a=*d out ";
-      pcomp+=
-      "      forever "
-      "    endif "
-      " ";
-      if (method[1]=='e')  // IBWT+E8E9
-        pcomp+=
-        "    (e8e9 transform to out) "
-        "    d=b b=0 do (for b=0..d-1, d = end of buf) "
-        "      a=b a==d ifnot "
-        "        a+= 4 a<d if "
-        "          a=*b a&= 254 a== 232 if "
-        "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if "
-        "              b-- a=*b "
-        "              b-- a<<= 8 a+=*b "
-        "              b-- a<<= 8 a+=*b "
-        "              a-=b a++ "
-        "              *b=a a>>= 8 b++ "
-        "              *b=a a>>= 8 b++ "
-        "              *b=a b++ "
-        "            endif "
-        "            b=c "
-        "          endif "
-        "        endif "
-        "        a=*b out b++ "
-        "      forever "
-        "    endif ";
-      pcomp+=
-      "  endif "
-      "  halt "
-      "end ";
+      "pcomp e8e9 d ;\n"
+      "  a> 255 if\n"
+      "    a=c a> 4 if\n"
+      "      c= 4\n"
+      "    else\n"
+      "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a\n"
+      "    endif\n"
+      "    do a=c a> 0 if\n"
+      "      a=b out a>>= 8 b=a c--\n"
+      "    forever endif\n"
+      "  else\n"
+      "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++\n"
+      "    a=c a> 4 if\n"
+      "      a=*b out\n"
+      "      a&= 254 a== 232 if\n"
+      "        a=b a>>= 24 a++ a&= 254 a== 0 if\n"
+      "          a=b a>>= 24 a<<= 24 d=a\n"
+      "          a=b a-=c a+= 5\n"
+      "          a<<= 8 a>>= 8 a|=d b=a\n"
+      "        endif\n"
+      "      endif\n"
+      "    endif\n"
+      "  endif\n"
+      "  halt\n"
+      "end\n";
     }
-    else {  // 4..9: context model
-      hdr="comp 9 16 0 0 ";
-      if (method[1]=='e') { // E8E9?
-        pcomp=
-        "pcomp e8e9 d ;\n"
-        "  a> 255 if\n"
-        "    a=c a> 4 if\n"
-        "      c= 4\n"
-        "    else\n"
-        "      a! a+= 5 a<<= 3 d=a a=b a>>=d b=a\n"
-        "    endif\n"
-        "    do a=c a> 0 if\n"
-        "      a=b out a>>= 8 b=a c--\n"
-        "    forever endif\n"
-        "  else\n"
-        "    *b=b a<<= 24 d=a a=b a>>= 8 a+=d b=a c++\n"
-        "    a=c a> 4 if\n"
-        "      a=*b out\n"
-        "      a&= 254 a== 232 if\n"
-        "        a=b a>>= 24 a++ a&= 254 a== 0 if\n"
-        "          a=b a>>= 24 a<<= 24 d=a\n"
-        "          a=b a-=c a+= 5\n"
-        "          a<<= 8 a>>= 8 a|=d b=a\n"
-        "        endif\n"
-        "      endif\n"
-        "    endif\n"
-        "  endif\n"
-        "  halt\n"
-        "end\n";
-      }
-      else
-        pcomp="end\n";
-    }
+    else
+      pcomp="end\n";
+  }
+  else
+    error("Unsupported method");
   
-    // Buid context model assuming:
-    // H[0..254] = contexts
-    // H[255..511] = location of last byte i-255
-    // M = last 64K bytes, filling backward
-    // C = pointer to most recent byte
-    int ncomp=0;  // number of components
-    const int membits=20+method[0]-'0'; // log(memory size) = 24..29
-    int sb=5;  // bits in last context
-    string hcomp="hcomp\nc-- *c=a a+= 255 d=a *d=c\n";
-    string comp;
-    method+=2;
-    while (*method && ncomp<254) {
+  // Build context model (comp, hcomp) assuming:
+  // H[0..254] = contexts
+  // H[255..511] = location of last byte i-255
+  // M = last 64K bytes, filling backward
+  // C = pointer to most recent byte
+  // R1 = level 2 lz77 1+bytes expected until next code, 0=init
+  // R2 = level 2 lz77 first byte of code
+  int ncomp=0;  // number of components
+  const int membits=method[0]>='4' && method[0]<='9'
+    ? 20+method[0]-'0' : 24; // log(memory size) = 24..29
+  int sb=5;  // bits in last context
+  string comp;
+  args[1]=method[0]-'0';  // base method 0..9
+  string hcomp="hcomp\n"
+    "c-- *c=a a+= 255 d=a *d=c\n";
+  if (args[1]==2) {  // put level 2 lz77 parse state in R1, R2
+    hcomp+=
+    "  (decode lz77 into M. Codes:\n"
+    "  00xxxxxx = literal length xxxxxx+1\n"
+    "  xx......, xx > 0 = match with xx offset bytes to follow)\n"
+    "\n"
+    "  a=r 1 a== 0 if (init)\n"
+    "    a= "+itos(130+57*doe8)+" (skip post code)\n"
+    "  else a== 1 if  (new code?)\n"
+    "    a=*c r=a 2  (save code in R2)\n"
+    "    a> 63 if a>>= 6 a++  (match)\n"
+    "    else a++ a++ endif  (literal)\n"
+    "  else (read rest of code)\n"
+    "    a--\n"
+    "  endif endif\n"
+    "  r=a 1  (R1 = 1+expected bytes to next code)\n";
+  }
+  method+=1;
+  while (*method && ncomp<254) {
 
-      // parse command C[N1[,N2]...] into v = {C, N1, N2...}
-      vector<int> v;
-      v.push_back(*method++);
-      if (isdigit(*method)) {
-        v.push_back(*method++-'0');
-        while (isdigit(*method) || *method==',' || *method=='.') {
-          if (isdigit(*method))
-            v.back()=v.back()*10+*method++-'0';
-          else {
-            v.push_back(0);
-            ++method;
-          }
+    // parse command C[N1[,N2]...] into v = {C, N1, N2...}
+    vector<int> v;
+    v.push_back(*method++);
+    if (isdigit(*method)) {
+      v.push_back(*method++-'0');
+      while (isdigit(*method) || *method==',' || *method=='.') {
+        if (isdigit(*method))
+          v.back()=v.back()*10+*method++-'0';
+        else {
+          v.push_back(0);
+          ++method;
         }
       }
+    }
 
-      // c: context model
-      // N1: 0=ICM 1..256=CM limit N1-1
-      // N2: 1..255=offset mod N2. 1000..1255=distance to N2-1000
-      // N3...: 0..255=byte mask. 1000+=run of N3-1000 zeros.
-      if (v[0]=='c') {
-        while (v.size()<3) v.push_back(0);
-        comp+=itos(ncomp)+" ";
-        sb=11;  // count context bits
-        if (v[2]<256) sb+=nbits(v[2]);
-        else sb+=6;
-        for (unsigned i=3; i<v.size(); ++i)
-          if (v[i]<256) sb+=nbits(v[i])*3/4;
-        if (sb>membits) sb=membits;
-        if (v[1]==0) comp+="icm "+itos(sb-6)+"\n";
-        else comp+="cm "+itos(sb-2)+" "+itos(v[1]-1)+"\n";
+    // n|e4,0,3,22: LZ77 params. Copy into args[2..6]
+    if (v[0]=='n' || v[0]=='e') {
+      if (v.size()<=1) v.push_back(4);
+      if (v.size()<=2) v.push_back(0);
+      if (v.size()<=3) v.push_back(3);
+      if (v.size()<=4) v.push_back(24);
+      if (v.size()<=5) v.push_back(16);
+      if (v.size()<=6) v.push_back(18);
+      for (int i=0; i<7; ++i) args[i+2]=v[i];
+    }
 
-        // periodic or distance context
-        hcomp+="d= " +itos(ncomp)+" *d=0\n";
-        if (v[2]>1 && v[2]<=255) {  // periodic context
-          if (lg(v[2])!=lg(v[2]-1))
-            hcomp+="a=c a&= "+itos(v[2]-1)+" hashd\n";
-          else
-            hcomp+="a=c a%= "+itos(v[2])+" hashd\n";
-        }
-        else if (v[2]>=1000 && v[2]<=1255)  // distance context
-          hcomp+="a= 255 a+= "+itos(v[2]-1000)+
-                 " d=a a=*d a-=c a> 255 if a= 255 endif d= "+
-                 itos(ncomp)+" hashd\n";
+    // c: context model
+    // N1: 0=ICM 1..256=CM limit N1-1
+    // N2: 1..255=offset mod N2. 1000..1255=distance to N2-1000
+    // N3...: 0..255=byte mask. 1000+=run of N3-1000 zeros.
+    if (v[0]=='c') {
+      while (v.size()<3) v.push_back(0);
+      comp+=itos(ncomp)+" ";
+      sb=11;  // count context bits
+      if (v[2]<512) sb+=nbits(v[2]);
+      else sb+=6;
+      if (args[1]==2) sb+=8;
+      for (unsigned i=3; i<v.size(); ++i)
+        if (v[i]<256) sb+=nbits(v[i])*3/4;
+      if (sb>membits) sb=membits;
+      if (v[1]==0) comp+="icm "+itos(sb-6)+"\n";
+      else comp+="cm "+itos(sb-2)+" "+itos(v[1]-1)+"\n";
 
-        // Masked context
-        hcomp+="b=c ";
-        for (unsigned i=3; i<v.size(); ++i) {
-          if (v[i]==255)
-            hcomp+="a=*b hashd\n";
-          else if (v[i]>0 && v[i]<255)
-            hcomp+="a=*b a&= "+itos(v[i])+" hashd\n";
-          else if (v[i]>=1256)
-            hcomp+="a= "+itos(((v[i]-1000)>>8)&255)+" a<<= 8 a+= "
-                 +itos((v[i]-1000)&255)+
-            " a+=b b=a\n";
-          else if (v[i]>1000)
-            hcomp+="a= "+itos(v[i]-1000)+" a+=b b=a\n";
-          if (v[i]<256 && i<v.size()-1)
-            hcomp+="b++ ";
-        }
+      // special contexts
+      hcomp+="d= " +itos(ncomp)+" *d=0\n";
+      if (v[2]>1 && v[2]<=255) {  // periodic context
+        if (lg(v[2])!=lg(v[2]-1))
+          hcomp+="a=c a&= "+itos(v[2]-1)+" hashd\n";
+        else
+          hcomp+="a=c a%= "+itos(v[2])+" hashd\n";
       }
+      else if (v[2]>=1000 && v[2]<=1255)  // distance context
+        hcomp+="a= 255 a+= "+itos(v[2]-1000)+
+               " d=a a=*d a-=c a> 255 if a= 255 endif d= "+
+               itos(ncomp)+" hashd\n";
 
-      // m,8,24: MIX, size, rate
-      // t,8,24: MIX2, size, rate
-      // s,8,32,255: SSE, size, start, limit
-      if (strchr("mts", v[0]) && ncomp>int(v[0]=='t')) {
-        if (v.size()<=1) v.push_back(8);
-        if (v.size()<=2) v.push_back(24+8*(v[0]=='s'));
-        if (v[0]=='s' && v.size()<=3) v.push_back(255);
-        comp+=itos(ncomp);
-        sb=5+v[1]*3/4;
-        if (v[0]=='m')
-          comp+=" mix "+itos(v[1])+" 0 "+itos(ncomp)+" "+itos(v[2])+" 255\n";
-        else if (v[0]=='t')
-          comp+=" mix2 "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(ncomp-2)
-              +" "+itos(v[2])+" 255\n";
-        else // s
-          comp+=" sse "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(v[2])+" "
-              +itos(v[3])+"\n";
-        if (v[1]>8) {
-          hcomp+="d= "+itos(ncomp)+" *d=0 b=c a=0\n";
-          for (; v[1]>=16; v[1]-=8) {
-            hcomp+="a<<= 8 a+=*b";
-            if (v[1]>16) hcomp+=" b++";
-            hcomp+="\n";
-          }
-          if (v[1]>8)
-            hcomp+="a<<= 8 a+=*b a>>= "+itos(16-v[1])+"\n";
-          hcomp+="a<<= 8 *d=a\n";
+      // Masked context
+      for (unsigned i=3; i<v.size(); ++i) {
+        if (i==3) hcomp+="b=c ";
+        if (v[i]==255)
+          hcomp+="a=*b hashd\n";  // ordinary byte
+        else if (v[i]>0 && v[i]<255)
+          hcomp+="a=*b a&= "+itos(v[i])+" hashd\n";  // masked byte
+        else if (v[i]>=256 && v[i]<512) { // lz77 state or masked literal byte
+          hcomp+=
+          "a=r 1 a> 1 if\n"  // expect literal or offset
+          "  a=r 2 a< 64 if\n"  // expect literal
+          "    a=*b ";
+          if (v[i]<511) hcomp+="a&= "+itos(v[i]-256);
+          hcomp+=" hashd\n"
+          "  else\n"  // expect match offset byte
+          "    a>>= 6 hashd a=r 1 hashd\n"
+          "  endif\n"
+          "else\n"  // expect new code
+          "  a= 255 hashd a=r 2 hashd\n"
+          "endif\n";
         }
+        else if (v[i]>=1256)  // skip v[i]-1000 bytes
+          hcomp+="a= "+itos(((v[i]-1000)>>8)&255)+" a<<= 8 a+= "
+               +itos((v[i]-1000)&255)+
+          " a+=b b=a\n";
+        else if (v[i]>1000)
+          hcomp+="a= "+itos(v[i]-1000)+" a+=b b=a\n";
+        if (v[i]<512 && i<v.size()-1)
+          hcomp+="b++ ";
       }
-
-      // i: ISSE chain with order increasing by N1,N2...
-      if (v[0]=='i' && ncomp>0) {
-        assert(sb>=5);
-        hcomp+="d= "+itos(ncomp-1)+" b=c a=*d d++\n";
-        for (unsigned i=1; i<v.size() && ncomp<254; ++i) {
-          for (int j=0; j<v[i]; ++j) {
-            hcomp+="hash ";
-            if (i<v.size()-1 || j<v[i]-1) hcomp+="b++ ";
-            sb+=6;
-          }
-          hcomp+="*d=a";
-          if (i<v.size()-1) hcomp+=" d++";
-          hcomp+="\n";
-          if (sb>membits) sb=membits;
-          comp+=itos(ncomp)+" isse "+itos(sb-6)+" "+itos(ncomp-1)+"\n";
-          ++ncomp;
-        }
-        --ncomp;
-      }
-
-      // a24,0,0: MATCH. N1=hash multiplier. N2,N3=halve buf, table.
-      if (v[0]=='a') {
-        if (v.size()<=1) v.push_back(24);
-        while (v.size()<4) v.push_back(0);
-        comp+=itos(ncomp)+" match "+itos(membits-v[3]-2)+" "
-            +itos(membits-v[2])+"\n";
-        hcomp+="d= "+itos(ncomp)+" a=*d a*= "+itos(v[1])
-             +" a+=*c a++ *d=a\n";
-        sb=5+(membits-v[2])*3/4;
-      }
-
-      // w1,65,26,223: ICM-ISSE chain of length N1 with word contexts,
-      // where a word is a sequence of c such that c&N4 is in N2..N2+N3-1.
-      // Word is hashed by: hash := hash*N5+c+1
-      if (v[0]=='w') {
-        if (v.size()<=1) v.push_back(1);
-        if (v.size()<=2) v.push_back(65);
-        if (v.size()<=3) v.push_back(26);
-        if (v.size()<=4) v.push_back(223);
-        if (v.size()<=5) v.push_back(20);
-        comp+=itos(ncomp)+" icm "+itos(membits-6)+"\n";
-        for (int i=1; i<v[1]; ++i)
-          comp+=itos(ncomp+i)+" isse "+itos(membits-6)+" "
-              +itos(ncomp+i-1)+"\n";
-        hcomp+="a=*c a&= "+itos(v[4])+" a-= "+itos(v[2])+" a&= 255 a< "
-             +itos(v[3])+" if\n";
-        for (int i=0; i<v[1]; ++i) {
-          if (i==0) hcomp+="  d= "+itos(ncomp);
-          else hcomp+="  d++";
-          hcomp+=" a=*d a*= "+itos(v[5])+" a+=*c a++ *d=a\n";
-        }
-        hcomp+="else\n";
-        for (int i=v[1]-1; i>0; --i)
-          hcomp+="  d= "+itos(ncomp+i-1)+" a=*d d++ *d=a\n";
-        hcomp+="  d= "+itos(ncomp)+" *d=0\n"
-             "endif\n";
-        ncomp+=v[1]-1;
-        sb=membits;
-      }
-
       ++ncomp;
     }
-    return hdr+itos(ncomp)+"\n"+comp+hcomp+"halt\n"+pcomp;
+
+    // m,8,24: MIX, size, rate
+    // t,8,24: MIX2, size, rate
+    // s,8,32,255: SSE, size, start, limit
+    if (strchr("mts", v[0]) && ncomp>int(v[0]=='t')) {
+      if (v.size()<=1) v.push_back(8);
+      if (v.size()<=2) v.push_back(24+8*(v[0]=='s'));
+      if (v[0]=='s' && v.size()<=3) v.push_back(255);
+      comp+=itos(ncomp);
+      sb=5+v[1]*3/4;
+      if (v[0]=='m')
+        comp+=" mix "+itos(v[1])+" 0 "+itos(ncomp)+" "+itos(v[2])+" 255\n";
+      else if (v[0]=='t')
+        comp+=" mix2 "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(ncomp-2)
+            +" "+itos(v[2])+" 255\n";
+      else // s
+        comp+=" sse "+itos(v[1])+" "+itos(ncomp-1)+" "+itos(v[2])+" "
+            +itos(v[3])+"\n";
+      if (v[1]>8) {
+        hcomp+="d= "+itos(ncomp)+" *d=0 b=c a=0\n";
+        for (; v[1]>=16; v[1]-=8) {
+          hcomp+="a<<= 8 a+=*b";
+          if (v[1]>16) hcomp+=" b++";
+          hcomp+="\n";
+        }
+        if (v[1]>8)
+          hcomp+="a<<= 8 a+=*b a>>= "+itos(16-v[1])+"\n";
+        hcomp+="a<<= 8 *d=a\n";
+      }
+      ++ncomp;
+    }
+
+    // i: ISSE chain with order increasing by N1,N2...
+    if (v[0]=='i' && ncomp>0) {
+      assert(sb>=5);
+      hcomp+="d= "+itos(ncomp-1)+" b=c a=*d d++\n";
+      for (unsigned i=1; i<v.size() && ncomp<254; ++i) {
+        for (int j=0; j<v[i]; ++j) {
+          hcomp+="hash ";
+          if (i<v.size()-1 || j<v[i]-1) hcomp+="b++ ";
+          sb+=6;
+        }
+        hcomp+="*d=a";
+        if (i<v.size()-1) hcomp+=" d++";
+        hcomp+="\n";
+        if (sb>membits) sb=membits;
+        comp+=itos(ncomp)+" isse "+itos(sb-6)+" "+itos(ncomp-1)+"\n";
+        ++ncomp;
+      }
+    }
+
+    // a24,0,0: MATCH. N1=hash multiplier. N2,N3=halve buf, table.
+    if (v[0]=='a') {
+      if (v.size()<=1) v.push_back(24);
+      while (v.size()<4) v.push_back(0);
+      comp+=itos(ncomp)+" match "+itos(membits-v[3]-2)+" "
+          +itos(membits-v[2])+"\n";
+      hcomp+="d= "+itos(ncomp)+" a=*d a*= "+itos(v[1])
+           +" a+=*c a++ *d=a\n";
+      sb=5+(membits-v[2])*3/4;
+      ++ncomp;
+    }
+
+    // w1,65,26,223: ICM-ISSE chain of length N1 with word contexts,
+    // where a word is a sequence of c such that c&N4 is in N2..N2+N3-1.
+    // Word is hashed by: hash := hash*N5+c+1
+    if (v[0]=='w') {
+      if (v.size()<=1) v.push_back(1);
+      if (v.size()<=2) v.push_back(65);
+      if (v.size()<=3) v.push_back(26);
+      if (v.size()<=4) v.push_back(223);
+      if (v.size()<=5) v.push_back(20);
+      comp+=itos(ncomp)+" icm "+itos(membits-6)+"\n";
+      for (int i=1; i<v[1]; ++i)
+        comp+=itos(ncomp+i)+" isse "+itos(membits-6)+" "
+            +itos(ncomp+i-1)+"\n";
+      hcomp+="a=*c a&= "+itos(v[4])+" a-= "+itos(v[2])+" a&= 255 a< "
+           +itos(v[3])+" if\n";
+      for (int i=0; i<v[1]; ++i) {
+        if (i==0) hcomp+="  d= "+itos(ncomp);
+        else hcomp+="  d++";
+        hcomp+=" a=*d a*= "+itos(v[5])+" a+=*c a++ *d=a\n";
+      }
+      hcomp+="else\n";
+      for (int i=v[1]-1; i>0; --i)
+        hcomp+="  d= "+itos(ncomp+i-1)+" a=*d d++ *d=a\n";
+      hcomp+="  d= "+itos(ncomp)+" *d=0\n"
+           "endif\n";
+      ncomp+=v[1]-1;
+      sb=membits;
+      ++ncomp;
+    }
   }
-  error("Unsupported method");
-  return "";
+  return hdr+itos(ncomp)+"\n"+comp+hcomp+"halt\n"+pcomp;
 }
 
 // Compress from in to out in 1 block. method is "0".."9" with extra
 // parameters to describe specific algorithms. filename is saved in the
-// segment header. jobNumber is optional to display status.
+// segment header. hits is number of bytes of in predicted in an order 1
+// context (indicating compressibility) or -1 if unknown.
 // Return modified method based on analyzing input.
 string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
-                     const char* filename, const int jobNumber=0) {
+                     const char* filename=0, int hits=-1) {
   assert(in);
   assert(out);
   assert(method!="");
@@ -3021,24 +3118,51 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
 
   // Expand default methods
   if (method.size()==1 && isdigit(method[0])) {
-    if (method=="1") method="1e";
-    else if (method=="2") method="2e";
-    else if (method=="3") method="3eci1";
-    else if (method=="4") method="4eci1,1,1,1,2am";
-    else if (method[0]>'4') {
-      const int NR=1<<12;
-      int pt[256]={0}, r[NR]={0};  // count repetition gaps of length r
-      const unsigned char* p=in->data();
-      int e8=0, text=0;
+
+    // Test whether block should be compressed or stored
+    if (hits<0 || n<1) hits=500;
+    else hits=int(1000.0*hits/n);  // normalize to 0..1000
+    if (method.size()==1 && method[0]>='1' && method[0]<='4'
+        && (hits<<(method[0]-'0'))<128)
+      method="0";
+
+    // Analyze the data
+    const int NR=1<<12;
+    int ct[256]={0};  // byte count
+    int pt[256]={0};  // position of last occurrence
+    int r[NR]={0};    // count repetition gaps of length r
+    const unsigned char* p=in->data();
+    if (method[0]>'0') {
       for (int i=0; i<n; ++i) {
+        ++ct[p[i]];
         const int k=i-pt[p[i]];
         if (k>0 && k<NR) ++r[k];
         pt[p[i]]=i;
-        e8+=(p[i]==0xe8)+(p[i]==0xe9)+(p[i]==0x8b)+(p[i]==0x8d);  // x86?
-        text+=(p[i]==' ')+(p[i]>='a' && p[i]<='z');  // text
       }
-      if (e8>n/32) method+="e";
-      else method+="n";
+    }
+
+    // test for x86 (to apply e8e9 transform)
+    if (ct[139]>ct[138]+ct[140] &&
+        ct[141]>ct[140]+ct[142] &&
+        ct[232]*2>ct[234]*3)
+      method+="e";  // x86 detected
+    else
+      method+="n";
+
+    // build models
+    if (method[0]=='1')
+      method+="4,0,3,24,16,18";
+    else if (method[0]=='2')
+      method+="8,0,4,24,16,24c0,0,511";
+    else if (method[0]=='3')
+      method+="ci1";
+    else if (method[0]=='4')
+      method+="ci1,1,1,1,2am";
+    else if (method[0]>'4') {
+
+      // Model text files
+      int text=ct[32];
+      for (int i='a'; i<='z'; ++i) text+=ct[i];
       if (text>n/4) method+="w2c0,1010,255i1";
       else method+="w1i1";
       method+="c256ci1,1,1,1,1,1,2a";
@@ -3069,64 +3193,74 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   }
 
   // Get hash of input
-  libzpaq::SHA1 sha1;
-  const char* sha1ptr=0;
-  for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
-    sha1.put(*p);
-  sha1ptr=sha1.result();
-
-  // Compress in to out using config
-  string config=makeConfig(method.c_str());
-  libzpaq::Compressor co;
-  co.setOutput(out);
-#ifdef DEBUG
-  co.setVerify(true);
-#endif
-  StringBuffer pcomp_cmd;
-  co.writeTag();
-
-  // For methods 1..3 use the smallest buffer size possible as $1
+  string config;
   int args[9]={0};
-  if (method[0]>='1' && method[0]<='3' && n>0) {
-    args[0]=lg(n-1+257*(method[0]=='3'));
-    assert(args[0]>=0 && args[0]<=24);
-    assert(method[0]!='3' || args[0]>=9);
-  }
+  try {
+    libzpaq::SHA1 sha1;
+    const char* sha1ptr=0;
+    for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
+      sha1.put(*p);
+    sha1ptr=sha1.result();
 
-  // Compress with appropriate preprocessor depending on method
-  co.startBlock(config.c_str(), args, &pcomp_cmd);
-  string cs=itos(n)+" jDC\x01";
-  const bool doE8=method.size()>1 && method[1]=='e';  // e8e9?
-  co.startSegment(filename, cs.c_str());
-  if (method[0]=='1' || method[0]=='2') {  // preprocess with built-in LZ77
-    LZBuffer lz(*in, method[0]-'0', doE8);
-    co.setInput(&lz);
-    co.compress();
-  }
-  else if (method[0]=='3') {  // preprocess with built-in BWT
-    BWTBuffer bwt(*in, doE8);
-    co.setInput(&bwt);
-    co.compress();
-  }
-  else {  // compress method 4 with e8e9 else without preprocessing
-    if (doE8) e8e9(in->data(), in->size());
-    co.setInput(in);
-    co.compress();
-  }
-  in->reset();
-#ifdef DEBUG  // verify pre-post processing are inverses
-  int64_t outsize;
-  const char* sha1result=co.endSegmentChecksum(&outsize);
-  assert(sha1result);
-  if (memcmp(sha1result, sha1ptr, 20)!=0) {
-    fprintf(stderr, "Job %d: pre size=%d post size=%1.0f method=%s\n",
-            jobNumber, n, double(outsize), method.c_str());
-    error("Pre/post-processor test failed");
-  }
-#else
-  co.endSegment(sha1ptr);
+    // Compress in to out using config
+    config=makeConfig(method.c_str(), args);
+    libzpaq::Compressor co;
+    co.setOutput(out);
+#ifdef DEBUG
+    co.setVerify(true);
 #endif
-  co.endBlock();
+    StringBuffer pcomp_cmd;
+    co.writeTag();
+
+    // For methods 1..3 use the smallest buffer size possible as $1
+    if (method[0]>='1' && method[0]<='3' && n>0) {
+      args[0]=lg(n-1+257*(method[0]=='3'));
+      assert(args[0]>=0 && args[0]<=24);
+      assert(method[0]!='3' || args[0]>=9);
+    }
+
+    // Compress with appropriate preprocessor depending on method
+    co.startBlock(config.c_str(), args, &pcomp_cmd);
+    string cs=itos(n)+" jDC\x01";
+    co.startSegment(filename, cs.c_str());
+    if (method[0]=='1' || method[0]=='2') {  // preprocess with built-in LZ77
+      LZBuffer lz(*in, args);
+      co.setInput(&lz);
+      co.compress();
+    }
+    else if (method[0]=='3') {  // preprocess with built-in BWT
+      BWTBuffer bwt(*in, args[2]=='e');
+      co.setInput(&bwt);
+      co.compress();
+    }
+    else {  // compress method 4 with e8e9 else without preprocessing
+      if (args[2]=='e') e8e9(in->data(), in->size());
+      co.setInput(in);
+      co.compress();
+    }
+    in->reset();
+#ifdef DEBUG  // verify pre-post processing are inverses
+    int64_t outsize;
+    const char* sha1result=co.endSegmentChecksum(&outsize);
+    assert(sha1result);
+    if (memcmp(sha1result, sha1ptr, 20)!=0) {
+      fprintf(stderr, "pre size=%d post size=%1.0f method=%s\n",
+              n, double(outsize), method.c_str());
+      error("Pre/post-processor test failed");
+    }
+#else
+    co.endSegment(sha1ptr);
+#endif
+    co.endBlock();
+  }
+  catch(std::exception& e) {
+    printf("Compression error %s\n", e.what());
+    printf("\nconfig:\n%s\n", config.c_str());
+    printf("\nmethod=%s\n", method.c_str());
+    for (int i=0; i<9; ++i)
+      printf("args[%d] = $%d = %d\n", i, i+1, args[i]);
+    error("compression error");
+  }
   return method;
 }
 
@@ -3143,9 +3277,10 @@ struct CJ {
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
   string method;         // compression level or "" to mark end of data
+  int hits;              // compressibility
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
-  CJ(): state(EMPTY), in(1<<24), out(1<<24) {}
+  CJ(): state(EMPTY), in(1<<24), out(1<<24), hits(-1) {}
 };
 
 // Instructions to a compression job
@@ -3180,12 +3315,14 @@ public:
     destroy_mutex(mutex);
     delete[] q;
   }      
-  void write(StringBuffer& s, const char* filename, string method);
+  void write(StringBuffer& s, const char* filename, string method,
+             int hits=-1);
   vector<int> csize;  // compressed block sizes
 };
 
 // Write s at the back of the queue. Signal end of input with method=-1
-void CompressJob::write(StringBuffer& s, const char* fn, string method){
+void CompressJob::write(StringBuffer& s, const char* fn, string method,
+                        int hits) {
   for (unsigned k=(method=="")?qsize:1; k>0; --k) {
     empty.wait();
     lock(mutex);
@@ -3194,6 +3331,7 @@ void CompressJob::write(StringBuffer& s, const char* fn, string method){
       if (q[j=(i+front)%qsize].state==CJ::EMPTY) {
         q[j].filename=fn?fn:"";
         q[j].method=method;
+        q[j].hits=hits;
         q[j].in.reset();
         q[j].in.swap(s);
         q[j].state=CJ::FULL;
@@ -3243,10 +3381,10 @@ ThreadReturn compressThread(void* arg) {
       }
       release(job.mutex);
       string m=compressBlock(&cj.in, &cj.out, cj.method, cj.filename.c_str(),
-                             jobNumber+1);
+                             cj.hits);
       lock(job.mutex);
       if (!quiet)
-        printf("Job %d: [%d-%d] %d -> %d (%1.3f sec), method %s\n",
+        printf("Job %d: [%d-%d] %d -> %d (%1.3f s), -m %s\n",
                jobNumber+1, start, start+frags-1, insize,
                int(cj.out.size()), (mtime()-now)*0.001, m.c_str());
       cj.in.reset();
@@ -3448,20 +3586,15 @@ void Jidac::add() {
   InputFile in;   // currently open input file
   StringBuffer sb;  // block to compress
   unsigned frags=0;  // number of fragments in sb
-  unsigned hits=0;   // number of predicted bytes
+  unsigned hits=0;   // number of predicted bytes in order 1 context
   while (fi<vf.size() || frags>0) {
-
-    // Test whether block should be compressed or stored
-    bool compressible=true;
-    if (method[0]>='1' && method[0]<='4') {
-      static const unsigned t[4]={16, 32, 64, 128};
-      compressible=hits*t[method[0]-'1']>=sb.size();
-    }
 
     // Compress a block if (1) end of input, (2) block is full,
     // (3) EOF, block is almost full, and next file won't fit, or
     // (4) EOF, block is partly full and not compressible.
     // In that case, store it uncompressed.
+    const bool compressible=method[0]<'0' || method[0]>'4'
+        || (hits<<(method[0]-'0'+3))>=sb.size();
     if (fi==vf.size() || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
         || (fj==0 && sb.size()>blocksize*3/4
             && sb.size()+vf[fi]->second.esize>blocksize-MAX_FRAGMENT-2048) 
@@ -3475,8 +3608,7 @@ void Jidac::add() {
         sb+=itob(ht.size()-frags);
         sb+=itob(frags);
         job.write(sb, ("jDC"+itos(date, 14)+"d"
-                  +itos(ht.size()-frags, 10)).c_str(),
-                  compressible ? method : "0");
+                  +itos(ht.size()-frags, 10)).c_str(), method, hits);
         assert(sb.size()==0);
         ht[ht.size()-frags].csize=-1;  // compressed size to fill in later
         frags=0;
@@ -3663,7 +3795,7 @@ void Jidac::add() {
     }
     ++p;
     if (is.size()>16000 || (is.size()>0 && p==dt.end())) {
-      compressBlock(&is, &out, "1n",
+      compressBlock(&is, &out, "1n4,0,4,16,16,18",
                     ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
       assert(is.size()==0);
     }
@@ -3766,7 +3898,8 @@ struct ExtractJob {         // list of jobs
   Jidac& jd;                // what to extract
   OutputFile outf;          // currently open output file
   DTMap::iterator lastdt;   // currently open output file name
-  ExtractJob(Jidac& j): job(0), jd(j), lastdt(j.dt.end()) {
+  double maxMemory;         // largest memory used by any block (test mode)
+  ExtractJob(Jidac& j): job(0), jd(j), lastdt(j.dt.end()), maxMemory(0) {
     init_mutex(mutex);
     init_mutex(write_mutex);
   }
@@ -4181,6 +4314,62 @@ int Jidac::extract() {
 
 /////////////////////////////// test //////////////////////////////////
 
+// Read fragments ht[n..n+f-1] and verify their checksums and redundant
+// size list at end.
+class OutTester: public libzpaq::Writer {
+  const vector<HT>& ht;  // list of fragments sizes and checksums
+  unsigned n;  // first fragment
+  unsigned f;  // number of fragments
+  unsigned b;  // last 4 bytes, little-endian
+  unsigned frag; // current fragment n..n+f-1, or n+f if reading list
+  unsigned pos;  // current position in fragment or list
+  libzpaq::SHA1 sha1;
+public:
+  OutTester(const vector<HT>& ht_):
+            ht(ht_), n(0), f(0), b(0), frag(n), pos(0) {}
+  void init(unsigned n_, unsigned f_) {
+    frag=n=n_;
+    f=f_;
+    assert(n>0);
+    assert(n+f<=ht.size());
+    while (frag<n+f && ht[frag].usize<=0) ++frag;  // skip empty frags
+  }
+  void put(int c);
+  void write(const char* buf, int n_) {
+    while (n_-->0) put(*buf++);
+  }
+};
+
+// Write byte c
+void OutTester::put(int c) {
+  assert(frag>=n && frag<=n+f);
+  ++pos;
+  if (frag==n+f) {  // reading size list
+    b=b>>8|c<<24;
+    if (pos>f*4+8) error("wrote past end of block");
+    if (pos%4==0) {
+      if (pos<=f*4 && int(b)!=ht[n+pos/4-1].usize
+          && (pos>8 || (pos==4 && b!=0 && b!=n) || (pos==8 && b!=0 && b!=f)))
+        error("bad frag size");
+      if (pos==f*4+4 && b!=n && b!=0) error("bad frag start");
+      if (pos==f*4+8 && b!=f && b!=0) error("bad frag list size");
+    }
+  }
+  else {
+    assert(ht[frag].usize>0);
+    sha1.put(c);
+    if (int(pos)==ht[frag].usize) {
+      assert(sha1.usize()==pos);
+      if (memcmp(sha1.result(), ht[frag].sha1, 20)) {
+        fprintf(stderr, "fragment %u checksum error\n", frag);
+        error("bad frag checksum");
+      }
+      pos=0;
+      while (++frag<n+f && ht[frag].usize<=0);
+    }
+  }
+}
+
 // Test blocks in a job until none are READY
 ThreadReturn testThread(void* arg) {
   ExtractJob& job=*(ExtractJob*)arg;
@@ -4218,13 +4407,18 @@ ThreadReturn testThread(void* arg) {
       in.seek(job.jd.ht[b.start].csize, SEEK_SET);
       libzpaq::Decompresser d;
       d.setInput(&in);
-      if (!d.findBlock()) error("archive block not found");
+      double memory=0;
+      if (!d.findBlock(&memory)) error("archive block not found");
+      lock(job.mutex);
+      if (memory>job.maxMemory) job.maxMemory=memory;
+      release(job.mutex);
       while (d.findFilename(&filename)) {
         StringWriter comment;
         d.readComment(&comment);
 
         // Test JIDAC format
         int64_t outsize=-1;  // uncompressed size
+        OutTester out(job.jd.ht);
         if (comment.s.size()>4
             && comment.s.substr(comment.s.size()-4)=="jDC\x01") {
           if (filename.s.size()!=28) error("bad filename size");
@@ -4238,8 +4432,11 @@ ThreadReturn testThread(void* arg) {
             assert(i>0 && i<job.jd.ht.size());
             outsize+=job.jd.ht[i].usize+4;
           }
-          if (atoi(comment.s.c_str())!=outsize)
+          int commentSize=atoi(comment.s.c_str());
+          if (commentSize!=outsize && commentSize!=outsize-4*b.size)
             error("bad size in comment");
+          out.init(b.start, b.size);
+          d.setOutput(&out);
         }
 
         // Test size and checksum
@@ -4252,12 +4449,12 @@ ThreadReturn testThread(void* arg) {
         if (!quiet) {
           lock(job.mutex);
           if (sha1result[0]!=1) printf("NOT CHECKED: ");
-          printf("%d/%d %s %1.0f -> %1.0f\n", i+1, size(job.block),
-                 filename.s.c_str(),
+          printf("%d/%d %s (%1.3f MB) %1.0f -> %1.0f\n",
+                 i+1, size(job.block), filename.s.c_str(), memory*0.000001,
                  double(in.tell()-job.jd.ht[b.start].csize), double(dsize));
           release(job.mutex);
         }
-        if (outsize>=0 && outsize!=dsize)
+        if (outsize>=0 && outsize!=dsize && outsize!=dsize+4*b.size)
           error("wrong decompressed size");
         if (sha1result[0] && memcmp(sha1.result(), sha1result+1, 20))
           error("checksum mismatch");
@@ -4287,25 +4484,32 @@ ThreadReturn testThread(void* arg) {
   return 0;
 }
 
-// Test archive.
+// Test archive. Throw error() if bad.
 void Jidac::test() {
 
   // Report basic stats: versions, fragments, files, bytes
   printf("Testing %s\n", archive.c_str());
-  int64_t archive_end=read_archive();
+  int errors=0;
+  bool iserr=false;
+  int64_t archive_end=read_archive(&errors);
   printf("%1.0f bytes read from archive\n", double(archive_end));
+  if (errors) {
+    printf("%d errors found in index\n", errors);
+    iserr=true;
+  }
 
   // Report version statistics
   printf("\n%u versions\n", size(ver)-1);
-  int updates=0, deletes=0, undated=0, errors=0;
+  int updates=0, deletes=0, undated=0;
   int64_t earliest=0, latest=0;
+  errors=0;
   for (unsigned i=1; i<ver.size(); ++i) {
     updates+=ver[i].updates;
     deletes+=ver[i].deletes;
     undated+=ver[i].date==0;
     if (ver[i].date) {
       if (earliest==0) earliest=ver[i].date;
-      if (ver[i].date<=latest) ++errors;
+      if (ver[i].date<=latest) ++errors, iserr=true;
       latest=ver[i].date;
     }
   }
@@ -4319,12 +4523,18 @@ void Jidac::test() {
   // Report ht statistics
   printf("\n%u fragments\n", size(ht)-1);
   int64_t usize=0;
-  int unknown=0, blocks=0, nohash=0;
+  int unknown=0, blocks=0, nohash=0, largestFragment=0;
+  double blockSize=0, largestBlock=0;
   errors=0;
   for (unsigned i=1; i<ht.size(); ++i) {
-    if (ht[i].csize>=0) ++blocks;
+    if (ht[i].csize>=0) ++blocks, blockSize=0;
     if (ht[i].usize<0) ++unknown;
-    else usize+=ht[i].usize;
+    else {
+      usize+=ht[i].usize;
+      if (ht[i].usize>largestFragment) largestFragment=ht[i].usize;
+      blockSize+=ht[i].usize;
+      if (blockSize>largestBlock) largestBlock=blockSize;
+    }
     if (ht[i].csize>archive_end || ht[i].csize<-int(i)) ++errors;
     unsigned j;
     for (j=0; j<20; ++j)
@@ -4335,6 +4545,8 @@ void Jidac::test() {
   printf("%1.0f known uncompressed bytes\n", double(usize));
   if (size(ht)-unknown>1)
     printf("%1.3f is average fragment size\n", usize/(size(ht)-unknown-1.0));
+  printf("%u is the largest fragment size\n", largestFragment);
+  printf("%1.0f is the largest uncompressed block size\n", largestBlock);
   printf("%u fragments of unknown size\n", unknown);
   printf("%u fragments without hashes\n", nohash);
   printf("%u missing fragments\n", errors);
@@ -4417,7 +4629,10 @@ void Jidac::test() {
   for (unsigned i=0; i<job.block.size(); ++i)
     if (job.block[i].state!=Block::GOOD)
       ++errors;
+  printf("%1.3f MB memory per thread needed to decompress\n",
+         job.maxMemory*0.000001);
   printf("\n%d data blocks bad\n", errors);
+  iserr|=errors>0;
 
   // Report damaged files
   errors=0;
@@ -4439,8 +4654,9 @@ void Jidac::test() {
       }
     }
   }
+  iserr|=errors>0;
   printf("%d of %d files damaged\n\n", errors, tested);
-  if (errors) error("archive corrupted");
+  if (iserr) error("archive corrupted");
 }
 
 /////////////////////////////// list //////////////////////////////////
@@ -4612,19 +4828,6 @@ void Jidac::list() {
          nfiles, double(usize), double(csize));
   list_versions(csize);
 }
-
-// Allow up to limit_ bytes of discarded output
-class OutCounter: public libzpaq::Writer {
-  int64_t limit;
-public:
-  void put(int c) {
-    if (--limit<0) error("output overflow");
-  }
-  void write(const char* buf, int n) {
-    if ((limit-=n)<0) error("output overflow");
-  }
-  OutCounter(int64_t limit_): limit(limit_) {}
-};
 
 // Convert argv to UTF-8 and replace \ with /
 #ifdef unix
