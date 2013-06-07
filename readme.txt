@@ -1,8 +1,8 @@
-zpaq v6.29, June 6, 2013. Contents:
+zpaq v6.30, June 6, 2013. Contents:
 
-zpaq.exe      6.29   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.29   For 64 bit Windows.
-zpaq.cpp      6.29   zpaq user's guide and source code.
+zpaq.exe      6.30   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.30   For 64 bit Windows.
+zpaq.cpp      6.30   zpaq user's guide and source code.
 
 zpaqd.exe     6.27   Development tool, 32 bit Windows command line executable.
 zpaqd64.exe   6.27   For 64 bit Windows.
