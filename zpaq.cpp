@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.30 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.31 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -173,13 +173,12 @@ overwritten.
 
 Add only files whose attribute bits are clear for each bit clear in N1
 and set for each bit set in N2. N1 and N2 may be decimal, hex (with
-leading x) or octal (with leading o). The default in Windows
-is "-attributes xfffeffff 0" which selects all files except those
-for which bit 16 (FILE_ATTRIBUTE_VIRTUAL) is set. The default in
-Linux is "-attributes xffffffff 0" which selects all files.
+leading x) or octal (with leading o). The default
+is "-attributes xffffffff 0" which selects all files.
 For example, -attributes -16 0 excludes directories and -attributes -1 16
-adds only directories. The useful bits in Windows are (see)
+adds only directories. The useful bits in Windows are (from
 http://msdn.microsoft.com/en-us/library/windows/desktop/gg258117(v=vs.85).aspx
+):
 
     1      x1     = read only
     2      x2     = hidden
@@ -202,7 +201,7 @@ http://msdn.microsoft.com/en-us/library/windows/desktop/gg258117(v=vs.85).aspx
 
 For Linux, attributes (see man chmod), set permissions as follows:
 
-    o10000            = directory
+    o40000  o100000   = regular file, directory
     o4000 o2000 o1000 = set user ID, set group ID, sticky
     o400  o200  o100  = user read, write, execute permission
     o40   o20   o10   = group read, write, execute permission
@@ -1593,7 +1592,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.30 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.31 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -1614,7 +1613,7 @@ void Jidac::usage() {
   "  -quiet               Display only errors and warnings\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...9        Compress faster...better (default: 1)\n"
-  "  -attr xfffeffff 0    Select attribute bits set in arg1 and not arg2\n"
+  "  -attr xffffffff 0    Select attribute bits set in arg1 and not arg2\n"
   "list options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
@@ -1687,11 +1686,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   above=-1;
   summary=0;
   version=9999999999999LL;
-#ifdef unix
   attr_on=0xffffffff;
-#else
-  attr_on=0xfffeffff;  // de-select FILE_ATTRIBUTE_VIRTUAL (reserved)
-#endif
   attr_off=0;
   threads=0; // 0 = auto-detect
   method="1";  // 0..9
