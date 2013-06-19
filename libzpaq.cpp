@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.26 implementation - Apr. 21, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.32 implementation - June 19, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -14,7 +14,6 @@ See libzpaq.h for additional documentation.
 
 #include "libzpaq.h"
 #include <string.h>
-#include <stdio.h>  // debug
 
 #ifndef NOJIT
 #ifdef unix
@@ -2368,21 +2367,31 @@ void Compressor::postProcess(const char* pcomp, int len) {
   state=SEG2;
 }
 
-// Compress n bytes, or to EOF if n <= 0
+// Compress n bytes, or to EOF if n < 0
 bool Compressor::compress(int n) {
   if (state==SEG1)
     postProcess();
   assert(state==SEG2);
-  int ch=0;
-  while (n && (ch=in->get())>=0) {
-    enc.compress(ch);
-    if (verify) {
-      if (pz.hend) pz.run(ch);
-      else sha1.put(ch);
+
+  const int BUFSIZE=1<<14;
+  char buf[BUFSIZE];  // input buffer
+  while (n) {
+    int nbuf=BUFSIZE;  // bytes read into buf
+    if (n>=0 && n<nbuf) nbuf=n;
+    int nr=in->read(buf, nbuf);
+    if (nr<0 || nr>BUFSIZE || nr>nbuf) error("invalid read size");
+    if (nr<=0) return false;
+    if (n>=0) n-=nr;
+    for (int i=0; i<nr; ++i) {
+      int ch=U8(buf[i]);
+      enc.compress(ch);
+      if (verify) {
+        if (pz.hend) pz.run(ch);
+        else sha1.put(ch);
+      }
     }
-    if (n>0) --n;
   }
-  return ch>=0;
+  return true;
 }
 
 // End segment, write sha1string if present

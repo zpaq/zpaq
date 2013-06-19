@@ -1,8 +1,10 @@
-zpaqd627.zip, June 11, 2013. Contents:
+zpaqd632.zip, June 19, 2013. Contents:
 
-zpaqd.exe     6.27   ZPAQ development tool for 32 bit Windows.
-zpaqd64.exe   6.27   For 64 bit Windows.
-zpaqd.cpp     6.27   User's guide and source code.
+zpaqd.exe     6.32   ZPAQ development tool for 32 bit Windows.
+zpaqd64.exe   6.32   For 64 bit Windows.
+zpaqd.cpp     6.32   User's guide and source code.
+libzpaq.h     6.25   API header and docs.
+libzpaq.cpp   6.32   API source code.
 
 All versions of this software can be found at
 http://mattmahoney.net/dc/zpaq.html
