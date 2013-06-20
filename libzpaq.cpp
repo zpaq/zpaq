@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.32 implementation - June 19, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.33 implementation - June 20, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -1624,7 +1624,7 @@ int Decoder::skip() {
       if (n>curr) n=curr;
       U32 n1=in->read(&buf[0], n);
       curr-=n1;
-      if (n1!=n) return -1;
+      if (n1<1) return -1;
       if (curr==0)
         for (int i=0; i<4 && (c=in->get())>=0; ++i) curr=curr<<8|c;
     }
