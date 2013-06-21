@@ -1,7 +1,2 @@
-all: zpaq zpaqd
-
-zpaqd: zpaqd.cpp libzpaq.cpp libzpaq.h
-	g++ -O3 -s -Dunix zpaqd.cpp libzpaq.cpp -o zpaqd
-
 zpaq: zpaq.cpp libzpaq.cpp libzpaq.h divsufsort.c divsufsort.h
 	g++ -O3 -s -Dunix -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -fopenmp -o zpaq
