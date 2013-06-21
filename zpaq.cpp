@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.31 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.33 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -25,8 +25,8 @@ earlier version. zpaq deduplicates: it saves identical files or file
 fragments only once by comparing SHA-1 hashes to those stored in the
 archive.
 
-zpaq compresses in the open-standard ZPAQ level 2 (v2.01) format
-specified at http://mattmahoney.net/zpaq/
+zpaq compresses in the open-standard ZPAQ level 2 (v2.02) journaling
+format specified at http://mattmahoney.net/zpaq/
 The format is self describing, meaning that new versions of the
 archiver that improve compression will still produce archives that
 older decompressers can read, because the decompression instructions
@@ -34,33 +34,31 @@ are stored in the archive.
 
 Usage: command archive.zpaq [file|dir]... -options...
 Commands:
-  a    Add changed files to archive.zpaq
-  x    Extract latest versions of files
-  l    List contents
-  d    Mark as deleted
-  t    Test archive integrity
+  a  add               Add changed files to archive.zpaq
+  x  extract           Extract latest versions of files
+  l  list              List contents
+  d  delete            Mark as deleted in a new version of archive
+  t  test              Test archive integrity
 Options (may be abbreviated):
-  -not <file|dir>...   Do not add/extract/list
-  -to <file|dir>...    Rename external files
-  -until N|YYYYMMDD[HH[MM[SS]]]   Revert to version number or date
+  -not <file|dir>...   Exclude
+  -to <file|dir>...    Rename external files or specify prefix
+  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date
   -force               a: Add even if unchanged. x: output clobbers
-  -quiet               Display only errors and warnings
+  -quiet [N]           Don't show files smaller than N (default none)
   -threads N           Use N threads (default: cores detected)
-  -method 0...4        Compress faster...better (default: 1)
+  -fragile             Don't add or verify checksums or recovery info
+  -method 0...7        Compress faster...better (default: 1)
 list options:
   -summary [N]         Show top N files and types (default: 20)
   -since N             List from N'th update or last -N updates
-  -above N             List files N bytes or larger
   -all                 List all versions
 
 The archive file name must end with ".zpaq" or the extension will be
-assumed. Directory names should be written without a trailing slash.
-Commands a, x, l can be written as -add, -extract, or -list respectively
-for backward compatibility. Options can be abbreviated as long as it is
-not ambiguous, like -th or -thr (but not -t) for -threads.
+assumed. Commands and options may be abbreviated as long as it is not
+ambiguous, like -th or -thr (but not -t) for -threads.
 It is recommended that if zpaq is run from a script that abbreviations
 not be used because future versions might add options that would make
-existing abbreviations ambiguous.
+existing abbreviations ambiguous. Commands:
 
   a or -add
 
@@ -93,6 +91,9 @@ When adding directories, a trailing slash like c:\ is eqivalent
 to all of the files in that directory but not the directory itself,
 as in c:\*
 
+If the archive is "" (an empty string), then zpaq will test compression
+(report size and time) without writing to disk.
+
   x or -extract
 
 Extract files and directores (default: all) from the archive.
@@ -103,19 +104,20 @@ files to be overwritten. Last-modified dates and attributes will be
 restored as saved. Attributes saved in Windows will not be restored
 in Linux and vice versa. If there are multiple versions of a file
 saved, then the latest version will be extracted unless an earlier
-version is specified with -version.
+version is specified with -until.
 
   l or -list
 
 List the archive contents. Each file or directory is shown with a
 version number, date, attributes, uncompressed size, and file name.
-There may be multiple versions of a single file with different
-version numbers. A second table lists for each version number the
-date of the update, number of files added and deleted, and the number
+There may be multiple versions of a single file with different version
+numbers. A second table lists for each version number the number of
+fragments, date, number of files added and deleted, and the number
 of MB added before and after compression. Attributes are shown as
 a string of characters like "DASHRI" in Windows (directory, archive,
 system, hidden, read-only, indexed), or an octal number like "100644"
-(as passed to chmod(), meaning rw-r--r--) in Linux.
+(as passed to chmod(), meaning rw-r--r--) in Linux. If any special
+Windows attributes are set, then the value is displayed in hex.
 
   d or -delete
 
@@ -125,19 +127,19 @@ by rolling back to an earlier version using -until.
 
   t or -test
 
-Print statistics about the archive and list any possibly corrupted
-files that match the command line arguments (default: all files in
-the current version). Return an exit status of 0 if no errors are
-detected, or 1 if the archive is corrupted in any way that would
-prevent any files (selected or not) in any version from being
-extracted properly.
+Print statistics about the archive. Return an exit status of 0 if
+no errors are detected, or 1 if the archive is corrupted in any way that
+would prevent any version of any file from being extracted properly.
+Filename arguments are ignored.
+
+Options:
 
   -not
 
 Exclude files and directories (before renaming) from being added,
-extracted, listed, or tested. For example
-"zpaq a arc calgary -not calgary/book1"
-will add all the files in calgary except book1.
+extracted, listed, or deleted. For example
+"zpaq a arc calgary -not calgary/book?"
+will add all the files in calgary except book1 and book2.
 
   -to
 
@@ -169,54 +171,11 @@ Add files even if the dates match. If a file really is identical,
 then it will not be added. When extracting, output files will be
 overwritten.
 
-  -attributes N1 N2
+  -quiet [N]
 
-Add only files whose attribute bits are clear for each bit clear in N1
-and set for each bit set in N2. N1 and N2 may be decimal, hex (with
-leading x) or octal (with leading o). The default
-is "-attributes xffffffff 0" which selects all files.
-For example, -attributes -16 0 excludes directories and -attributes -1 16
-adds only directories. The useful bits in Windows are (from
-http://msdn.microsoft.com/en-us/library/windows/desktop/gg258117(v=vs.85).aspx
-):
-
-    1      x1     = read only
-    2      x2     = hidden
-    4      x4     = system
-    8      x8     = not used (normally 0)
-    16     x10    = directory
-    32     x20    = archive (usually set)
-    64     x40    = device
-    128    x80    = normal file (if no other bits are set)
-    256    x100   = temporary
-    512    x200   = sparse file
-    1024   x400   = reparse point
-    2048   x800   = compressed
-    4096   x1000  = offline
-    8192   x2000  = not content indexed
-    16384  x4000  = encrypted
-    32768  x8000  = integrity (Windows 8)
-    65536  x10000 = virtual (reserved)
-    131072 x20000 = no scrub data (Windows 8)
-
-For Linux, attributes (see man chmod), set permissions as follows:
-
-    o40000  o100000   = regular file, directory
-    o4000 o2000 o1000 = set user ID, set group ID, sticky
-    o400  o200  o100  = user read, write, execute permission
-    o40   o20   o10   = group read, write, execute permission
-    o4    o2    o1    = other read, write, execute permission
-
-  -all
-
-Decompress all fragments of all data blocks and check for errors, whether
-or not the data is needed to extract the requested files. This is most
-useful with -test.
-
-  -quiet
-
-When adding or extracting, don't print anything unless there is
-an error.
+With N, show only files or blocks of size at least N bytes but
+otherwise display normally. The default is to suppress all output
+except errors.
 
   -threads N
 
@@ -226,76 +185,162 @@ or the limit according to -method, whichever is less. The number of cores
 is detected from the environment variable %NUMBER_OF_PROCESSORS% in
 Windows or /proc/cpuinfo in Linux.
 
-  -method M[n|e][N1[,N2]...][[c|i|a|m|s|t|w][N1][,N2]...]...
-  -method config.cfg
+  -fragile
 
-Select compression method, where M is a digit, possibly followed by
-a list of arguments. Each argument consists of a single letter
-followed by a list of 0 or more non-negative integers separated by
-commas or periods with no spaces. The first letter must be n or e,
-and subsequent letters must c, i, a, m, s, t, or w, for example,
-"4ec0i1,1,2m" The default method is "1". The meanings are as follows:
+With -add, don't add header locator tags, checksums, or a redundant
+list of fragment sizes to data blocks. This can produce slightly
+smaller archives and compress faster, but make it more difficult
+(usually impossible) to detect and recover from any damage to the archive.
+It is not possible to completely test fragile archives. With -extract,
+checksums (if present) are not verified during extraction, which can
+be faster. Recommended only for testing.
 
-  M
+  -method 0..9
 
-M ranges from 0 to 9. By itself, higher numbers compress better but are
-slower and require more memory. M selects the base algorithm and block size
-as follows:
+Compress faster..better. The default is -method 1. (See below for advanced
+compression options).
 
-  0 = No compression.
-  1 = LZ77 with variable length codes and no context modeling.
-  2 = LZ77 with byte aligned codes and a context model.
-  3 = BWT (Burrows-Wheeler transform).
-  4..9 = CM (Context mixing).
+List options:
 
-The block size is 16 MB for M=0..4 and 2^M MB for M=4..9.
+  -summary N
 
-No other arguments are required. If omitted, then the compression algorithm
-will be selected based on an analysis of the input data and may vary from
-block to block. Otherwise, any arguments override the analysis and exactly
-specify the compression algorithm for all blocks. The arguments are as
-follows:
+When listing contents, show only the top N files, directories, and
+filename extensions by total size. The default is 20. Also show
+a table of deduplication statistics and a table of version dates.
 
-  n - No further preprocessing.
-  e - E8E8 preprocessing (M=1..9 only).
+  -since N
 
-The E8E9 preprocessor replaces input sequences of the form
-(E8|E9 xx xx xx 00|FF) by adding the sequence offset from the
-start of the block to the 3 middle bytes (LSB first), mod 2^24. This
-improves compression of x86 code (.exe and .dll files).
+List only versions N and later. If N is negative then list only the
+last -N updates. Default is 0 (all).
 
-Any numeric arguments to n or e apply only to M = 1..2 to control LZ77
-parameters as follows:
+  -all
 
-N1 is the minimum match length, default 4. Shorter matches are coded as
-literals. It is possible that some longer matches are also coded as literals
-if the offset is long or the previous symbol was a literal. The allowed
-range for method 2 is 1..255.
+List all versions of each file, including deletions. The default is to
+list only the latest version, or not list it if it is deleted.
 
-N2 is the secondary match length for longer contexts. Contexts
-of length N2 are searched first, and if no match is found, then contexts
-of length N1 are searched. If N2 is 0, then only contexts of length N1
-are searched. The default is 0.
 
-N3 is the log of the hash chain length. This means to search 2^N3
-contexts and pick the longest one to code as a match. Allowed range
-depends on available memory, which must be at least 4*(2^N3) bytes.
-Large values can result in very slow compression. The default is 3.
+Advanced compression options:
 
-N4 is the log of the hash table index size which maps contexts to
-previous occurrences to be searched. The default is 24, which uses
-64 MB memory. Allowed range depends on available memory. Each entry
-takes 4 bytes.
+  -method {0..9|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
 
-N5 is the log of the minimum offset needed to increment the minimum
-match length (N1) by 1 after a literal. Default is 16. Allowed
-range is 0..24.
+With a single digit, select compression speed, where low values are
+faster and higher values compress smaller. The default is 1.
+0 stores with deduplication but no other compression. 1 through 4 take
+longer to compress but do not affect decompression speed. 5 through 9
+are slower both to compress and decompress. N1, if present, selects
+a maximum block size of 2^(N1+20) - 4096 bytes. The default is 4
+(e.g. -method 14).
 
-N6 is the log of the minimum offset needed to increment the minimum
-match length (N1) by 1 after another match. Default is 18. Allowed
-range is 0..24.
+When the first character is x, select experimental compression methods.
+These are for advanced uses only. The method is described
+by a group of commands beginning with a letter and followed by
+numbers separated by commas or periods without spaces. The first
+group starts with x and subsequent groups must start with f<cfg>, c, i,
+a, m, s, t, or w, where <cfg> is the name of a configuration file
+without the trailing .cfg extension, for example, "-method x4,0fmax".
+The numeric arguments in each group have the following meanings depending
+on the initial letter. The default values of all numeric arguments is 0
+unless specified otherwise.
 
-Additional options apply to M=1..9 only.
+  x
+
+N1 selects a maximum block size of 2^(20+N1) - 4096 bytes. Fragments
+are grouped into blocks which are compressed or decompressed in
+parallely by separate threads. Each thread requires 2 times the block
+size in memory per thread to temporarily store the input and output for
+compression. For decompression, it requires storing only the block size.
+
+N2 selects the preprocessing step as follows:
+
+  0 = no preprocessing.
+  1 = LZ77 with variable length codes.
+  2 = LZ77 with byte-aligned codes.
+  3 = BWT.
+  4..7 = 0..3 with E8E9 transform applied first.
+
+The E8E9 tranform scans the input block from back to front for
+5 byte sequences of the form (E8|E9 xx xx xx 00|FF) and adds
+the block offset of the sequence start (0..n-4) to the middle 3 bytes,
+interpreted LSB first. It improves the compression of x86 .exe and
+.dll files.
+
+LZ77 with variable length codes is designed for compression with no
+further context modeling. Bit codes are packed LSB first and are
+interpreted as follows:
+
+  00,n,L[n] = n literal bytes
+  mm,mmm,n,ll,q (mm > 00) = match of length 4n+ll, offset q
+
+where q is written in 8mm+mmm-8 (0..23) bits with an implied leading 1 bit
+and n is written using interleaved Elias Gamma coding, i.e. the leading
+1 bit is implied, remaining bits are preceded by a 1 and terminated by
+a 0. e.g. abc is written 1,b,1,c,0. Codes are packed LSB first and
+padded with leading 0 bits in the last byte.
+
+Byte oriented LZ77 with minimum match length m = N5
+with m in 1..64. Lengths and offsets are MSB first:
+00xxxxxx                            x+1 (1..64) literals follow
+01xxxyyy yyyyyyyy                   copy x+m (m..m+7)  offset y+1 (1..2048)
+10xxxxxx yyyyyyyy yyyyyyyy          copy x+m (m..m+63) offset y+1 (1..2^16)
+11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+m (m..m+63) offset y+1 (1..2^24)
+
+BWT sorts the block by suffix with an implied terminator of -1 encoded
+as 255. The 4 byte offset of this terminator is appended to the end
+of the block LSB first, thus increasing the block size by 5. The maximum
+allowed block size is 16 MB (N1 = 4). Memory required is 5x block size
+for both compression and decompression.
+
+N3 through N8 affect only LZ77 compression as follows:
+
+N3 = minimum match length. If the longest match found is less than N3,
+then literals are coded instead.
+
+N4 = context length to search first (normally N4 > N3), or 0 to skip
+this search.
+
+N5 = search for 3 * 2^N5 matches of length N4 (unless 0), then 3 * 2^N5 more
+matches of length N3. The longest match is chosen, breaking ties by
+choosing the closer one. N5 must be in 0..8.
+
+N6 = use a hash table of 2^N6 elements to store the location of context
+hashes. It requires 4 x 2^N6 bytes of memory for compression only.
+
+N7 = increase minimum match length by 1 after a literal if the offset
+is 2^N7 or more.
+
+N8 = increase minimum match length by 1 after another match if the offset
+is 2^N8 or more.
+
+For example, -method x4,5,4,0,3,24,16,18 specifies a 2^4 =  16 MB block size,
+E8E9 + LZ77 (4+1) with variable length codes, minimum match length 4, no
+secondary search (0), search length of 2^3 = 8, hash table size of 2^24
+elements, and increases the minimum match length to 5 if the offset is
+greater than 2^16 (64 KB) after a literal or 2^18 (256 KB) after another
+match. This gives fast and reasonable compression, requiring 96 MB per
+thread to compress and 16 MB per thread to decompress.
+
+The default is method -x4,1,4,0,3,24,16,18
+
+  s
+
+Store in streaming format rather than journaling. Each file is stored
+in a separate block. Files larger than the block size specified by
+N1 (2^(N1+20) - 4096) are split into blocks of this size. No deduplication
+is performed. Directories are not stored. Block sizes, dates, and attributes
+are stored in the first segment comment header of the first block
+as "size YYYYMMDDHHMMSS wN" (or "uN") all as decimal numbers. Subsequent
+blocks of the same file store only the size and leave the filename blank
+as well. Compression is single threaded. Options are the same as x.
+
+Subsequent groups beginning with a letter specify context models. zpaq
+compresses by predicting bits one at a time and arithmetic coding.
+Predictions are performed by a chain of context models, each taking
+a context (some set of past input bits or their hash) and possibly
+the predictions of other components as input. The final component
+in the chain is used to assign optimal length codes. The model, along
+with code to reverse any preprocessing steps, is saved in the archive
+as a program written in ZPAQL, as described in the ZPAQ specification
+and in libzpaq.h. Each letter describes a context model as follows:
 
   c - Context model (CM or ICM).
   i - ISSE chain.
@@ -312,181 +357,115 @@ are as follows:
   c
 
 N1 is 0 for an ICM and 1..256 to specify a CM with limit argument N1-1.
-Higher values are better for stationary sources. Default is 0.
+Higher values are better for stationary sources. A CM maps a context
+has directly to a prediction and has an update rate that decreases with
+higher N1. An ICM maps a context to a bit history and then to a prediction.
+An ICM adapts rapidly to different data types or to sorted data.
 
 N2 in 1..255 includes (offset mod N2) in the context hash. N2 in 1000..1255
 includes the distance to the last occurrence of N2-1000 in the context
-hash. The default is 0 which includes none of these contexts.
+hash.
 
 N3,... in 0..255 specifies a list of byte context masks reading back from
 the most recently coded byte. Each mask is ANDed with the context byte
 before hashing. a value of 1000 or more is equivalent to a sequence
 of N-1000 zeros. Only the last 65536 bytes of context are saved.
-For method M = 2 only, N3,... in 256..511 specifies either the LZ77 parse
-state if a match/literal code or match offset byte is expected,
-or else a literal byte ANDed with the low 8 bits as with 0..255.
+For byte aligned LZ77 only, N3,... in 256..511 specifies either the LZ77
+parse state if a match/literal code or match offset byte is expected,
+or else a literal byte ANDed with the low 8 bits as with 0..255. For example,
+-method x4,6,8,0,4,24,12,16c0,0,511 specifies E8E9 + byte aligned LZ77 (6),
+and an order 1 ICM context model that includes the LZ77 parse state.
 
   i
 
 ISSE chain. Each ISSE takes a prediction from the previous component
-as input. There must be a previous component. The arguments N,...
+as input and adjusts it according to the bit history of the specified
+context. There must be a previous component. The arguments N,...
 specify an increase of N in the context order from previous component's
 context, which is hashed together with the most recently coded bytes.
+For example, -method x4,3ci1,1,2 specifies a 16 MB block (4), BWT (3),
+followed by an order 0 ICM (c) and an ISSE chain of 3 components with
+context orders 1, 2, and 4.
 
   a
 
-Specifies a MATCH. The context hash is computed as hash := hash*N1+c+1
-where c is the most recently coded byte. The range of N1 is 0..255 and
-the default is 24, which gives an order 8 context for a block size
-of 2^24. N2 and N3 specify how many times to halve the memory usage
-of the buffer and hash table, respectively. The default for each is
-the block size.
+Specifies a MATCH. A MATCH maintains a history buffer and a hash table
+index to quickly find the most recent occurrence of the current context
+and predict whatever bit follows. If a prediction fails, then it makes
+no further predictions for the rest of the byte and then it looks up
+the context hash on the next boundary. The hash is computed as the
+xN1 + 18 - N3 low bits of hash := hash*N1+c+1 where c is the most recently
+coded byte and xN1 is the block size as specified by x. N2 and N3 specify
+how many times to halve the memory usage of the buffer and hash table,
+respectively. For example, -method x4,0a24,0,1 specifies a 16 MB block
+for compression (x4) with no preprocessing (0). The match model uses
+a multiplier of 24, a history buffer the same size as the compression
+buffer (0), and a hash table using half as much memory (1). This means
+that the hash table index is 4 + 18 - 1 = 21 bits. The multiplier of 24
+when written in binary has 3 trailing 0 bits. Thus, it computes a hash
+of order 21/3 = 7. A high order match is most useful when mixed with
+other low-order context models. Default is a24,0,0
 
   m
 
-Specifies a MIX. The input is all previous components. N1 is the context
-size in bits. The context is not hashed. If N1 is not a multiple of 8
-then the low bits of the oldest byte are discarded. The default is 8.
-N2 specifies the update rate. The default is 24.
+Specifies a MIX. A MIX does weighted averaging of all previously specified
+components and adapts the weights in favor of the most accurate ones.
+The mixing weights can be selected by a (usually small) context for
+better compression.
+
+N1 is the context size in bits. The context is not hashed. If N1 is not a
+multiple of 8 then the low bits of the oldest byte are discarded.
+A good value is 0, 8, or 16. N2 specifies the update rate. A good value
+is around 16 to 32. For example, -method x6,0ci1,1,1m8,24 specifies
+64 MB blocks, no preprocessing, an order 0-1-2-3 ICM-ISSE chain with a
+final mixer taking all other components as input, order 0 (bitwise order 8)
+context, and a learning rate of 24. Default is m8,24.
 
   t
 
-Specifies a MIX2. The input is the previous 2 components. N1 and N2
-are the same as MIX.
+Specifies a MIX2. The input is only the previous 2 components. N1 and N2
+are the same as MIX. For example,
+-method x6,0ci1,1,1m8,10m16,32t0,24 specifies the previous model with
+2 mixers taking different contexts with different learning rates, and
+then mixing both of them together with no context and a learning rate of 24.
+Default is t8,24.
 
   s
 
-Specifies an SSE. The input is the previous component. N1 is the context
+Specifies an SSE. An SSE, like an ICM, uses a context to adjust the
+prediction of the previous component, but does so using the direct
+context (via a 2-D lookup table of the quantized and intertolated
+prediction) rather than a linear adjustment based on the bit history.
+Thus, it has more parameters, making a smaller context more appropriate.
+
+The input is the previous component. N1 is the context
 size in bits as in a MIX or MIX2. N2 and N3 are the start and limit
-arguments. The default is 8,32,255.
+arguments, where higher values specify lower initial and final learning
+rates. Default is s8,32,255.
 
   w
 
 Word-model ICM-ISSE chain for modeling text. N1 is the length of the
 chain, with word-level context orders of 0..N1-1. A word is defined
 as a sequence of characters in the range N2..N2+N3-1 after ANDing
-with N4. The default is 1,65,26,223, representing the set [A-Za-z].
+with N4. For Default is w1,65,26,223,20 represents the set [A-Za-z]
+using a context hash multiplier of 20.
 
-If the argument to -method does not start with a digit, then use the
-ZPAQL model in the file config.cfg. ZPAQL is described in libzpaq.h.
-Pre-processing (PCOMP section) is not supported. Numeric arguments
-($1..$9) are not supported and default to 0. Filename extension .cfg
-will be appended if not present.
+  f<cfg>
 
-  -summary N
+Specifies a custom configuration file containing ZPAQL code.
+The ZPAQL language is described in libzpaq.h. N1..N9 are passed
+as arguments $1..$9, except that $1 may be reduced such that
+the actual block size is at most 2^$1 bytes.
+If there is a post-processor (PCOMP) section, then
+it must correcty invert any preprocessing steps specified by the N2
+argument to x. The PCOMP argument, normally the name of an external
+preprocessor command, is ignored. The .cfg filename extension is optional.
+Component specifications other than x are ignored.
 
-When listing contents, show only the top N files, directories, and
-filename extensions by total size. The default is 20. Also show
-a table of deduplication statistics and a table of version dates.
-
-  -since N
-
-List only versions N and later. If N is negative then list only the
-last -N updates. Default is 0 (all).
-
-  -above N
-
-List only files at least N bytes in size. Default is -1 (all including
-unknown sizes).
-
-  -all
-
-List all versions of each file, including deletions. The default is to
-list only the latest version, or not list it if it is deleted.
-
-
-ARCHIVE FORMAT
-
-Data is compressed in the journaling format described in section 8
-of http://mattmahoney.net/dc/zpaq201.pdf
-However, zpaq can extract any conforming archive including streaming
-format. All blocks include locator tags, file names, comments, and
-SHA-1 hashes, although they are not required to extract.
-
-The c (version header), and h (hash table) blocks are stored with
-method 0. The i blocks (index) are split into blocks of about 16 KB
-(to reduce losses in case of archive damage) and compressed with method 1.
-The d (data) blocks are compressed depending on the selected method.
-
-Updates are transacted by writing -1 for the value of csize in the c block,
-then appending the other blocks, and finally committing the update by
-rewriting csize with the total size of the d blocks. If an error occurs
-during update or if it is interrupted, then the -1 signals the end of
-valid data in the archive. The next update will overwrite this block and
-all subsequent data.
-
-For deduplication, files are fragmented by a rolling hash that depends
-on the last 32 bytes that are not predicted by an order-1 context and
-selected with probability 2^-16, with a minimum size of 4096 or EOF,
-whichever is first, and a maximum size of 520192 bytes. The hash is
-initially 0 and updated for each byte c:
-
-  hash := (hash + c + 1) * 314159265 (mod 2^32)  if c is predicted,
-  hash := (hash + c + 1) * 271828182 (mod 2^32)  if c is not predicted.
-
-and a boundary occurs after byte c if hash < 65536. c is predicted
-if the previous occurrence of the byte before c is also followed by c
-(or 0 if the context appears for the first time in the fragment).
-If the SHA-1 hash of the fragment matches one already compressed,
-then the fragments are assumed to be identical and stored only once.
-
-The number of predicted and mispredicted bytes in each block are counted.
-For methods 1 through 4, if the fraction of predicted bytes is less
-than 1/16, 1/32, 1/64, 1/128 respectively, then the block is assumed
-to be not compressible and is stored as with method 0. Methods 5 through 9
-always compress.
-
-Files are sorted by filename extension (like ".exe", ".html", ".jpg")
-and then lexicographically by name. Non-matching fragments are packed into
-blocks of about 16 MB and compressed in parallel by separate threads
-and appended to the archive. Blocks are packaged into a transacted update
-consisting of a temporary header, compressed blocks, and compressed
-index listing fragment hashes and sizes and a list of added and deleted
-files. For each added file, the date, attributes, and list of fragment
-indexes is stored.
-
-Each transaction header stores the date of the update and compressed data
-size. The size is temporarily set to an invalid value (-1) and updated as the
-last step. If -add encounters an error or is interrupted by the
-user with Ctrl-C, resulting in an invalid header followed by corrupted
-data, then zpaq will interpret the invalid value as the end of the
-archive. It will ignore anything that follows, and the next -add command
-will overwrite it.
-
-Method 0 deduplicates file fragments but does not otherwise compress.
-Methods 1e through 9e preprocess the input block with a E8E9 transform
-before compression, while 1n through 9n do not.
-
-Method 1 is LZ77 using variable length bit codes without context
-modeling. Literals are coded as 2 bits 00, followed by the literal
-length as an interleaved Elias Gamma code, followed by the uncompressed
-literals. An n-bit binary number is coded in 2n-1 bits by dropping the
-leading 1, putting a 1 in front of all other bits, and appending a 0,
-e.g. abcd -> 1,b,1,c,1,d,0.
-
-A match with an m-bit offset and n-bit length is coded by giving
-the length of m (01000..11111 -> 0..23), then 2n-3 interleaved bits
-for the length (4 or more, with the last 2 bits coded directly), and m
-bits of the offset (1..16777215).
-
-Matches are found by indexing a hash of the next 4 bytes in the
-input buffer into a table of size 4M which is grouped into 512K
-buckets of 8 pointers each. The longest match is coded, provided
-the length is at least 4, or 5 if the offset > 64K and the last
-output was a literal. Ties are broken by favoring the smaller offset.
-Bucket elements are selected for replacement using the low 3 bits
-of the output count.
-
-Method 2 is also LZ77, but the codes are byte aligned and context
-modeled rather than coded directly. It also searches 4 order-7
-context hashes and 4 order-4 hashes, rather than 8 order-4 hashes
-like method 1. Method 2 first codes as follows, according to the
-high 2 bits of the first byte:
-
-  00 = literal of length 1..64, followed by uncompressed bytes.
-  01 = match of length 4..11 and offset 1..2048.
-  10 = match of length 1..64 and offset of 1..65536.
-  11 = match of length 1..64 and offset of 1..16777216.
+For example, -method x6,0fmax specifies 64 MB blocks, no preprocessing,
+and modeling using the external file max.cfg with $1 and $2 passed
+as 6 and 0 respectively.
 
 
 TO COMPILE:
@@ -523,6 +502,7 @@ Possible options:
   -DDEBUG    Turn on debugging checks in libzpaq, zpaq (slower).
   -DPTHREAD  Use Pthreads instead of Windows threads. Requires pthreadGC2.dll
              or pthreadVC2.dll from http://sourceware.org/pthreads-win32/
+  -Dunixtest To make -Dunix work in Windows with MinGW.
 
 */
 #define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
@@ -1244,6 +1224,14 @@ void OutputFile::write(const char* bufp, int size) {
   }
 }
 
+// Count bytes written and discard them
+struct Counter: public libzpaq::Writer {
+  int64_t pos;  // count of written bytes
+  Counter(): pos(0) {}
+  void put(int c) {++pos;}
+  void write(const char* bufp, int size) {pos+=size;}
+};
+
 ///////////////////////// NumberOfProcessors ///////////////////////////
 
 // Guess number of cores
@@ -1281,6 +1269,7 @@ int numberOfProcessors() {
 
 ////////////////////////////// StringBuffer //////////////////////////
 
+Mutex global_mutex;  // lock for large realloc()
 
 // For libzpaq output to a string
 struct StringWriter: public libzpaq::Writer {
@@ -1292,23 +1281,35 @@ struct StringWriter: public libzpaq::Writer {
 // which can be later read.
 class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
   unsigned char* p;  // allocated memory, not NUL terminated
-  size_t al;         // number of bytes allocated, al > 0, p[wpos..al-1]==0.
+  size_t al;         // number of bytes allocated, al > 0
   size_t wpos;       // index of next byte to write, wpos < al
   size_t rpos;       // index of next byte to read, rpos < wpos or return EOF.
   size_t limit;      // max size, default = -1
 
+  // Increase capacity to a without changing size
+  void reserve(size_t a) {
+    if (a<=al) return;
+    if (a>=(1u<<26)) lock(global_mutex);
+    unsigned char* q=(unsigned char*)realloc(p, a);
+    if (a>=(1u<<26)) release(global_mutex);
+    if (!q) {
+      fprintf(stderr, "StringBuffer realloc %1.0f to %1.0f at %p failed\n",
+          double(al), double(a), p);
+      error("Out of memory");
+    }
+    p=q;
+    al=a;
+  }
+
   // Enlarge al to make room to write at least n bytes.
-  void realloc(unsigned n) {
+  void lengthen(unsigned n) {
     assert(p);
     assert(wpos<al);
     if (wpos+n>limit) error("StringBuffer overflow");
     if (wpos+n<al) return;
-    while (wpos+n>=al) al=al*2+64;
-    unsigned char* q=(unsigned char*)malloc(al);
-    if (!q) throw std::bad_alloc();
-    memcpy(q, p, wpos);
-    free(p);
-    p=q;
+    size_t a=al;
+    while (wpos+n>=a) a=a*2+128;
+    reserve(a);
   }
 
   // No assignment or copy
@@ -1323,9 +1324,12 @@ public:
   // Allocate n bytes initially and make the size 0. More memory will
   // be allocated later if needed.
   StringBuffer(size_t n=0): al(n), wpos(0), rpos(0), limit(size_t(-1)) {
-    if (al<64) al=64;
+    if (al<128) al=128;
     p=(unsigned char*)malloc(al);
-    if (!p) throw std::bad_alloc();
+    if (!p) {
+      fprintf(stderr, "StringBuffer malloc(%1.0f) failed\n", double(al));
+      error("Out of memory");
+    }
   }
 
   // Set output limit
@@ -1337,18 +1341,21 @@ public:
   // Return number of bytes written.
   size_t size() const {return wpos;}
 
+  // Return number of bytes left to read
+  size_t remaining() const {return wpos-rpos;}
+
   // Reset size to 0.
   void reset() {rpos=wpos=0;}
 
   // Write a single byte.
   void put(int c) {  // write 1 byte
-    realloc(1);
+    lengthen(1);
     p[wpos++]=c;
   }
 
   // Write buf[0..n-1]
   void write(const char* buf, int n) {
-    realloc(n);
+    lengthen(n);
     memcpy(p+wpos, buf, n);
     wpos+=n;
   }
@@ -1487,7 +1494,9 @@ string itos(int64_t x, int n=1) {
 // files with date, attributes, and list of fragment pointers.
 // Methods add to, extract from, compare, and list the archive.
 
-bool quiet=false;  // -quiet option
+bool fragile=false;  // -fragile option
+int64_t quiet=0;  // -quiet option
+static const int64_t MAX_QUIET=0x7FFFFFFFFFFFFFFFLL;  // no output but errors
 
 // enum for HT::csize
 static const int64_t EXTRACTED= 0x7FFFFFFFFFFFFFFELL;  // decompressed?
@@ -1556,12 +1565,10 @@ private:
   vector<string> notfiles;  // list of prefixes to exclude
   vector<string> tofiles;   // files renamed with -to
   int64_t date;             // now as decimal YYYYMMDDHHMMSS (UT)
-  int64_t above;            // minimum file size to list
   int64_t version;          // version number or 14 digit date
   int threads;              // default is number of cores
   int since;                // First version to -list
   int summary;              // Arg to -summary
-  unsigned attr_on, attr_off;  // -attribute args
   string method;            // 0..9, default "1"
   bool force;               // -force option
   bool all;                 // -all option
@@ -1592,7 +1599,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.31 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.33 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -1610,15 +1617,15 @@ void Jidac::usage() {
   "  -to <file|dir>...    Rename external files or specify prefix\n"
   "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
   "  -force               a: Add even if unchanged. x: output clobbers\n"
-  "  -quiet               Display only errors and warnings\n"
+  "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
-  "  -method 0...9        Compress faster...better (default: 1)\n"
-  "  -attr xffffffff 0    Select attribute bits set in arg1 and not arg2\n"
+  "  -fragile             Don't add or verify checksums or recovery info\n"
+  "  -method 0...7        Compress faster...better (default: 1)\n"
   "list options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
-  "  -above N             List files N bytes or larger\n"
-  "  -all                 List all versions\n",
+  "  -all                 List all versions\n"
+  "See zpaq.cpp for more options and complete documentation.\n",
   threads);
   exit(1);
 }
@@ -1656,8 +1663,8 @@ string Jidac::unrename(const string& name) {
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
   const char* opts[]={"list","add","extract","delete","test",
-    "method","force","quiet", "summary","since","above","compare",
-    "to","not","version","until","threads","all","attributes",0};
+    "method","force","quiet","summary","since","compare",
+    "to","not","version","until","threads","all","fragile",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -1681,13 +1688,11 @@ int Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
-  quiet=force=all=false;
+  quiet=0;
+  force=all=fragile=false;
   since=0;
-  above=-1;
   summary=0;
   version=9999999999999LL;
-  attr_on=0xffffffff;
-  attr_off=0;
   threads=0; // 0 = auto-detect
   method="1";  // 0..9
   ht.resize(1);  // element 0 not used
@@ -1704,13 +1709,15 @@ int Jidac::doCommand(int argc, const char** argv) {
         files.push_back(argv[i]);
       --i;
     }
-    else if (opt=="-quiet") quiet=true;
+    else if (opt=="-quiet") {
+      quiet=MAX_QUIET;
+      if (i<argc-1 && isdigit(argv[i+1][0])) quiet=int64_t(atof(argv[++i]));
+    }
     else if (opt=="-force") force=true;
     else if (opt=="-all") all=true;
+    else if (opt=="-fragile") fragile=true;
     else if (opt=="-since" && i<argc-1)
       since=atoi(argv[++i]);
-    else if (opt=="-above" && i<argc-1 && isdigit(argv[i+1][0]))
-      above=int64_t(atof(argv[++i]));
     else if (opt=="-summary") {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
@@ -1728,10 +1735,6 @@ int Jidac::doCommand(int argc, const char** argv) {
       while (++i<argc && argv[i][0]!='-')
         notfiles.push_back(argv[i]);
       --i;
-    }
-    else if (opt=="-attributes" && i<argc-2) {
-      attr_on=ntoi(argv[++i]);
-      attr_off=ntoi(argv[++i]);
     }
     else if ((opt=="-version" || opt=="-until") && i<argc-1) {
       version=int64_t(atof(argv[++i]));
@@ -1756,20 +1759,12 @@ int Jidac::doCommand(int argc, const char** argv) {
     else usage();
   }
 
-  // Set threads. In 32 bit programs, limit memory to 2 GB
-  if (!threads) {
-    threads=numberOfProcessors();
-    if (sizeof(char*)<8) {
-      assert(method!="");
-      static const int limit[10]={64,64,64,20,16,8,4,2,1,0};
-      if (method[0]=='9') error("-method 9 requires 64 bit compile");
-      if (isdigit(method[0]) && threads>limit[method[0]-'0'])
-        threads=limit[method[0]-'0'];
-    }
-  }
+  // Set threads
+  if (!threads) threads=numberOfProcessors();
 
   // Add .zpaq extension to archive
-  if (size(archive)<5 || archive.substr(archive.size()-5)!=".zpaq")
+  if (archive!="" && 
+      (size(archive)<5 || archive.substr(archive.size()-5)!=".zpaq"))
     archive+=".zpaq";
 
   // Execute command
@@ -1793,7 +1788,7 @@ int64_t Jidac::read_archive(int *errors) {
   InputFile in;
   if (!in.open(archive.c_str()))
     return 0;
-  if (!quiet) {
+  if (quiet<MAX_QUIET) {
     printf("Reading archive ");
     printUTF8(archive.c_str());
     printf("\n");
@@ -1828,7 +1823,8 @@ int64_t Jidac::read_archive(int *errors) {
         block_offset=0;
         if (!d.findBlock()) break;
         pass=RECOVER;
-        if (!quiet) printf("Attempting to recover fragment tables...\n");
+        if (quiet<MAX_QUIET)
+          printf("Attempting to recover fragment tables...\n");
       }
       else
         break;
@@ -1844,11 +1840,12 @@ int64_t Jidac::read_archive(int *errors) {
         }
         comment.s="";
         d.readComment(&comment);
-        if (!quiet && pass!=NORMAL)
+        if (quiet<MAX_QUIET && pass!=NORMAL)
           printf("Reading %s %s at %1.0f\n", filename.s.c_str(),
                  comment.s.c_str(), double(block_offset));
         int64_t usize=0;  // read uncompressed size from comment or -1
         int64_t fdate=0;  // read date from filename or -1
+        int64_t fattr=0;  // read attributes from comment as wN or uN
         unsigned num=0;   // read fragment ID from filename
         const char* p=comment.s.c_str();
         for (; isdigit(*p); ++p)  // read size
@@ -1857,6 +1854,22 @@ int64_t Jidac::read_archive(int *errors) {
         for (; *p && fdate<19000000000000LL; ++p)  // read date
           if (isdigit(*p)) fdate=fdate*10+*p-'0';
         if (fdate<19000000000000LL || fdate>=30000000000000LL) fdate=-1;
+
+        // Read the comment attribute wN or uN where N is a number
+        int attrchar=0;
+        for (; true; ++p) {
+          if (*p=='u' || *p=='w') {
+            attrchar=*p;
+            fattr=0;
+          }
+          else if (isdigit(*p) && (attrchar=='u' || attrchar=='w'))
+            fattr=fattr*10+*p-'0';
+          else if (attrchar) {
+            fattr=fattr*256+attrchar;
+            attrchar=0;
+          }
+          if (!*p) break;
+        }
 
         // Test for JIDAC format. Filename is jDC<fdate>[cdhi]<num>
         // and comment ends with " jDC\x01"
@@ -1894,7 +1907,7 @@ int64_t Jidac::read_archive(int *errors) {
                       double(sha1.usize()));
               error("incorrect block size");
             }
-            if (memcmp(sha1result+1, sha1.result(), 20)) {
+            if (sha1result[0] && memcmp(sha1result+1, sha1.result(), 20)) {
               fprintf(stderr, "%s checksum error\n", filename.s.c_str());
               error("bad checksum");
             }
@@ -2014,7 +2027,7 @@ int64_t Jidac::read_archive(int *errors) {
               if (n==0) n=num;
               unsigned f=btoi(p);  // number of fragments
               if (n==num && f && f*4+8<=os.size()) {
-                if (!quiet)
+                if (quiet<MAX_QUIET)
                   printf("Recovering fragments %d-%d at %1.0f\n",
                          n, n+f-1, double(block_offset));
                 while (ht.size()<=n+f) ht.push_back(HT());
@@ -2029,7 +2042,8 @@ int64_t Jidac::read_archive(int *errors) {
 
                 // Compute hashes
                 if (sum+f*4+8==os.size()) {
-                  if (!quiet) printf("Computing hashes for %d bytes\n", sum);
+                  if (quiet<MAX_QUIET)
+                    printf("Computing hashes for %d bytes\n", sum);
                   libzpaq::SHA1 sha1;
                   p=os.c_str();
                   for (unsigned i=0; i<f; ++i) {
@@ -2046,7 +2060,7 @@ int64_t Jidac::read_archive(int *errors) {
 
             // Correct bad offsets
             assert(num>0 && num<ht.size());
-            if (!quiet && ht[num].csize!=block_offset) {
+            if (quiet<MAX_QUIET && ht[num].csize!=block_offset) {
               printf("Changing block %d offset from %1.0f to %1.0f\n",
                      num, double(ht[num].csize), double(block_offset));
               ht[num].csize=block_offset;
@@ -2081,6 +2095,7 @@ int64_t Jidac::read_archive(int *errors) {
           if (filename.s.size()>0 || first) {
             dtr.dtv.push_back(DTV());
             dtr.dtv.back().date=fdate;
+            dtr.dtv.back().attr=fattr;
             dtr.dtv.back().version=size(ver)-1;
             ++ver.back().updates;
           }
@@ -2135,7 +2150,7 @@ int64_t Jidac::read_archive(int *errors) {
 void Jidac::read_args(bool scan, bool mark_all) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
-  if (!quiet && scan && size(files)) printf("Scanning files\n");
+  if (quiet<MAX_QUIET && scan && size(files)) printf("Scanning files\n");
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.dtv.size()<1) {
       fprintf(stderr, "Invalid index entry: %s\n", p->first.c_str());
@@ -2253,14 +2268,11 @@ void Jidac::scandir(const char* filename) {
 // if eattr satisfies -attribute args.
 void Jidac::addfile(const char* filename, int64_t edate,
                     int64_t esize, int64_t eattr) {
-  unsigned attr=eattr>>8;
-  if ((attr&attr_on)==attr && (attr&attr_off)==attr_off) {
-    DT& d=dt[unrename(filename)];
-    d.edate=edate;
-    d.esize=esize;
-    d.eattr=eattr;
-    d.written=0;
-  }
+  DT& d=dt[unrename(filename)];
+  d.edate=edate;
+  d.esize=esize;
+  d.eattr=eattr;
+  d.written=0;
 }
 
 /////////////////////////////// add ///////////////////////////////////
@@ -2285,27 +2297,22 @@ void e8e9(unsigned char* buf, int n) {
 // encoded by appending it as 4 bytes LSB first.
 
 class BWTBuffer: public libzpaq::Reader {
-  enum {N=1<<24};  // array size
-  vector<unsigned char> buf;
-  unsigned rpos, n;
+  StringBuffer* inp;
 public:
-  int get() {return rpos<n ? buf[rpos++] : -1;}
+  int get() {return inp->get();}
   BWTBuffer(StringBuffer& in, bool doE8);
-  size_t size() const {return n;}  
 };
 
-BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8):
-    buf(N), rpos(0), n(in.size()) {
-  libzpaq::Array<int> w(N);
-  assert(n+5<=N);
-  memcpy(&buf[0], in.c_str(), n);
-  if (doE8) e8e9(&buf[0], n);
-  int idx=divbwt(&buf[0], &buf[0], &w[0], n);
-  assert(idx>=0 && idx<=int(n));
-  memmove(&buf[idx+1], &buf[idx], n-idx);
-  buf[idx]=255;
-  for (int i=0; i<4; ++i) buf[n+1+i]=idx>>(i*8);
-  n+=5;
+BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8): inp(&in) {
+  const int n=in.size();
+  libzpaq::Array<int> w(n+1);
+  if (doE8) e8e9(in.data(), n);
+  int idx=divbwt(in.data(), in.data(), &w[0], n);
+  assert(idx>=0 && idx<=n);
+  in.put(0);
+  memmove(in.data()+idx+1, in.data()+idx, n-idx);
+  in.data()[idx]=255;
+  for (int i=0; i<4; ++i) in.put(idx>>(i*8));
 }
 
 // LZ preprocessor for level 1 or 2 compression and e8e9 filter.
@@ -2341,174 +2348,139 @@ int nbits(unsigned x) {
   return r;
 }
 
+// Encode inbuf to buf using LZ77. args are as follows:
+// args[0] is log2 buffer size in MB.
+// args[1] is level (1=variable length, 2=byte aligned lz77) + 4 if E8E9.
+// args[2] is the minimum match length and context order.
+// args[3] is the higher context order to search first, or else 0.
+// args[4] is the log2 hash bucket size (number of searches).
+// args[5] is the log2 hash table size.
+// args[6] is the log2 min offset to increment min match after a literal.
+// args[7] is the log2 min offset to increment min match after a match.
+
 class LZBuffer: public libzpaq::Reader {
-  const unsigned char* in;    // input
+  libzpaq::Array<unsigned> ht;// hash table, confirmation in low bits
+  const unsigned char* in;    // input pointer
+  const int checkbits;        // hash confirmation size
+  const int level;            // 1=var length LZ77, 2=byte aligned LZ77
+  const unsigned htsize;      // size of hash table
   const unsigned n;           // input length
-  StringBuffer buf;           // compressed output
-  int minMatch;               // minimum match length
-  void write_literal1(unsigned i, unsigned& lit);  // level 1
-  void write_match1(unsigned len, unsigned off);
-  void write_literal2(unsigned i, unsigned& lit);  // level 2
-  void write_match2(int len, unsigned off);
+  unsigned i;                 // current location in in (0 <= i < n)
+  const unsigned minMatch;    // minimum match length
+  const unsigned minMatch2;   // second context order or 0 if not used
+  unsigned h1, h2;            // low, high order context hashes of in[i..]
+  const unsigned bucketbits;  // log bucket
+  const unsigned bucket;      // number of matches to search per hash - 1
+  const unsigned shift1, shift2;  // how far to shift h1, h2 per hash
+  const int maxMatch;         // max(minMatch, minMatch2)
+  const unsigned inclit;      // min offset to ++ minMatch after a literal
+  const unsigned incmatch;    // or after a match
   unsigned bits;              // pending output bits (level 1)
   unsigned nbits;             // number of bits in bits
-  void putb(unsigned x, int k) {  // write k bits of x
+  unsigned rpos, wpos;        // read, write pointers
+  enum {BUFSIZE=1<<14};       // output buffer size
+  unsigned char buf[BUFSIZE]; // output buffer
+
+  void write_literal(unsigned i, unsigned& lit);
+  void write_match(unsigned len, unsigned off);
+  void fill();  // encode to buf
+
+  // write k bits of x
+  void putb(unsigned x, int k) {
     x&=(1<<k)-1;
     bits|=x<<nbits;
     nbits+=k;
-    while (nbits>7) buf.put(bits&255), bits>>=8, nbits-=8;
+    while (nbits>7) {
+      assert(wpos<BUFSIZE);
+      buf[wpos++]=bits, bits>>=8, nbits-=8;
+    }
   }
-  void flush() {  // write last byte
-    if (nbits>0) buf.put(bits);
+
+  // write last byte
+  void flush() {
+    assert(wpos<BUFSIZE);
+    if (nbits>0) buf[wpos++]=bits;
     bits=nbits=0;
   }
+
+  // write 1 byte
+  void put(int c) {
+    assert(wpos<BUFSIZE);
+    buf[wpos++]=c;
+  }
+
 public:
   LZBuffer(StringBuffer& inbuf, int args[]); // input to compress
-  int get() {return buf.get();}   // return 1 byte of compressed output
-  int read(char* b, int n_) {return buf.read(b, n_);}
-  size_t size() const {return buf.size();}  
+
+  // return 1 byte of compressed output (overrides Reader)
+  int get() {
+    int c=-1;
+    if (rpos==wpos) fill();
+    if (rpos<wpos) c=buf[rpos++];
+    if (rpos==wpos) rpos=wpos=0;
+    return c;
+  }
+
+  // Read up to p[0..n-1] and return bytes read.
+  int read(char* p, int n);
 };
 
-// Write literal sequence in[i-lit..i-1], set lit=0
-// 00,u,L[u*8] = L literals
-void LZBuffer::write_literal1(unsigned i, unsigned& lit) {
-  assert(lit>=0);
-  assert(i>=0 && i<=n);
-  assert(i>=lit);
-  if (lit<1) return;
-  int ll=lg(lit);
-  assert(ll>=1 && ll<=24);
-  putb(0, 2);
-  --ll;
-  while (--ll>=0) {
-    putb(1, 1);
-    putb((lit>>ll)&1, 1);
-  }
-  putb(0, 1);
-  while (lit) putb(in[i-lit--], 8);
+// Read n bytes of compressed output into p and return number of
+// bytes read in 0..n. 0 signals EOF (overrides Reader).
+int LZBuffer::read(char* p, int n) {
+  if (rpos==wpos) fill();
+  int nr=n;
+  if (nr>int(wpos-rpos)) nr=wpos-rpos;
+  if (nr) memcpy(p, buf+rpos, nr);
+  rpos+=nr;
+  assert(rpos<=wpos);
+  if (rpos==wpos) rpos=wpos=0;
+  return nr;
 }
-
-// Write match sequence of given length and offset (off in 1..2^24)
-// jj,kkk,u,nn,m[jjkkk-8] = match length unn, offset 1m
-void LZBuffer::write_match1(unsigned len, unsigned off) {
-  assert(len>=4 && len<(1<<24));
-  assert(off>=1 && off<(1<<24));
-  int ll=lg(len);
-  assert(ll>=3 && ll<=24);
-  int lo=lg(off);
-  assert(lo>=1 && lo<=24);
-  --lo;
-  putb((lo>>3)+1, 2);
-  putb(lo&7, 3);
-  --ll;
-  while (--ll>=2) {
-    putb(1, 1);
-    putb((len>>ll)&1, 1);
-  }
-  putb(0, 1);
-  putb(len&3, 2);
-  putb(off, lo);
-}
-
-// Write literal sequence buf[i-lit..i-1], set lit=0
-void LZBuffer::write_literal2(unsigned i, unsigned& lit) {
-  while (lit>0) {
-    unsigned lit1=lit;
-    if (lit1>64) lit1=64;
-    buf.put(lit1-1);
-    for (unsigned j=i-lit; j<i-lit+lit1; ++j) buf.put(in[j]);
-    lit-=lit1;
-  }
-}
-
-// Write match sequence of given length and offset
-void LZBuffer::write_match2(int len, unsigned off) {
-  assert(minMatch>=1 && minMatch<=64);
-  assert(len>=minMatch && len<=(1<<24));
-  assert(off>0 && off<=(1<<24));
-  --off;
-  while (len>0) {  // Split long matches to len1=minMatch..minMatch+63
-    const int len1=len>minMatch*2+63 ? minMatch+63 :
-        len>minMatch+63 ? len-minMatch : len;
-    assert(len1>=minMatch && len1<minMatch+64);
-    if (off<2048 && len1<minMatch+8) {
-      buf.put(64+(len1-minMatch)*8+(off>>8));
-      buf.put(off);
-    }
-    else if (off<65536) {
-      buf.put(128+len1-minMatch);
-      buf.put(off>>8);
-      buf.put(off);
-    }
-    else {
-      buf.put(192+len1-minMatch);
-      buf.put(off>>16);
-      buf.put(off>>8);
-      buf.put(off);
-    }
-    len-=len1;
-  }
-}
-
-// Encode inbuf to buf using LZ77. args are as follows:
-// args[0] in 0..24 is log2 buffer size.
-// args[1] in 1..2 is the level: 1=variable length codes, 2=byte aligned.
-// args[2] is 'e' if E8E9 preprocess is to be done.
-// args[3] is the minimum match length and context order.
-// args[4] is the higher context order to search first, or else 0.
-// args[5] is the log2 hash bucket size (number of searches).
-// args[6] is the log2 hash table size.
-// args[7] is the log2 min offset to increment min match after a literal.
-// args[8] is the log2 min offset to increment min match after a match.
 
 LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
-    in(inbuf.data()), n(inbuf.size()),
-    buf(inbuf.size()*9/8), bits(0), nbits(0) {
-  assert(args[0]>=0 && args[0]<=24);
-  assert(args[1]==1 || args[1]==2);
-  assert(n<=(1<<24));
-  minMatch=args[3];
-
-  // Allocate hashtable ht
-  // ht[] low 24 bits points to in[i..i+order-1], high 8 bits is in[i]
-  const unsigned htsize=args[6]>args[5] ? 1<<args[6] : 1<<args[5];
-  libzpaq::Array<unsigned> ht(htsize);  // at least 1 bucket
-  unsigned h1=0, h2=0;  // low, high order context hashes of in[i..]
+    ht(1<<args[5]), in(inbuf.data()), checkbits(12-args[0]),
+    level(args[1]&3), htsize(ht.size()), n(inbuf.size()), i(0),
+    minMatch(std::max(args[2], (level==1 ? 4 : 1))),
+    minMatch2(args[3]), h1(0), h2(0),
+    bucketbits(args[4]), bucket((1<<args[4])-1), 
+    shift1(minMatch>0 ? (args[5]-1)/minMatch+1 : 1),
+    shift2(minMatch2>0 ? (args[5]-1)/minMatch2+1 : 0),
+    maxMatch(std::max(minMatch, minMatch2)),
+    inclit(1<<args[6]), incmatch(1<<args[7]), bits(0), nbits(0),
+    rpos(0), wpos(0) {
+  assert(args[0]>=0);
+  assert(args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6);
+  assert(level==1 || level==2);
 
   // e8e9 transform
-  if (args[2]=='e')
-    e8e9(inbuf.data(), n);
+  if (args[1]>4) e8e9(inbuf.data(), n);
+}
 
-  const int level=args[1];
-  assert(level==1 || level==2);
-  const int minMatch2=args[4];
-  if (level==1 && minMatch<4) minMatch=4;
-  const unsigned bucket=1<<args[5];
-  const unsigned shift1=minMatch>0 ? (args[6]-1)/minMatch+1 : 1;
-  const unsigned shift2=minMatch2>0 ? (args[6]-1)/minMatch2+1 : 0;
-  const int maxMatch=minMatch>minMatch2 ? minMatch : minMatch2;
-  const unsigned inclit=1<<args[7];
-  const unsigned incmatch=1<<args[8];
+// Encode from in to buf until end of input or buf is not empty
+void LZBuffer::fill() {
 
   // Scan the input
   unsigned lit=0;  // number of output literals pending
-  for (unsigned i=0; i<n;) {
+  const unsigned mask=(1<<checkbits)-1;
+  while (i<n && wpos*2<BUFSIZE) {
 
     // Search for longest match, or pick closest in case of tie
     // Try the longest context orders first. If a match is found, then
     // skip the lower order as a speed optimization.
-    int blen=0;  // best match length
+    unsigned blen=0;  // best match length
     unsigned bp=0;  // pointer to best match
     if (level==1 || minMatch<=64) {
       if (minMatch2>0) {
-        for (unsigned k=0; k<bucket; ++k) {
+        for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h2^k];
-          if (p && (p>>24)==in[i]) {  // compare in ht first
-            p&=0xffffff;
-            assert(i>p);
-            int len;
-            for (len=0; i+len<n && in[p+len]==in[i+len]; ++len);
-            if (len>blen || (len==blen && p>bp)) blen=len, bp=p;
+          if (p && (p&mask)==(in[i]&mask)) {
+            p>>=checkbits;
+            if (p<i && p+(1<<24)>i) {
+              unsigned l;
+              for (l=0; i+l<n && l<BUFSIZE*3 && in[p+l]==in[i+l]; ++l);
+              if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
+            }
           }
           if (blen>=128) break;
         }
@@ -2516,14 +2488,15 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
 
       // Search the lower order context
       if (!minMatch2 || blen<minMatch2) {
-        for (unsigned k=0; k<bucket; ++k) {
+        for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h1^k];
-          if (p && (p>>24)==in[i]) {
-            p&=0xffffff;
-            assert(i>p);
-            int len;
-            for (len=0; i+len<n && in[p+len]==in[i+len]; ++len);
-            if (len>blen || (len==blen && p>bp)) blen=len, bp=p;
+          if (p && (p&mask)==(in[i]&mask)) {
+            p>>=checkbits;
+            if (p<i && p+(1<<24)>i) {
+              unsigned l;
+              for (l=0; i+l<n && l<BUFSIZE*4 && in[p+l]==in[i+l]; ++l);
+              if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
+            }
           }
           if (blen>=128) break;
         }
@@ -2534,16 +2507,10 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
     // and then the match. blen is the length of the match.
     assert(i>=bp);
     const unsigned off=i-bp;  // offset
-    assert(off<=(1<<24));
-    if (off>0 && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
-      if (level==1) {
-        write_literal1(i, lit);
-        write_match1(blen, off);
-      }
-      else {
-        write_literal2(i, lit);
-        write_match2(blen, off);
-      }
+    if (off>0 && off<(1<<24)
+        && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
+      write_literal(i, lit);
+      write_match(blen, off);
     }
 
     // Otherwise add to literal length
@@ -2554,64 +2521,153 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
 
     // Update index, advance blen bytes
     while (blen--) {
+      unsigned ih=i&bucket;
+      const unsigned p=(i<<checkbits)|(in[i]&mask);
+      assert(ih<=bucket);
       if (i+maxMatch<n) {
-        const unsigned j=i+(in[i]<<24);
         if (minMatch2) {
-          ht[h2^(i&(bucket-1))]=j;
-          h2=(((h2*5)<<shift2)+(in[i+minMatch2]+1)*23456789)&(htsize-1);
+          ht[h2^ih]=p;
+          h2=(((h2*3)<<shift2)+(in[i+minMatch2]+1)*23456789)&(htsize-1);
         }
-        ht[h1^(i&(bucket-1))]=j;
+        ht[h1^ih]=p;
         h1=(((h1*3)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
       }
       ++i;
     }
+
+    // Write long literals to keep buf from filling up
+    if (lit>BUFSIZE/4)
+      write_literal(i, lit);
   }
 
-  // Write pending literals at end of block
-  if (level==1) write_literal1(n, lit);
-  if (level==2) write_literal2(n, lit);
-  flush();
+  // Write pending literals
+  assert(i<=n);
+  if (i==n) {
+    write_literal(n, lit);
+    flush();
+  }
+}
+
+// Write literal sequence in[i-lit..i-1], set lit=0
+// 00,u,L[u*8] = L literals
+void LZBuffer::write_literal(unsigned i, unsigned& lit) {
+  assert(lit>=0);
+  assert(i>=0 && i<=n);
+  assert(i>=lit);
+  if (level==1) {
+    if (lit<1) return;
+    int ll=lg(lit);
+    assert(ll>=1 && ll<=24);
+    putb(0, 2);
+    --ll;
+    while (--ll>=0) {
+      putb(1, 1);
+      putb((lit>>ll)&1, 1);
+    }
+    putb(0, 1);
+    while (lit) putb(in[i-lit--], 8);
+  }
+  else {
+    assert(level==2);
+    while (lit>0) {
+      unsigned lit1=lit;
+      if (lit1>64) lit1=64;
+      put(lit1-1);
+      for (unsigned j=i-lit; j<i-lit+lit1; ++j) put(in[j]);
+      lit-=lit1;
+    }
+  }
+}
+
+// Write match sequence of given length and offset (off in 1..2^24)
+void LZBuffer::write_match(unsigned len, unsigned off) {
+  assert(len>=minMatch && len<=(1<<24));
+  assert(off>0 && off<=(1<<24));
+
+  // jj,kkk,u,nn,m[jjkkk-8] = match length unn, offset 1m
+  if (level==1) {
+    assert(len>=4);
+    int ll=lg(len);
+    assert(ll>=3 && ll<=24);
+    int lo=lg(off);
+    assert(lo>=1 && lo<=24);
+    --lo;
+    putb((lo>>3)+1, 2);
+    putb(lo&7, 3);
+    --ll;
+    while (--ll>=2) {
+      putb(1, 1);
+      putb((len>>ll)&1, 1);
+    }
+    putb(0, 1);
+    putb(len&3, 2);
+    putb(off, lo);
+  }
+
+  // x[2]:len[6] off[x-1] 
+  else {
+    assert(level==2);
+    assert(minMatch>=1 && minMatch<=64);
+    --off;
+    while (len>0) {  // Split long matches to len1=minMatch..minMatch+63
+      const unsigned len1=len>minMatch*2+63 ? minMatch+63 :
+          len>minMatch+63 ? len-minMatch : len;
+      assert(wpos<BUFSIZE-4);
+      assert(len1>=minMatch && len1<minMatch+64);
+      if (off<2048 && len1<minMatch+8) {
+        put(64+(len1-minMatch)*8+(off>>8));
+        put(off);
+      }
+      else if (off<65536) {
+        put(128+len1-minMatch);
+        put(off>>8);
+        put(off);
+      }
+      else {
+        put(192+len1-minMatch);
+        put(off>>16);
+        put(off>>8);
+        put(off);
+      }
+      len-=len1;
+    }
+  }
 }
 
 // Generate a config file from the method argument with syntax:
-// [0..9][e|n][N1[,N2]...][{ciamtsw}[N1[,N2]]...]...
-// Write the initial digit, e|n, N1..N6 into args[1..8].
-// Or read from config.cfg file is first char is not a digit.
+// {x|s}[N1[,N2]...][{ciamtswf<cfg>}[N1[,N2]]...]...
+// Write the initial args into args[0..8].
 string makeConfig(const char* method, int args[]) {
   assert(method);
+  assert(method[0]=='x' || method[0]=='s');
 
-  // Read from config file
-  if (!isdigit(*method)) {
-    string filename=method;  // append .cfg if not already
-    int len=filename.size();
-    if (len<=4 || filename.substr(len-4)!=".cfg") filename+=".cfg";
-    FILE* in=fopen(filename.c_str(), "r");
-    if (!in) {
-      perror(filename.c_str());
-      error("Config file not found");
-    }
-    string cfg;
-    int c;
-    while ((c=getc(in))!=EOF) cfg+=(char)c;
-    fclose(in);
-    return cfg;
+  // Read "xN1,N2...N9" into args[0..8] ($1..$9)
+  args[0]=4;  // default block size 64 MB
+  args[1]=1;  // lz77 with variable length codes
+  args[2]=4;  // minimum match length
+  args[3]=0;  // secondary context length
+  args[4]=3;  // log searches
+  args[5]=24; // lz77 hash table size
+  args[6]=16; // offset length to increment min match after literal
+  args[7]=18; // offset length to increment min match after match
+  args[8]=0;
+  if (isdigit(*++method)) args[0]=0;
+  for (int i=0; i<9 && (isdigit(*method) || *method==',' || *method=='.');) {
+    if (isdigit(*method))
+      args[i]=args[i]*10+*method-'0';
+    else if (++i<9)
+      args[i]=0;
+    ++method;
   }
 
   // Generate the postprocessor
-  string hdr;
-  string pcomp;
-  assert(isdigit(*method));
-  const bool doe8=method[1]=='e';
+  string hdr, pcomp;
+  const int level=args[1]&3;
+  const bool doe8=args[1]>=4 && args[1]<=7;
 
-  // 0: no compression
-  if (*method=='0') {
-    hdr="comp 0 0 0 0 ";
-    pcomp="end\n";
-  }
-
-  // 1e or 1n: LZ77+Huffman, with or without E8E9
-  else if (*method=='1') {
-    hdr="comp 9 16 0 $1 ";
+  // LZ77+Huffman, with or without E8E9
+  if (level==1) {
+    hdr="comp 9 16 0 $1+20 ";
     pcomp=
     "pcomp lazy2 3 ;\n"
     " (r1 = state\n"
@@ -2693,7 +2749,7 @@ string makeConfig(const char* method, int args[]) {
     "    b=r 3 a= 1 a<<=b d=a         (d=1<<m)\n"
     "    a-- a&=c a+=d d=a            (d=offset=bits&((1<<m)-1)|(1<<m))\n"
     "    b=r 4 a=b a-=d c=a           (c=p=(b=ptr)-offset)\n"
-    "     "
+    "\n"
     "    (while len-- (copy and output match))\n"
     "    d=r 2 do a=d a> 0 if d--\n"
     "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++])\n";
@@ -2737,9 +2793,9 @@ string makeConfig(const char* method, int args[]) {
     "end\n";
   }
 
-  // 2e or 2n: Byte aligned LZ77, with or without E8E9
-  else if (*method=='2') {
-    hdr="comp 9 16 0 $1 ";
+  // Byte aligned LZ77, with or without E8E9
+  else if (level==2) {
+    hdr="comp 9 16 0 $1+20 ";
     pcomp=
     "pcomp lzpre c ;\n"
     "  (Decode LZ77: d=state, M=output buffer, b=size)\n"
@@ -2778,9 +2834,9 @@ string makeConfig(const char* method, int args[]) {
     "      a+=c r=a 1 a=0 r=a 2\n"
     "    else\n"
     "      a== 2 if a=c a&= 7 r=a 2 (short match)\n"
-    "        a=c a>>= 3 a-= 8 a+= $4 r=a 1\n"
+    "        a=c a>>= 3 a-= 8 a+= $3 r=a 1\n"
     "      else (3 or 4 byte match)\n"
-    "        a=c a&= 63 a+= $4 r=a 1 a=0 r=a 2\n"
+    "        a=c a&= 63 a+= $3 r=a 1 a=0 r=a 2\n"
     "      endif\n"
     "    endif\n"
     "  else\n"
@@ -2808,9 +2864,9 @@ string makeConfig(const char* method, int args[]) {
     "end\n";
   }
 
-  // 3e or 3n: BWT with or without E8E9
-  else if (*method=='3') {  // IBWT
-    hdr="comp 9 16 $1 $1 ";  // 2^$1 = block size
+  // BWT with or without E8E9
+  else if (level==3) {  // IBWT
+    hdr="comp 9 16 $1+20 $1+20 ";  // 2^$1 = block size in MB
     pcomp=
     "pcomp bwtrle c ;\n"
     "\n"
@@ -2856,52 +2912,115 @@ string makeConfig(const char* method, int args[]) {
     "        d=*b d! *d++ d=*d d-- *d=b\n"
     "      b++ forever\n"
     "    endif\n"
-    "\n"
-    "    (copy M to low 8 bits of H to reduce cache misses in next loop)\n"
-    "    b=0 do\n"
-    "      a=c a>b if\n"
-    "        d=b a=*d a<<= 8 a+=*b *d=a\n"
-    "      b++ forever\n"
-    "    endif\n"
-    "\n"
-    "    (traverse list and output or copy to M)\n"
-    "    d=r 1 b=0 do\n"
-    "      a=d a== 0 ifnot\n"
-    "        a=*d a>>= 8 d=a\n";
-    if (doe8) pcomp+=" *b=*d b++\n";
-    else      pcomp+=" a=*d out\n";
-    pcomp+=
-    "      forever\n"
-    "    endif\n"
     "\n";
-    if (doe8)  // IBWT+E8E9
+    if (args[0]<=4) {  // faster IBWT list traversal limited to 16 MB blocks
       pcomp+=
-      "    (e8e9 transform to out)\n"
-      "    d=b b=0 do (for b=0..d-1, d = end of buf)\n"
-      "      a=b a==d ifnot\n"
-      "        a+= 4 a<d if\n"
-      "          a=*b a&= 254 a== 232 if\n"
-      "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if\n"
-      "              b-- a=*b\n"
-      "              b-- a<<= 8 a+=*b\n"
-      "              b-- a<<= 8 a+=*b\n"
-      "              a-=b a++\n"
-      "              *b=a a>>= 8 b++\n"
-      "              *b=a a>>= 8 b++\n"
-      "              *b=a b++\n"
-      "            endif\n"
-      "            b=c\n"
-      "          endif\n"
-      "        endif\n"
-      "        a=*b out b++\n"
+      "    (copy M to low 8 bits of H to reduce cache misses in next loop)\n"
+      "    b=0 do\n"
+      "      a=c a>b if\n"
+      "        d=b a=*d a<<= 8 a+=*b *d=a\n"
+      "      b++ forever\n"
+      "    endif\n"
+      "\n"
+      "    (traverse list and output or copy to M)\n"
+      "    d=r 1 b=0 do\n"
+      "      a=d a== 0 ifnot\n"
+      "        a=*d a>>= 8 d=a\n";
+      if (doe8) pcomp+=" *b=*d b++\n";
+      else      pcomp+=" a=*d out\n";
+      pcomp+=
       "      forever\n"
-      "    endif\n";
-    pcomp+=
-    "  endif\n"
-    "  halt\n"
-    "end\n";
+      "    endif\n"
+      "\n";
+      if (doe8)  // IBWT+E8E9
+        pcomp+=
+        "    (e8e9 transform to out)\n"
+        "    d=b b=0 do (for b=0..d-1, d = end of buf)\n"
+        "      a=b a==d ifnot\n"
+        "        a+= 4 a<d if\n"
+        "          a=*b a&= 254 a== 232 if\n"
+        "            c=b b++ b++ b++ b++ a=*b a++ a&= 254 a== 0 if\n"
+        "              b-- a=*b\n"
+        "              b-- a<<= 8 a+=*b\n"
+        "              b-- a<<= 8 a+=*b\n"
+        "              a-=b a++\n"
+        "              *b=a a>>= 8 b++\n"
+        "              *b=a a>>= 8 b++\n"
+        "              *b=a b++\n"
+        "            endif\n"
+        "            b=c\n"
+        "          endif\n"
+        "        endif\n"
+        "        a=*b out b++\n"
+        "      forever\n"
+        "    endif\n";
+      pcomp+=
+      "  endif\n"
+      "  halt\n"
+      "end\n";
+    }
+    else {  // slower IBWT list traversal for all sized blocks
+      if (doe8) {  // E8E9 after IBWT
+        pcomp+=
+        "    (R2 = output size without EOS)\n"
+        "    a=r 2 a-- r=a 2\n"
+        "\n"
+        "    (traverse list (d = IBWT pointer) and output inverse e8e9)\n"
+        "    (C = offset = 0..R2-1)\n"
+        "    (R4 = last 4 bytes shifted in from MSB end)\n"
+        "    (R5 = temp pending output byte)\n"
+        "    c=0 d=r 1 do\n"
+        "      a=d a== 0 ifnot\n"
+        "        d=*d\n"
+        "\n"
+        "        (store byte in R4 and shift out to R5)\n"
+        "        b=d a=*b a<<= 24 b=a\n"
+        "        a=r 4 r=a 5 a>>= 8 a|=b r=a 4\n"
+        "\n"
+        "        (if E8|E9 xx xx xx 00|FF in R4:R5 then subtract c from x)\n"
+        "        a=c a> 3 if\n"
+        "          a=r 5 a&= 254 a== 232 if\n"
+        "            a=r 4 a>>= 24 b=a a++ a&= 254 a< 2 if\n"
+        "              a=r 4 a-=c a+= 4 a<<= 8 a>>= 8 b<>a a<<= 24 a+=b r=a 4\n"
+        "            endif\n"
+        "          endif\n"
+        "        endif\n"
+        "\n"
+        "        (output buffered byte)\n"
+        "        a=c a> 3 if a=r 5 out endif c++\n"
+        "\n"
+        "      forever\n"
+        "    endif\n"
+        "\n"
+        "    (output up to 4 pending bytes in R4)\n"
+        "    b=r 4\n"
+        "    a=c a> 3 a=b if out endif a>>= 8 b=a\n"
+        "    a=c a> 2 a=b if out endif a>>= 8 b=a\n"
+        "    a=c a> 1 a=b if out endif a>>= 8 b=a\n"
+        "    a=c a> 0 a=b if out endif\n"
+        "\n"
+        "  endif\n"
+        "  halt\n"
+        "end\n";
+      }
+      else {
+        pcomp+=
+        "    (traverse list and output)\n"
+        "    d=r 1 do\n"
+        "      a=d a== 0 ifnot\n"
+        "        d=*d\n"
+        "        b=d a=*b out\n"
+        "      forever\n"
+        "    endif\n"
+        "  endif\n"
+        "  halt\n"
+        "end\n";
+      }
+    }
   }
-  else if (*method>='4' && *method<='9') {
+
+  // E8E9 or no preprocessing
+  else if (level==0) {
     hdr="comp 9 16 0 0 ";
     if (doe8) { // E8E9?
       pcomp=
@@ -2945,14 +3064,12 @@ string makeConfig(const char* method, int args[]) {
   // R1 = level 2 lz77 1+bytes expected until next code, 0=init
   // R2 = level 2 lz77 first byte of code
   int ncomp=0;  // number of components
-  const int membits=method[0]>='4' && method[0]<='9'
-    ? 20+method[0]-'0' : 24; // log(memory size) = 24..29
+  const int membits=args[0]+20;
   int sb=5;  // bits in last context
   string comp;
-  args[1]=method[0]-'0';  // base method 0..9
   string hcomp="hcomp\n"
     "c-- *c=a a+= 255 d=a *d=c\n";
-  if (args[1]==2) {  // put level 2 lz77 parse state in R1, R2
+  if (level==2) {  // put level 2 lz77 parse state in R1, R2
     hcomp+=
     "  (decode lz77 into M. Codes:\n"
     "  00xxxxxx = literal length xxxxxx+1\n"
@@ -2969,7 +3086,8 @@ string makeConfig(const char* method, int args[]) {
     "  endif endif\n"
     "  r=a 1  (R1 = 1+expected bytes to next code)\n";
   }
-  method+=1;
+
+  // Generate the context model
   while (*method && ncomp<254) {
 
     // parse command C[N1[,N2]...] into v = {C, N1, N2...}
@@ -2987,30 +3105,19 @@ string makeConfig(const char* method, int args[]) {
       }
     }
 
-    // n|e4,0,3,22: LZ77 params. Copy into args[2..6]
-    if (v[0]=='n' || v[0]=='e') {
-      if (v.size()<=1) v.push_back(4);
-      if (v.size()<=2) v.push_back(0);
-      if (v.size()<=3) v.push_back(3);
-      if (v.size()<=4) v.push_back(24);
-      if (v.size()<=5) v.push_back(16);
-      if (v.size()<=6) v.push_back(18);
-      for (int i=0; i<7; ++i) args[i+2]=v[i];
-    }
-
     // c: context model
     // N1: 0=ICM 1..256=CM limit N1-1
     // N2: 1..255=offset mod N2. 1000..1255=distance to N2-1000
-    // N3...: 0..255=byte mask. 1000+=run of N3-1000 zeros.
+    // N3...: 0..255=byte mask + 256=lz77 state. 1000+=run of N3-1000 zeros.
     if (v[0]=='c') {
       while (v.size()<3) v.push_back(0);
       comp+=itos(ncomp)+" ";
       sb=11;  // count context bits
-      if (v[2]<512) sb+=nbits(v[2]);
+      if (v[2]<256) sb+=nbits(v[2]);
       else sb+=6;
       if (args[1]==2) sb+=8;
       for (unsigned i=3; i<v.size(); ++i)
-        if (v[i]<256) sb+=nbits(v[i])*3/4;
+        if (v[i]<512) sb+=nbits(v[i])*3/4;
       if (sb>membits) sb=membits;
       if (v[1]==0) comp+="icm "+itos(sb-6)+"\n";
       else comp+="cm "+itos(sb-2)+" "+itos(v[1]-1)+"\n";
@@ -3123,7 +3230,7 @@ string makeConfig(const char* method, int args[]) {
       ++ncomp;
     }
 
-    // w1,65,26,223: ICM-ISSE chain of length N1 with word contexts,
+    // w1,65,26,223,20: ICM-ISSE chain of length N1 with word contexts,
     // where a word is a sequence of c such that c&N4 is in N2..N2+N3-1.
     // Word is hashed by: hash := hash*N5+c+1
     if (v[0]=='w') {
@@ -3152,76 +3259,140 @@ string makeConfig(const char* method, int args[]) {
       sb=membits;
       ++ncomp;
     }
+
+    // Read from config file and ignore rest of command
+    if (v[0]=='f') {
+      string filename=method;  // append .cfg if not already
+      int len=filename.size();
+      if (len<=4 || filename.substr(len-4)!=".cfg") filename+=".cfg";
+      FILE* in=fopen(filename.c_str(), "r");
+      if (!in) {
+        perror(filename.c_str());
+        error("Config file not found");
+      }
+      string cfg;
+      int c;
+      while ((c=getc(in))!=EOF) cfg+=(char)c;
+      fclose(in);
+      return cfg;
+    }
   }
   return hdr+itos(ncomp)+"\n"+comp+hcomp+"halt\n"+pcomp;
 }
 
-// Compress from in to out in 1 block. method is "0".."9" with extra
-// parameters to describe specific algorithms. filename is saved in the
-// segment header. hits is number of bytes of in predicted in an order 1
-// context (indicating compressibility) or -1 if unknown.
-// Return modified method based on analyzing input.
+// Compress from in to out in 1 segment in 1 block using the algorithm
+// descried in method. If method begins with a digit then choose
+// a method depending on type. Save filename and comment
+// in the segment header. If comment is 0 then the default is the input size
+// as a decimal string, plus " jDC\x01" for a journaling method (method[0]
+// is not 's'). type is set as follows: bits 9-2 estimate compressibility
+// where 0 means random. Bit 1 indicates x86 (exe or dll) and bit 0 
+// indicates English text.
 string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
-                     const char* filename=0, int hits=-1) {
+                     const char* filename=0, const char* comment=0,
+                     unsigned type=512) {
   assert(in);
   assert(out);
   assert(method!="");
-  assert(filename && *filename);
-  const int n=in->size();  // input size
-  assert(method[0]!='1' || n<(1<<24));
-  assert(method[0]!='2' || n<(1<<24));
-  assert(method[0]!='3' || n<=(1<<24)-257);
+  const unsigned n=in->size();  // input size
+  const int arg0=method.size()>1
+      ? atoi(method.c_str()+1) : std::max(lg(n+4095)-20, 0);  // block size
+  assert((1u<<(arg0+20))>=n+4096);
 
   // Expand default methods
-  if (method.size()==1 && isdigit(method[0])) {
-
-    // Test whether block should be compressed or stored
-    if (hits<0 || n<1) hits=500;
-    else hits=int(1000.0*hits/n);  // normalize to 0..1000
-    if (method.size()==1 && method[0]>='1' && method[0]<='4'
-        && (hits<<(method[0]-'0'))<128)
-      method="0";
-
-    // Analyze the data
-    const int NR=1<<12;
-    int ct[256]={0};  // byte count
-    int pt[256]={0};  // position of last occurrence
-    int r[NR]={0};    // count repetition gaps of length r
-    const unsigned char* p=in->data();
-    if (method[0]>'0') {
-      for (int i=0; i<n; ++i) {
-        ++ct[p[i]];
-        const int k=i-pt[p[i]];
-        if (k>0 && k<NR) ++r[k];
-        pt[p[i]]=i;
-      }
-    }
-
-    // test for x86 (to apply e8e9 transform)
-    if (ct[139]>ct[138]+ct[140] &&
-        ct[141]>ct[140]+ct[142] &&
-        ct[232]*2>ct[234]*3)
-      method+="e";  // x86 detected
-    else
-      method+="n";
+  if (isdigit(method[0])) {
+    const int level=method[0]-'0';
+    assert(level>=0 && level<=9);
 
     // build models
-    if (method[0]=='1')
-      method+="4,0,3,24,16,18";
-    else if (method[0]=='2')
-      method+="8,0,4,24,16,24c0,0,511";
-    else if (method[0]=='3')
-      method+="ci1";
-    else if (method[0]=='4')
-      method+="ci1,1,1,1,2am";
-    else if (method[0]>'4') {
+    const int doe8=(type&2)*2;
+    method="x"+itos(arg0);
+    if (level==0)
+      method+=",0";
+    else if (level==1) {
+      if (type<40) method+=",0";
+      else {
+        method+=","+itos(1+doe8)+",4";
+        if      (type<80)  method+=",0,1,15";
+        else if (type<128) method+=",0,2,16";
+        else if (type<256) method+=",0,2,22";
+        else               method+=",0,3,24";
+        method+=",16,18";
+      }
+    }
+    else if (level==2) {
+      if (type<32) method+=",0";
+      else {
+        method+=","+itos(1+doe8)+",4";
+        if      (type<64)  method+=",0,1,16";
+        else if (type<96)  method+=",0,2,24";
+        else if (type<128) method+=",0,3,24";
+        else if (type<256) method+=",8,3,24";
+        else               method+=",8,4,24";
+        method+=",16,18";
+      }
+    }
+    else if (level==3) {
+      if (type<16)      method+=",0";
+      else if (type<48) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
+      else              method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+    }
+    else if (level==4) {
+      if (type<12)      method+=",0";
+      else if (type<24) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
+      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+      else              method+=","+itos(3+doe8)+"ci1";
+    }
+    else if (level==5) {
+      if (type<12)      method+=",0";
+      else if (type<24) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
+      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+      else {  // try LZ77 and BWT and pick the smaller
+        StringBuffer in2, out1, out2;
+        string method1=method+","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+        string method2=method+","+itos(3+doe8)+"ci1";
+        in2.write(in->c_str(), in->size());
+        compressBlock(in,   &out1, method1, filename, comment, type);
+        compressBlock(&in2, &out2, method2, filename, comment, type);
+        if (out1.size()<out2.size()) {
+          out->write(out1.c_str(), out1.size());
+          return method1;
+        }
+        else {
+          out->write(out2.c_str(), out2.size());
+          return method2;
+        }
+      }
+    }
+    else if (level==6) {
+      if (type<24)      method+=","+itos(1+doe8)+",4,0,3,24,16,18";
+      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+      else {
+        method+=","+itos(doe8)+"ci1,1,1,1,2a";
+        if (type&1) method+="w";
+        method+="m";
+      }
+    }
+    else if (level==7) {
 
       // Model text files
-      int text=ct[32];
-      for (int i='a'; i<='z'; ++i) text+=ct[i];
-      if (text>n/4) method+="w2c0,1010,255i1";
+      method+=","+itos(doe8);
+      if (type&1) method+="w2c0,1010,255i1";
       else method+="w1i1";
       method+="c256ci1,1,1,1,1,1,2a";
+
+      // Analyze the data
+      const int NR=1<<12;
+      int pt[256]={0};  // position of last occurrence
+      int r[NR]={0};    // count repetition gaps of length r
+      const unsigned char* p=in->data();
+      if (level>0) {
+        for (unsigned i=0; i<n; ++i) {
+          const int k=i-pt[p[i]];
+          if (k>0 && k<NR) ++r[k];
+          pt[p[i]]=i;
+        }
+      }
 
       // Add periodic models
       int n1=n-r[1]-r[2]-r[3];
@@ -3246,6 +3417,8 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       }
       method+="c0,2,0,255i1c0,3,0,0,255i1c0,4,0,0,0,255i1mm16ts19t0";
     }
+    else 
+      error("method must be 0..7, x, or s");
   }
 
   // Get hash of input
@@ -3254,55 +3427,58 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   try {
     libzpaq::SHA1 sha1;
     const char* sha1ptr=0;
-    for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
-      sha1.put(*p);
-    sha1ptr=sha1.result();
+    if (!fragile) {
+      for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
+        sha1.put(*p);
+      sha1ptr=sha1.result();
+    }
+
+    // Get config
+    config=makeConfig(method.c_str(), args);
+    assert(n<=(0x100000u<<args[0])-4096);
 
     // Compress in to out using config
-    config=makeConfig(method.c_str(), args);
     libzpaq::Compressor co;
     co.setOutput(out);
 #ifdef DEBUG
-    co.setVerify(true);
+    if (!fragile) co.setVerify(true);
 #endif
     StringBuffer pcomp_cmd;
-    co.writeTag();
-
-    // For methods 1..3 use the smallest buffer size possible as $1
-    if (method[0]>='1' && method[0]<='3' && n>0) {
-      args[0]=lg(n-1+257*(method[0]=='3'));
-      assert(args[0]>=0 && args[0]<=24);
-      assert(method[0]!='3' || args[0]>=9);
-    }
-
-    // Compress with appropriate preprocessor depending on method
+    if (!fragile) co.writeTag();
     co.startBlock(config.c_str(), args, &pcomp_cmd);
-    string cs=itos(n)+" jDC\x01";
+    string cs=itos(n);
+    if (method[0]!='s') cs+=" jDC\x01";
+    if (comment) cs=comment;
     co.startSegment(filename, cs.c_str());
-    if (method[0]=='1' || method[0]=='2') {  // preprocess with built-in LZ77
+    if (args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6) {  // LZ77
       LZBuffer lz(*in, args);
       co.setInput(&lz);
       co.compress();
     }
-    else if (method[0]=='3') {  // preprocess with built-in BWT
-      BWTBuffer bwt(*in, args[2]=='e');
+    else if (args[1]==3 || args[1]==7) {  // BWT
+      BWTBuffer bwt(*in, args[1]==7);
       co.setInput(&bwt);
       co.compress();
     }
-    else {  // compress method 4 with e8e9 else without preprocessing
-      if (args[2]=='e') e8e9(in->data(), in->size());
+    else {  // compress with e8e9 or no preprocessing
+      if (args[1]>=4 && args[1]<=7)
+        e8e9(in->data(), in->size());
       co.setInput(in);
       co.compress();
     }
     in->reset();
 #ifdef DEBUG  // verify pre-post processing are inverses
-    int64_t outsize;
-    const char* sha1result=co.endSegmentChecksum(&outsize);
-    assert(sha1result);
-    if (memcmp(sha1result, sha1ptr, 20)!=0) {
-      fprintf(stderr, "pre size=%d post size=%1.0f method=%s\n",
-              n, double(outsize), method.c_str());
-      error("Pre/post-processor test failed");
+    if (fragile)
+      co.endSegment(0);
+    else {
+      int64_t outsize;
+      const char* sha1result=co.endSegmentChecksum(&outsize);
+      assert(sha1result);
+      if (memcmp(sha1result, sha1ptr, 20)!=0) {
+        fprintf(stderr, "pre size=%d post size=%1.0f method=%s\n",
+                n, double(outsize), method.c_str());
+        error("Pre/post-processor test failed");
+      }
     }
 #else
     co.endSegment(sha1ptr);
@@ -3333,10 +3509,10 @@ struct CJ {
   StringBuffer in, out;  // uncompressed and compressed data
   string filename;       // to write in filename field
   string method;         // compression level or "" to mark end of data
-  int hits;              // compressibility
+  int type;              // redundancy*4 + exe*2 + text
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
-  CJ(): state(EMPTY), in(1<<24), out(1<<24), hits(-1) {}
+  CJ(): state(EMPTY), type(512) {}
 };
 
 // Instructions to a compression job
@@ -3378,7 +3554,7 @@ public:
 
 // Write s at the back of the queue. Signal end of input with method=-1
 void CompressJob::write(StringBuffer& s, const char* fn, string method,
-                        int hits) {
+                        int type) {
   for (unsigned k=(method=="")?qsize:1; k>0; --k) {
     empty.wait();
     lock(mutex);
@@ -3387,7 +3563,7 @@ void CompressJob::write(StringBuffer& s, const char* fn, string method,
       if (q[j=(i+front)%qsize].state==CJ::EMPTY) {
         q[j].filename=fn?fn:"";
         q[j].method=method;
-        q[j].hits=hits;
+        q[j].type=type;
         q[j].in.reset();
         q[j].in.swap(s);
         q[j].state=CJ::FULL;
@@ -3437,12 +3613,13 @@ ThreadReturn compressThread(void* arg) {
       }
       release(job.mutex);
       string m=compressBlock(&cj.in, &cj.out, cj.method, cj.filename.c_str(),
-                             cj.hits);
+                             0, cj.type);
       lock(job.mutex);
-      if (!quiet)
-        printf("Job %d: [%d-%d] %d -> %d (%1.3f s), -m %s\n",
+      if (quiet<=insize)
+        printf("Job %d: [%d-%d] %d -> %d (%1.3f s), %d%c -m %s\n",
                jobNumber+1, start, start+frags-1, insize,
-               int(cj.out.size()), (mtime()-now)*0.001, m.c_str());
+               int(cj.out.size()), (mtime()-now)*0.001,
+               cj.type/4, " teb"[cj.type&3], m.c_str());
       cj.in.reset();
       cj.state=CJ::COMPRESSED;
       cj.compressed.signal();
@@ -3562,7 +3739,34 @@ bool compareFilename(DTMap::iterator ap, DTMap::iterator bp) {
 // Add or delete files from archive
 void Jidac::add() {
 
-  // Get transaction date
+  // Set block size
+  assert(method!="");
+  unsigned blocksize=(1<<24)-4096;
+  if (method.size()>1 && isdigit(method[1]))
+    blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+
+  // Read archive index list into ht, dt, ver.
+  const int64_t header_pos=
+      archive!="" && exists(archive) ? read_archive() : 0;
+  if (header_pos==0 && quiet<MAX_QUIET) {
+    printf("Creating new archive ");
+    printUTF8(archive.c_str());
+    printf("\n");
+  }
+
+  // Make list of files to add or delete
+  read_args(command=="-add");
+
+  // Sort the files to be added by filename extension
+  vector<DTMap::iterator> vf;
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+    if (p->second.edate && (force || p->second.dtv.size()==0
+       || p->second.edate!=p->second.dtv.back().date))
+    vf.push_back(p);
+  }
+  std::sort(vf.begin(), vf.end(), compareFilename);
+
+  // Get transaction date for a journaling update
   time_t now=time(NULL);
   tm* t=gmtime(&now);
   date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
@@ -3570,12 +3774,85 @@ void Jidac::add() {
   if (now==-1 || date<20120000000000LL || date>30000000000000LL)
     error("date is incorrect");
 
-  // Read archive index list into ht, dt, ver.
-  const int64_t header_pos=exists(archive) ? read_archive() : 0;
-  if (header_pos==0 && !quiet) {
-    printf("Creating new archive ");
+  // Open archive to append
+  if (quiet<MAX_QUIET) {
+    printf("Appending to archive ");
     printUTF8(archive.c_str());
-    printf("\n");
+    printf(" with date %s\n", dateToString(date).c_str());
+  }
+  OutputFile out;
+  Counter counter;
+  libzpaq::Writer* outp=0;  // pointer to output
+  if (archive=="")
+    outp=&counter;
+  else {
+    if (!out.open(archive.c_str())) error("Archive open failed");
+    int64_t archive_size=out.tell();
+    if (archive_size!=header_pos) {
+      if (quiet<MAX_QUIET)
+        printf("Archive truncated from %1.0f to %1.0f bytes\n",
+               double(archive_size), double(header_pos));
+      out.truncate(header_pos);
+    }
+    outp=&out;
+  }
+  int64_t inputsize=0;  // total input size
+
+  // Append in streaming mode. Each file is a separate block. Large files
+  // are split into blocks of size blocksize.
+  if (method[0]=='s' && command=="-add") {
+    StringBuffer sb(blocksize+4096-128);
+    int64_t offset=archive=="" ? 0 : out.tell();
+    for (unsigned fi=0; fi<vf.size(); ++fi) {
+      DTMap::iterator p=vf[fi];
+      if (p->first.size()>0 && p->first[p->first.size()-1]!='/') {
+        int64_t start=mtime();
+        InputFile in;
+        if (in.open(p->first.c_str())) {
+          int64_t i=0;
+          while (true) {
+            int c=in.get();
+            if (c!=EOF) ++i, sb.put(c);
+            if (c==EOF || sb.size()==blocksize) {
+              string filename="";
+              string comment=itos(sb.size());
+              if (i<=blocksize) {
+                filename=p->first;
+                comment+=" "+itos(p->second.edate);
+                if ((p->second.eattr&255)>0) {
+                  comment+=" ";
+                  comment+=char(p->second.eattr&255);
+                  comment+=itos(p->second.eattr>>8);
+                }
+              }
+              compressBlock(&sb, outp, method, filename.c_str(),
+                            comment.c_str());
+              assert(sb.size()==0);
+            }
+            if (c==EOF) break;
+          }
+          in.close();
+          inputsize+=i;
+          int64_t newoffset=archive=="" ? counter.pos : out.tell();
+          if (quiet<=i) {
+            printUTF8(p->first.c_str());
+            printf(" %1.0f -> %1.0f in %1.3f sec.\n", double(i),
+                   double(newoffset-offset), 0.001*(mtime()-start));
+          }
+          offset=newoffset;
+        }
+      }
+    }
+    if (quiet<MAX_QUIET) {
+      const int64_t outsize=archive=="" ? counter.pos : out.tell();
+      printf("%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
+          double(header_pos),
+          double(inputsize),
+          double(outsize-header_pos),
+          double(outsize));
+    }
+    if (archive!="") out.close();
+    return;
   }
 
   // Adjust date to maintain sequential order
@@ -3587,88 +3864,70 @@ void Jidac::add() {
     date=newdate;
   }
 
-  // Make list of files to add or delete
-  read_args(command=="-add");
-
   // Build htinv for fast lookups of sha1 in ht
   HTIndex htinv(ht);
 
-  // Open archive to append
-  if (!quiet) {
-    printf("Appending to archive ");
-    printUTF8(archive.c_str());
-    printf(" with date %s\n", dateToString(date).c_str());
-  }
-  OutputFile out;
-  if (!out.open(archive.c_str())) error("Archive open failed");
-  int64_t archive_size=out.tell();
-  if (archive_size!=header_pos) {
-    if (!quiet)
-      printf("Archive truncated from %1.0f to %1.0f bytes\n",
-             double(archive_size), double(header_pos));
-    out.truncate(header_pos);
-  }
-
   // reserve space for the header block
   const unsigned htsize=ht.size();  // fragments at start of update
-  writeJidacHeader(&out, date, -1, htsize);
-  const int64_t header_end=out.tell();
+  writeJidacHeader(outp, date, -1, htsize);
+  const int64_t header_end=archive=="" ? counter.pos : out.tell();
 
   // Start compress and write jobs
   vector<ThreadID> tid(threads);
   ThreadID wid;
-  CompressJob job(threads, &out);
-  if (!quiet) printf("Starting %d compression jobs\n", threads);
+  CompressJob job(threads, outp);
+  if (quiet<MAX_QUIET) printf("Starting %d compression jobs\n", threads);
   for (int i=0; i<threads; ++i) run(tid[i], compressThread, &job);
   run(wid, writeThread, &job);
 
-  // Sort the files to be added by filename extension
-  vector<DTMap::iterator> vf;
-  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (p->second.edate && (force || p->second.dtv.size()==0
-       || p->second.edate!=p->second.dtv.back().date))
-    vf.push_back(p);
-  }
-  std::sort(vf.begin(), vf.end(), compareFilename);
-
   // Compress until end of last file
   assert(method!="");
-  const unsigned blocksize=(method[0]>='4' && method[0]<='9')  // max block
-    ? 1<<(24+method[0]-'0'-4) : (1<<24)-257*(method[0]=='3');
   const unsigned MIN_FRAGMENT=4096;   // fragment size limits
   const unsigned MAX_FRAGMENT=520192;
-  unsigned fi=0;  // file number in vf
-  unsigned fj=0;  // fragment number in file
-  InputFile in;   // currently open input file
-  StringBuffer sb;  // block to compress
-  unsigned frags=0;  // number of fragments in sb
-  unsigned hits=0;   // number of predicted bytes in order 1 context
+  unsigned fi=0;       // file number in vf
+  unsigned fj=0;       // fragment number in file
+  InputFile in;        // currently open input file
+  StringBuffer sb;     // block to compress
+  unsigned frags=0;    // number of fragments in sb
+  unsigned redundancy=0;  // estimated bytes that can be compressed out of sb
+  unsigned text=0;     // number of fragents containing text
+  unsigned exe=0;      // number of fragments containing x86 (exe, dll)
+  const int ON=4;      // number of order-1 tables to save
+  unsigned char o1prev[ON*256]={0};  // last ON order 1 predictions
   while (fi<vf.size() || frags>0) {
 
     // Compress a block if (1) end of input, (2) block is full,
     // (3) EOF, block is almost full, and next file won't fit, or
     // (4) EOF, block is partly full and not compressible.
     // In that case, store it uncompressed.
-    const bool compressible=method[0]<'0' || method[0]>'4'
-        || (hits<<(method[0]-'0'+3))>=sb.size();
-    if (fi==vf.size() || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
+    if (fi==vf.size()
+        || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
         || (fj==0 && sb.size()>blocksize*3/4
             && sb.size()+vf[fi]->second.esize>blocksize-MAX_FRAGMENT-2048) 
-        || (fj==0 && sb.size()>blocksize/4 && !compressible)) {
+        || (fj==0 && sb.size()>blocksize/8 && redundancy<sb.size()/32)
+        || (fj==0 && sb.size()>blocksize/4 && redundancy<sb.size()/16)
+        || (fj==0 && sb.size()>blocksize/2 && redundancy<sb.size()/8)) {
 
       // Pad sb with redundant fragment size list and compress
       if (frags>0) {
         assert(frags<ht.size());
-        for (unsigned i=ht.size()-frags; i<ht.size(); ++i)
-          sb+=itob(ht[i].usize);
-        sb+=itob(ht.size()-frags);
-        sb+=itob(frags);
-        job.write(sb, ("jDC"+itos(date, 14)+"d"
-                  +itos(ht.size()-frags, 10)).c_str(), method, hits);
+        if (fragile) {
+          sb+=itob(0);  // omit first frag ID
+          sb+=itob(0);  // omit number of fragments
+        }
+        else {
+          for (unsigned i=ht.size()-frags; i<ht.size(); ++i)
+            sb+=itob(ht[i].usize);  // list of frag sizes
+          sb+=itob(ht.size()-frags);  // first frag ID
+          sb+=itob(frags);  // number of frags
+        }
+        job.write(sb,
+            ("jDC"+itos(date, 14)+"d"+itos(ht.size()-frags, 10)).c_str(),
+            method,
+            redundancy/(sb.size()/256+1)*4+(exe>frags/8)*2+(text>frags/4));
         assert(sb.size()==0);
         ht[ht.size()-frags].csize=-1;  // compressed size to fill in later
-        frags=0;
-        hits=0;
+        frags=redundancy=text=exe=0;
       }
       continue;
     }
@@ -3682,7 +3941,7 @@ void Jidac::add() {
       DTMap::iterator p=vf[fi];
       string filename=rename(p->first);
       if (filename!="" && filename[filename.size()-1]=='/') {
-        if (!quiet) {
+        if (quiet==0) {
           printf("Adding directory ");
           printUTF8(p->first.c_str());
           printf("\n");
@@ -3697,7 +3956,7 @@ void Jidac::add() {
         ++fi;
         continue;
       }
-      else if (!quiet) {
+      else if (quiet<=p->second.esize) {
         printf("%6u ", (unsigned)ht.size());
         if (p->second.dtv.size()==0 || p->second.dtv.back().date==0) {
           printf("Adding %1.0f ", double(p->second.esize));
@@ -3723,7 +3982,7 @@ void Jidac::add() {
     unsigned sz=0;  // fragment size;
     libzpaq::SHA1 sha1;
     unsigned char o1[256]={0};
-    unsigned oldhits=hits;
+    unsigned hits=0;
     while (true) {
       c=in.get();
       if (c!=EOF) {
@@ -3738,6 +3997,7 @@ void Jidac::add() {
       if (c==EOF || (h<65536 && sz>=MIN_FRAGMENT) || sz>=MAX_FRAGMENT)
         break;
     }
+    inputsize+=sz;
 
     // Look for matching fragment
     char sh[20];
@@ -3749,11 +4009,59 @@ void Jidac::add() {
       ht.push_back(HT(sh, sz, 0));
       ++frags;
       htinv.update();
+
+      // Analyze fragment for redundancy, x86, text.
+      // Test for text: letters, digits, '.' and ',' followed by spaces
+      //   and no unprintable control chars.
+      // Text for exe: 139 (mov reg, r/m) in lots of contexts.
+      // 4 tests for redundancy, measured as hits/sz. Take the highest of:
+      //   1. Successful prediction count in o1.
+      //   2. Non-uniform distribution in o1 (counted in o2).
+      //   3. Fraction of zeros in o1 (bytes never seen).
+      //   4. Fraction of matches between o1 and previous o1 (o1prev).
+      int text1=0, exe1=0;
+      int64_t h1=sz;
+      unsigned char o1ct[256]={0};  // counts of bytes in o1
+      static const unsigned char dt[256]={  // 32768/((i+1)*204)
+        160,80,53,40,32,26,22,20,17,16,14,13,12,11,10,10,
+          9, 8, 8, 8, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5,
+          4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3,
+          3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+          2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+      for (int i=0; i<256; ++i) {
+        if (o1ct[o1[i]]<255) h1-=(sz*dt[o1ct[o1[i]]++])>>15;
+        if (o1[i]==' ' && (isalnum(i) || i=='.' || i==',')) ++text1;
+        if (o1[i]>=1 && o1[i]<32 && o1[i]!=9 && o1[i]!=10 && o1[i]!=13)
+          --text1;
+        if (o1[i]==139) ++exe1;
+      }
+      exe+=exe1>=5;
+      text+=text1>=5;
+      if (sz>0) h1=h1*h1/sz; // Test 2: near 0 if random.
+      unsigned h2=h1;
+      if (h2>hits) hits=h2;
+      h2=o1ct[0]*sz/256;  // Test 3: bytes never seen or that predict 0.
+      if (h2>hits) hits=h2;
+      h2=0;
+      for (int i=0; i<256*ON; ++i)  // Test 4: compare to previous o1.
+        h2+=o1prev[i]==o1[i&255];
+      h2=h2*sz/(256*ON);
+      if (sz>=MIN_FRAGMENT) {
+        memmove(o1prev, o1prev+256, 256*(ON-1));
+        memcpy(o1prev+256*(ON-1), o1, 256);
+      }
+      if (h2>hits) hits=h2;
+      if (hits>sz) hits=sz;
+      redundancy+=hits;
     }
     else { // matched, discard
       assert(sz<=sb.size());
       sb.resize(sb.size()-sz);
-      hits=oldhits;
     }
 
     // Point file to this fragment
@@ -3788,16 +4096,16 @@ void Jidac::add() {
   assert(j==job.csize.size());
 
   // Append compressed fragment tables to archive
-  if (!quiet)
+  if (quiet<MAX_QUIET)
     printf("Updating index with %d files, %d blocks, %d fragments\n",
             int(vf.size()), j, int(ht.size()-htsize));
-  int64_t cdatasize=out.tell()-header_end;  // compressed size for header
+  int64_t cdatasize=(archive=="" ? counter.pos : out.tell())-header_end;
   StringBuffer is;
   unsigned block_start=0;
   for (unsigned i=htsize; i<=ht.size(); ++i) {
     if ((i==ht.size() || ht[i].csize>0) && is.size()>0) {  // write a block
       assert(block_start>=htsize && block_start<i);
-      compressBlock(&is, &out, "0",
+      compressBlock(&is, outp, "0",
                     ("jDC"+itos(date, 14)+"h"+itos(block_start, 10)).c_str());
       assert(is.size()==0);
     }
@@ -3817,7 +4125,7 @@ void Jidac::add() {
     if (dtr.written==0 && !dtr.edate && dtr.dtv.size()
         && dtr.dtv.back().date) {
       is+=ltob(0)+p->first+'\0';
-      if (!quiet) {
+      if (quiet<=dtr.dtv.back().size) {
         printf("Removing ");
         printUTF8(p->first.c_str());
         printf("\n");
@@ -3851,7 +4159,7 @@ void Jidac::add() {
     }
     ++p;
     if (is.size()>16000 || (is.size()>0 && p==dt.end())) {
-      compressBlock(&is, &out, "1n4,0,4,16,16,18",
+      compressBlock(&is, outp, "1",
                     ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
       assert(is.size()==0);
     }
@@ -3859,18 +4167,27 @@ void Jidac::add() {
   }
 
   // Back up and write the header
-  const int64_t archive_end=out.tell();
-  out.seek(header_pos, SEEK_SET);
-  writeJidacHeader(&out, date, cdatasize, htsize);
-  if (!quiet)
-    printf("-> %1.0f + %1.0f + %1.0f + %1.0f = %1.0f\n",
+  int64_t archive_end=0;
+  if (archive=="")
+    archive_end=counter.pos;
+  else {
+    archive_end=out.tell();
+    out.seek(header_pos, SEEK_SET);
+    writeJidacHeader(&out, date, cdatasize, htsize);
+  }
+  if (quiet<MAX_QUIET)
+    printf("%1.0f + (%1.0f -> %1.0f + %1.0f + %1.0f = %1.0f) = %1.0f\n",
            double(header_pos),
+           double(inputsize),
            double(header_end-header_pos),
            double(cdatasize),
            double(archive_end-header_end-cdatasize),
+           double(archive_end-header_pos),
            double(archive_end));
-  assert(header_end==out.tell());
-  out.close();
+  if (archive!="") {
+    assert(header_end==out.tell());
+    out.close();
+  }
 }
 
 /////////////////////////////// extract ///////////////////////////////
@@ -3887,7 +4204,7 @@ void makepath(string& path, int64_t date=0, int64_t attr=0) {
 #else
       int ok=CreateDirectory(utow(path.c_str()).c_str(), 0);
 #endif
-      if (ok && !quiet) {
+      if (ok && quiet==0) {
         printf("Created directory ");
         printUTF8(path.c_str());
         printf("\n");
@@ -3980,8 +4297,7 @@ ThreadReturn decompressThread(void* arg) {
   if (!in.open(job.jd.archive.c_str())) return 0;
   StringBuffer out;
 
-  // Look for next READY job. Streaming blocks must be extracted in
-  // sequential order in the first thread.
+  // Look for next READY job
   for (unsigned i=0; i<job.block.size(); ++i) {
     Block& b=job.block[i];
     lock(job.mutex);
@@ -4038,7 +4354,7 @@ ThreadReturn decompressThread(void* arg) {
           d.readSegmentEnd();
         }
       }
-      if (!quiet) {
+      if (quiet<=size(out)) {
         lock(job.mutex);
         printf("Job %d: [%d..%d] %1.0f -> %d (%1.3f sec)\n",
                jobNumber, b.start, b.start+b.size-1,
@@ -4051,7 +4367,7 @@ ThreadReturn decompressThread(void* arg) {
 
       // Verify fragment checksums if present
       const char* q=out.c_str();
-      for (unsigned j=b.start; j<b.start+b.size; ++j) {
+      for (unsigned j=b.start; !fragile && j<b.start+b.size; ++j) {
         libzpaq::SHA1 sha1;
         for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
         if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
@@ -4118,7 +4434,7 @@ ThreadReturn decompressThread(void* arg) {
           assert(!job.outf.isopen());
           if (dtr.written==0) {
             makepath(filename);
-            if (!quiet) {
+            if (quiet<=dtr.dtv.back().size) {
               printf("Job %d: extracting ", jobNumber);
               printUTF8(filename.c_str());
               printf("\n");
@@ -4182,8 +4498,8 @@ int Jidac::extract() {
     return 1;
   read_args(false);
 
-  // Map fragments to blocks. Mark blocks with unknown fragment sizes
-  // or total size > 0.5 GiB as streaming.
+  // Map fragments to blocks.
+  // Mark blocks with unknown or large fragment sizes as streaming.
   ExtractJob job(*this);
   vector<unsigned> hti(ht.size());  // fragment index -> block index
   int64_t usize=0;
@@ -4194,10 +4510,10 @@ int Jidac::extract() {
     }
     assert(job.block.size()>0);
     hti[i]=job.block.size()-1;
+    if (ht[i].usize<0 || ht[i].usize>(1<<24))
+      job.block.back().streaming=true;
     if (usize<0 || ht[i].usize<0) usize=-1;
     else usize+=ht[i].usize;
-    if (usize<0 || usize>(1<<29))
-      job.block.back().streaming=true;
   }
 
   // Don't clobber
@@ -4238,7 +4554,7 @@ int Jidac::extract() {
   }
 
   // Decompress archive in parallel
-  if (!quiet) printf("Starting %d decompression jobs\n", threads);
+  if (quiet<MAX_QUIET) printf("Starting %d decompression jobs\n", threads);
   vector<ThreadID> tid(threads);
   for (int i=0; i<size(tid); ++i) run(tid[i], decompressThread, &job);
 
@@ -4254,7 +4570,7 @@ int Jidac::extract() {
   for (unsigned i=0; i<job.block.size(); ++i) {
     Block& b=job.block[i];
     if (b.size==0 || !b.streaming) continue;
-    if (!quiet)
+    if (quiet<MAX_QUIET)
       printf("main:  [%d..%d] block %d\n", b.start, b.start+b.size-1, i+1);
     try {
       libzpaq::Decompresser d;
@@ -4287,7 +4603,7 @@ int Jidac::extract() {
             newfile=rename(lastfile);
             makepath(newfile);
             if (out.open(newfile.c_str())) {
-              if (!quiet) {
+              if (quiet<MAX_QUIET) {
                 printf("main: extracting ");
                 printUTF8(newfile.c_str());
                 printf("\n");
@@ -4305,7 +4621,7 @@ int Jidac::extract() {
           d.decompress();
           char sha1out[21];
           d.readSegmentEnd(sha1out);
-          if (sha1out[0] && memcmp(sha1out+1, sha1.result(), 20))
+          if (!fragile && sha1out[0] && memcmp(sha1out+1, sha1.result(), 20))
             error("checksum error");
           else {
             assert(b.start+j<ht.size());
@@ -4362,7 +4678,7 @@ int Jidac::extract() {
       }
     }
   }
-  if (!quiet || errors>0) {
+  if (quiet<MAX_QUIET || errors>0) {
     fprintf(stderr, "Extracted %u of %u files OK (%u errors)\n",
            extracted-errors, extracted, errors);
   }
@@ -4503,7 +4819,7 @@ ThreadReturn testThread(void* arg) {
         d.decompress();
         d.readSegmentEnd(sha1result);
         const int64_t dsize=sha1.usize();
-        if (!quiet) {
+        if (quiet<MAX_QUIET) {
           lock(job.mutex);
           if (sha1result[0]!=1) printf("NOT CHECKED: ");
           printf("%d/%d %s (%1.3f MB) %1.0f -> %1.0f\n",
@@ -4614,7 +4930,6 @@ void Jidac::test() {
   usize=0;
   int64_t current=0;
   vector<bool> ref(ht.size());  // true if fragment is referenced
-  read_args(false);
   DTMap::iterator largest=dt.end();
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     for (unsigned i=0; i<p->second.dtv.size(); ++i) {
@@ -4695,18 +5010,20 @@ void Jidac::test() {
   errors=0;
   int tested=0;
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (p->second.written==0 && p->second.dtv.size()
-        && p->second.dtv.back().date) {
+    for (unsigned i=0; i<p->second.dtv.size(); ++i) {
       ++tested;
       unsigned j=0;
-      for (; j<p->second.dtv.back().ptr.size(); ++j) {
-        unsigned k=p->second.dtv.back().ptr[j];
+      for (; j<p->second.dtv[i].ptr.size(); ++j) {
+        unsigned k=p->second.dtv[i].ptr[j];
         if (k<1 || k>=ht.size() || ht[k].csize!=EXTRACTED) break;
       }
-      if (j!=p->second.dtv.back().ptr.size()) {
+      if (j!=p->second.dtv[i].ptr.size()) {
         if (++errors==1)
           printf("\nDamaged files:\n");
+        printf("%d ", p->second.dtv[i].version);
         printUTF8(p->first.c_str());
+        if (i+1<p->second.dtv.size())
+          printf(" (%d'th of %d versions)", i+1, size(p->second.dtv));
         printf("\n");
       }
     }
@@ -4853,7 +5170,7 @@ void Jidac::list() {
 
   // Ordinary list
   int64_t usize=0;
-  int nfiles=0;
+  unsigned nfiles=0, shown=0;
   read_args(false, true);
   if (since<0) since+=ver.size();
   printf("\n"
@@ -4862,11 +5179,11 @@ void Jidac::list() {
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.written==0) {
       for (unsigned i=0; i<p->second.dtv.size(); ++i) {
-        if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=above
+        if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=quiet
             && (all || (i+1==p->second.dtv.size() && p->second.dtv[i].date))){
           printf("%4d ", p->second.dtv[i].version);
           if (p->second.dtv[i].date) {
-            ++nfiles;
+            ++shown;
             usize+=p->second.dtv[i].size;
             printf("%s %s %12.0f ",
                    dateToString(p->second.dtv[i].date).c_str(),
@@ -4880,9 +5197,10 @@ void Jidac::list() {
         }
       }
     }
+    if (p->second.dtv.size() && p->second.dtv.back().date) ++nfiles;
   }
-  printf("%u files. %1.0f -> %1.0f\n",
-         nfiles, double(usize), double(csize));
+  printf("%u of %u files shown. %1.0f -> %1.0f\n",
+         shown, nfiles, double(usize), double(csize));
   list_versions(csize);
 }
 
@@ -4907,6 +5225,7 @@ int main() {
 #endif
 
   int64_t start=mtime();  // get start time
+  init_mutex(global_mutex);
   int errorcode=0;
   try {
     Jidac jidac;
@@ -4916,10 +5235,11 @@ int main() {
     fprintf(stderr, "zpaq exiting from main: %s\n", e.what());
     errorcode=1;
   }
-  if (!quiet) {
+  if (quiet<MAX_QUIET) {
     printf("%1.3f seconds", (mtime()-start)/1000.0);
     if (errorcode) printf(" (with errors)");
     printf("\n");
   }
+  destroy_mutex(global_mutex);
   return errorcode;
 }
