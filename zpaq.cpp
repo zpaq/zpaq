@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.33 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.34 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -47,7 +47,7 @@ Options (may be abbreviated):
   -quiet [N]           Don't show files smaller than N (default none)
   -threads N           Use N threads (default: cores detected)
   -fragile             Don't add or verify checksums or recovery info
-  -method 0...7        Compress faster...better (default: 1)
+  -method 0...6        Compress faster...better (default: 1)
 list options:
   -summary [N]         Show top N files and types (default: 20)
   -since N             List from N'th update or last -N updates
@@ -195,7 +195,7 @@ It is not possible to completely test fragile archives. With -extract,
 checksums (if present) are not verified during extraction, which can
 be faster. Recommended only for testing.
 
-  -method 0..9
+  -method 0..6
 
 Compress faster..better. The default is -method 1. (See below for advanced
 compression options).
@@ -221,15 +221,13 @@ list only the latest version, or not list it if it is deleted.
 
 Advanced compression options:
 
-  -method {0..9|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
+  -method {0..6|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
 
 With a single digit, select compression speed, where low values are
 faster and higher values compress smaller. The default is 1.
-0 stores with deduplication but no other compression. 1 through 4 take
-longer to compress but do not affect decompression speed. 5 through 9
-are slower both to compress and decompress. N1, if present, selects
-a maximum block size of 2^(N1+20) - 4096 bytes. The default is 4
-(e.g. -method 14).
+N1, if present, selects a maximum block size of 2^(N1+20) - 4096 bytes.
+The default for methods 0, 1, x, s is 4 (16 MB, e.g. -method 14).
+The default for methods 2..5 is 6 (64 MB, e.g. -method 26).
 
 When the first character is x, select experimental compression methods.
 These are for advanced uses only. The method is described
@@ -269,20 +267,20 @@ further context modeling. Bit codes are packed LSB first and are
 interpreted as follows:
 
   00,n,L[n] = n literal bytes
-  mm,mmm,n,ll,q (mm > 00) = match of length 4n+ll, offset q
+  mm,mmm,n,ll,r,q (mm > 00) = match of length 4n+ll, offset ((q-1)<<rb)+r-1
 
 where q is written in 8mm+mmm-8 (0..23) bits with an implied leading 1 bit
 and n is written using interleaved Elias Gamma coding, i.e. the leading
 1 bit is implied, remaining bits are preceded by a 1 and terminated by
 a 0. e.g. abc is written 1,b,1,c,0. Codes are packed LSB first and
-padded with leading 0 bits in the last byte.
+padded with leading 0 bits in the last byte. r is written in
+rb = max(0, N1-4) bits, where N1 is the block size parameter.
 
-Byte oriented LZ77 with minimum match length m = N5
-with m in 1..64. Lengths and offsets are MSB first:
-00xxxxxx                            x+1 (1..64) literals follow
-01xxxyyy yyyyyyyy                   copy x+m (m..m+7)  offset y+1 (1..2048)
-10xxxxxx yyyyyyyy yyyyyyyy          copy x+m (m..m+63) offset y+1 (1..2^16)
-11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+m (m..m+63) offset y+1 (1..2^24)
+Byte oriented LZ77 with minimum match length m = N5 with m in 1..64:
+
+  00xxxxxx   x+1 (1..64) literals follow
+  yyxxxxxx   match of length x+m (m..m+63), with y+1 (2..4) bytes of
+             offset-1 to follow, MSB first.
 
 BWT sorts the block by suffix with an implied terminator of -1 encoded
 as 255. The 4 byte offset of this terminator is appended to the end
@@ -298,9 +296,9 @@ then literals are coded instead.
 N4 = context length to search first (normally N4 > N3), or 0 to skip
 this search.
 
-N5 = search for 3 * 2^N5 matches of length N4 (unless 0), then 3 * 2^N5 more
+N5 = search for 2^N5 matches of length N4 (unless 0), then 2^N5 more
 matches of length N3. The longest match is chosen, breaking ties by
-choosing the closer one. N5 must be in 0..8.
+choosing the closer one.
 
 N6 = use a hash table of 2^N6 elements to store the location of context
 hashes. It requires 4 x 2^N6 bytes of memory for compression only.
@@ -1599,7 +1597,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.33 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.34 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -1619,8 +1617,7 @@ void Jidac::usage() {
   "  -force               a: Add even if unchanged. x: output clobbers\n"
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
-  "  -fragile             Don't add or verify checksums or recovery info\n"
-  "  -method 0...7        Compress faster...better (default: 1)\n"
+  "  -method 0...6        Compress faster...better (default: 1)\n"
   "list options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
@@ -2319,22 +2316,21 @@ BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8): inp(&in) {
 // Level 1 uses variable length LZ77 codes like in the lazy compressor:
 //
 //   00,n,L[n] = n literal bytes
-//   mm,mmm,n,ll,q (mm > 00) = match of length 4n+ll, offset q
+//   mm,mmm,n,ll,r,q (mm > 00) = match 4*n+ll at offset (q<<rb)+r-1
 //
 // where q is written in 8mm+mmm-8 (0..23) bits with an implied leading 1 bit
 // and n is written using interleaved Elias Gamma coding, i.e. the leading
 // 1 bit is implied, remaining bits are preceded by a 1 and terminated by
 // a 0. e.g. abc is written 1,b,1,c,0. Codes are packed LSB first and
-// padded with leading 0 bits in the last byte.
+// padded with leading 0 bits in the last byte. r is a number with rb bits,
+// where rb = log2(blocksize) - 24.
 //
 // Level 2 is byte oriented LZ77 with minimum match length m = $4 = args[3]
 // with m in 1..64. Lengths and offsets are MSB first:
-// 00xxxxxx                            x+1 (1..64) literals follow
-// 01xxxyyy yyyyyyyy                   copy x+m (m..m+7)  offset y+1 (1..2048)
-// 10xxxxxx yyyyyyyy yyyyyyyy          copy x+m (m..m+63) offset y+1 (1..2^16)
-// 11xxxxxx yyyyyyyy yyyyyyyy yyyyyyyy copy x+m (m..m+63) offset y+1 (1..2^24)
+// 00xxxxxx   x+1 (1..64) literals follow
+// yyxxxxxx   y+1 (2..4) offset bytes follow, match length x+m (m..m+63)
 
-// return 0..32 bits in x not counting leading 0 bits = floor(log2(x))+1
+// floor(log2(x)) + 1 = number of bits excluding leading zeros (0..32)
 int lg(unsigned x) {
   for (unsigned i=0; i<32; ++i)
     if ((1u<<i)>x) return i;
@@ -2368,13 +2364,16 @@ class LZBuffer: public libzpaq::Reader {
   unsigned i;                 // current location in in (0 <= i < n)
   const unsigned minMatch;    // minimum match length
   const unsigned minMatch2;   // second context order or 0 if not used
+  const unsigned maxMatch;    // longest match length allowed
+  const unsigned maxLiteral;  // longest literal length allowed
   unsigned h1, h2;            // low, high order context hashes of in[i..]
   const unsigned bucketbits;  // log bucket
   const unsigned bucket;      // number of matches to search per hash - 1
   const unsigned shift1, shift2;  // how far to shift h1, h2 per hash
-  const int maxMatch;         // max(minMatch, minMatch2)
+  const int minMatchBoth;     // max(minMatch, minMatch2)
   const unsigned inclit;      // min offset to ++ minMatch after a literal
   const unsigned incmatch;    // or after a match
+  const unsigned rb;          // number of level 1 r bits in match code
   unsigned bits;              // pending output bits (level 1)
   unsigned nbits;             // number of bits in bits
   unsigned rpos, wpos;        // read, write pointers
@@ -2439,16 +2438,29 @@ int LZBuffer::read(char* p, int n) {
 }
 
 LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
-    ht(1<<args[5]), in(inbuf.data()), checkbits(12-args[0]),
-    level(args[1]&3), htsize(ht.size()), n(inbuf.size()), i(0),
+    ht(1<<args[5]),
+    in(inbuf.data()),
+    checkbits(12-args[0]),
+    level(args[1]&3),
+    htsize(ht.size()),
+    n(inbuf.size()),
+    i(0),
     minMatch(std::max(args[2], (level==1 ? 4 : 1))),
-    minMatch2(args[3]), h1(0), h2(0),
+    minMatch2(args[3]),
+    maxMatch(BUFSIZE*3),
+    maxLiteral(BUFSIZE/4),
+    h1(0), h2(0),
     bucketbits(args[4]), bucket((1<<args[4])-1), 
     shift1(minMatch>0 ? (args[5]-1)/minMatch+1 : 1),
     shift2(minMatch2>0 ? (args[5]-1)/minMatch2+1 : 0),
-    maxMatch(std::max(minMatch, minMatch2)),
-    inclit(1<<args[6]), incmatch(1<<args[7]), bits(0), nbits(0),
-    rpos(0), wpos(0) {
+    minMatchBoth(std::max(minMatch, minMatch2)),
+    inclit(1<<args[6]),
+    incmatch(1<<args[7]),
+    rb(args[0]>4 ? args[0]-4 : 0),
+    bits(0),
+    nbits(0),
+    rpos(0),
+    wpos(0) {
   assert(args[0]>=0);
   assert(args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6);
   assert(level==1 || level==2);
@@ -2476,9 +2488,9 @@ void LZBuffer::fill() {
           unsigned p=ht[h2^k];
           if (p && (p&mask)==(in[i]&mask)) {
             p>>=checkbits;
-            if (p<i && p+(1<<24)>i) {
+            if (p<i) {
               unsigned l;
-              for (l=0; i+l<n && l<BUFSIZE*3 && in[p+l]==in[i+l]; ++l);
+              for (l=0; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
               if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
             }
           }
@@ -2492,9 +2504,9 @@ void LZBuffer::fill() {
           unsigned p=ht[h1^k];
           if (p && (p&mask)==(in[i]&mask)) {
             p>>=checkbits;
-            if (p<i && p+(1<<24)>i) {
+            if (p<i) {
               unsigned l;
-              for (l=0; i+l<n && l<BUFSIZE*4 && in[p+l]==in[i+l]; ++l);
+              for (l=0; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
               if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
             }
           }
@@ -2507,8 +2519,7 @@ void LZBuffer::fill() {
     // and then the match. blen is the length of the match.
     assert(i>=bp);
     const unsigned off=i-bp;  // offset
-    if (off>0 && off<(1<<24)
-        && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
+    if (off>0 && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
       write_literal(i, lit);
       write_match(blen, off);
     }
@@ -2524,7 +2535,7 @@ void LZBuffer::fill() {
       unsigned ih=i&bucket;
       const unsigned p=(i<<checkbits)|(in[i]&mask);
       assert(ih<=bucket);
-      if (i+maxMatch<n) {
+      if (i+minMatchBoth<n) {
         if (minMatch2) {
           ht[h2^ih]=p;
           h2=(((h2*3)<<shift2)+(in[i+minMatch2]+1)*23456789)&(htsize-1);
@@ -2536,11 +2547,11 @@ void LZBuffer::fill() {
     }
 
     // Write long literals to keep buf from filling up
-    if (lit>BUFSIZE/4)
+    if (lit>=maxLiteral)
       write_literal(i, lit);
   }
 
-  // Write pending literals
+  // Write pending literals at end of input
   assert(i<=n);
   if (i==n) {
     write_literal(n, lit);
@@ -2549,7 +2560,6 @@ void LZBuffer::fill() {
 }
 
 // Write literal sequence in[i-lit..i-1], set lit=0
-// 00,u,L[u*8] = L literals
 void LZBuffer::write_literal(unsigned i, unsigned& lit) {
   assert(lit>=0);
   assert(i>=0 && i<=n);
@@ -2579,29 +2589,30 @@ void LZBuffer::write_literal(unsigned i, unsigned& lit) {
   }
 }
 
-// Write match sequence of given length and offset (off in 1..2^24)
+// Write match sequence of given length and offset
 void LZBuffer::write_match(unsigned len, unsigned off) {
-  assert(len>=minMatch && len<=(1<<24));
-  assert(off>0 && off<=(1<<24));
 
-  // jj,kkk,u,nn,m[jjkkk-8] = match length unn, offset 1m
+  // mm,mmm,n,ll,r,q[mmmmm-8] = match n*4+ll, offset ((q-1)<<rb)+r+1
   if (level==1) {
+    assert(len>=minMatch && len<=maxMatch);
+    assert(off>0);
     assert(len>=4);
-    int ll=lg(len);
-    assert(ll>=3 && ll<=24);
-    int lo=lg(off);
-    assert(lo>=1 && lo<=24);
-    --lo;
-    putb((lo>>3)+1, 2);
-    putb(lo&7, 3);
-    --ll;
-    while (--ll>=2) {
+    assert(rb>=0 && rb<=8);
+    int ll=lg(len)-1;
+    assert(ll>=2);
+    off+=(1<<rb)-1;
+    int lo=lg(off)-1-rb;
+    assert(lo>=0 && lo<=23);
+    putb((lo+8)>>3, 2);// mm
+    putb(lo&7, 3);     // mmm
+    while (--ll>=2) {  // n
       putb(1, 1);
       putb((len>>ll)&1, 1);
     }
     putb(0, 1);
-    putb(len&3, 2);
-    putb(off, lo);
+    putb(len&3, 2);    // ll
+    putb(off, rb);     // r
+    putb(off>>rb, lo); // q
   }
 
   // x[2]:len[6] off[x-1] 
@@ -2612,19 +2623,22 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
     while (len>0) {  // Split long matches to len1=minMatch..minMatch+63
       const unsigned len1=len>minMatch*2+63 ? minMatch+63 :
           len>minMatch+63 ? len-minMatch : len;
-      assert(wpos<BUFSIZE-4);
+      assert(wpos<BUFSIZE-5);
       assert(len1>=minMatch && len1<minMatch+64);
-      if (off<2048 && len1<minMatch+8) {
-        put(64+(len1-minMatch)*8+(off>>8));
+      if (off<(1<<16)) {
+        put(64+len1-minMatch);
+        put(off>>8);
         put(off);
       }
-      else if (off<65536) {
+      else if (off<(1<<24)) {
         put(128+len1-minMatch);
+        put(off>>16);
         put(off>>8);
         put(off);
       }
       else {
         put(192+len1-minMatch);
+        put(off>>24);
         put(off>>16);
         put(off>>8);
         put(off);
@@ -2642,7 +2656,7 @@ string makeConfig(const char* method, int args[]) {
   assert(method[0]=='x' || method[0]=='s');
 
   // Read "xN1,N2...N9" into args[0..8] ($1..$9)
-  args[0]=4;  // default block size 64 MB
+  args[0]=4;  // log block size in MB
   args[1]=1;  // lz77 with variable length codes
   args[2]=4;  // minimum match length
   args[3]=0;  // secondary context length
@@ -2667,6 +2681,7 @@ string makeConfig(const char* method, int args[]) {
 
   // LZ77+Huffman, with or without E8E9
   if (level==1) {
+    const int rb=args[0]>4 ? args[0]-4 : 0;
     hdr="comp 9 16 0 $1+20 ";
     pcomp=
     "pcomp lazy2 3 ;\n"
@@ -2674,6 +2689,7 @@ string makeConfig(const char* method, int args[]) {
     "  r2 = len - match or literal length\n"
     "  r3 = m - number of offset bits expected\n"
     "  r4 = ptr to buf\n"
+    "  r5 = r - low bits of offset\n"
     "  c = bits - input buffer\n"
     "  d = n - number of bits in c)\n"
     "\n"
@@ -2710,7 +2726,7 @@ string makeConfig(const char* method, int args[]) {
     "  a= 8 a+=d d=a                (n+=8)\n"
     "\n"
     "  (if state==0 (expect new code))\n"
-    "  a=r 1 a== 0 if (match code jj,kkk)\n"
+    "  a=r 1 a== 0 if (match code mm,mmm)\n"
     "    a= 1 r=a 2                 (len=1)\n"
     "    a=c a&= 3 a> 0 if          (if (bits&3))\n"
     "      a-- a<<= 3 r=a 3           (m=((bits&3)-1)*8)\n"
@@ -2726,7 +2742,7 @@ string makeConfig(const char* method, int args[]) {
     "    endif\n"
     "  endif\n"
     "\n"
-    "  (while state==1 && n>=3 (expect match length u,nn))\n"
+    "  (while state==1 && n>=3 (expect match length n*4+ll -> r2))\n"
     "  do a=r 1 a== 1 if a=d a> 2 if\n"
     "    a=c a&= 1 a== 1 if         (if bits&1)\n"
     "      a=c a>>= 1 c=a             (bits>>=1)\n"
@@ -2738,19 +2754,37 @@ string makeConfig(const char* method, int args[]) {
     "      a=r 2 a<<= 2 b=a           (len<<=2)\n"
     "      a=c a&= 3 a+=b r=a 2       (len+=bits&3)\n"
     "      a=c a>>= 2 c=a             (bits>>=2)\n"
-    "      d-- d-- d--                (n-=3)\n"
-    "      a= 2 r=a 1                 (state=2)\n"
+    "      d-- d-- d--                (n-=3)\n";
+    if (rb)
+      pcomp+="      a= 5 r=a 1                 (state=5)\n";
+    else
+      pcomp+="      a= 2 r=a 1                 (state=2)\n";
+    pcomp+=
     "    endif\n"
     "  forever endif endif\n"
-    "\n"
+    "\n";
+    if (rb) pcomp+=  // save r in r5
+      "  (if state==5 && n>=8) (expect low bits of offset to put in r5)\n"
+      "  a=r 1 a== 5 if a=d a> "+itos(rb-1)+" if\n"
+      "    a=c a&= "+itos((1<<rb)-1)+" r=a 5            (save r in r5)\n"
+      "    a=c a>>= "+itos(rb)+" c=a\n"
+      "    a=d a-= "+itos(rb)+ " d=a\n"
+      "    a= 2 r=a 1                   (go to state 2)\n"
+      "  endif endif\n"
+      "\n";
+    pcomp+=
     "  (if state==2 && n>=m) (expect m offset bits)\n"
     "  a=r 1 a== 2 if a=r 3 a>d ifnot\n"
     "    a=c r=a 6 a=d r=a 7          (save c=bits, d=n in r6,r7)\n"
     "    b=r 3 a= 1 a<<=b d=a         (d=1<<m)\n"
-    "    a-- a&=c a+=d d=a            (d=offset=bits&((1<<m)-1)|(1<<m))\n"
-    "    b=r 4 a=b a-=d c=a           (c=p=(b=ptr)-offset)\n"
+    "    a-- a&=c a+=d                (d=offset=bits&((1<<m)-1)|(1<<m))\n";
+    if (rb)
+      pcomp+=  // insert r into low bits of d
+      "    a<<= "+itos(rb)+" d=r 5 a+=d a-= "+itos((1<<rb)-1)+"\n";
+    pcomp+=
+    "    d=a b=r 4 a=b a-=d c=a       (c=p=(b=ptr)-offset)\n"
     "\n"
-    "    (while len-- (copy and output match))\n"
+    "    (while len-- (copy and output match d bytes from *c to *b))\n"
     "    d=r 2 do a=d a> 0 if d--\n"
     "      a=*c *b=a c++ b++          (buf[ptr++]-buf[p++])\n";
     if (!doe8) pcomp+=" out\n";
@@ -2832,12 +2866,8 @@ string makeConfig(const char* method, int args[]) {
     "    a=c a>>= 6 a++ d=a\n"
     "    a== 1 if (literal?)\n"
     "      a+=c r=a 1 a=0 r=a 2\n"
-    "    else\n"
-    "      a== 2 if a=c a&= 7 r=a 2 (short match)\n"
-    "        a=c a>>= 3 a-= 8 a+= $3 r=a 1\n"
-    "      else (3 or 4 byte match)\n"
-    "        a=c a&= 63 a+= $3 r=a 1 a=0 r=a 2\n"
-    "      endif\n"
+    "    else (3 to 5 byte match)\n"
+    "      d++ a=c a&= 63 a+= $3 r=a 1 a=0 r=a 2\n"
     "    endif\n"
     "  else\n"
     "    a== 1 if (writing literal)\n"
@@ -3076,10 +3106,10 @@ string makeConfig(const char* method, int args[]) {
     "  xx......, xx > 0 = match with xx offset bytes to follow)\n"
     "\n"
     "  a=r 1 a== 0 if (init)\n"
-    "    a= "+itos(130+57*doe8)+" (skip post code)\n"
+    "    a= "+itos(111+57*doe8)+" (skip post code)\n"
     "  else a== 1 if  (new code?)\n"
     "    a=*c r=a 2  (save code in R2)\n"
-    "    a> 63 if a>>= 6 a++  (match)\n"
+    "    a> 63 if a>>= 6 a++ a++  (match)\n"
     "    else a++ a++ endif  (literal)\n"
     "  else (read rest of code)\n"
     "    a--\n"
@@ -3307,73 +3337,89 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     // build models
     const int doe8=(type&2)*2;
     method="x"+itos(arg0);
+    string htsz=","+itos(19+arg0+(arg0<=6));  // lz77 hash table size param
+
+    // store uncompressed
     if (level==0)
       method+=",0";
+
+    // LZ77, no model. Store if hard to compress
     else if (level==1) {
       if (type<40) method+=",0";
       else {
         method+=","+itos(1+doe8)+",4";
         if      (type<80)  method+=",0,1,15";
         else if (type<128) method+=",0,2,16";
-        else if (type<256) method+=",0,2,22";
-        else               method+=",0,3,24";
+        else if (type<256) method+=",0,2"+htsz;
+        else               method+=",0,3"+htsz;
         method+=",16,18";
       }
     }
+
+    // LZ77 with longer search
     else if (level==2) {
       if (type<32) method+=",0";
       else {
         method+=","+itos(1+doe8)+",4";
         if      (type<64)  method+=",0,1,16";
-        else if (type<96)  method+=",0,2,24";
-        else if (type<128) method+=",0,3,24";
-        else if (type<256) method+=",8,3,24";
-        else               method+=",8,4,24";
+        else if (type<96)  method+=",0,2"+htsz;
+        else if (type<128) method+=",0,3"+htsz;
+        else if (type<256) method+=",8,3"+htsz;
+        else               method+=",8,4"+htsz;
         method+=",16,18";
       }
     }
+
+    // LZ77 with CM depending on redundancy
     else if (level==3) {
-      if (type<16)      method+=",0";
-      else if (type<48) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
-      else              method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+      if (type<16)
+        method+=",0";
+      else if (type<48)
+        method+=","+itos(1+doe8)+",4,0,3"+htsz+",16,18";
+      else
+        method+=","+itos(2+doe8)+",8,0,4"+htsz+",16,24,c0,0,511";
     }
-    else if (level==4) {
-      if (type<12)      method+=",0";
-      else if (type<24) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
-      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
-      else              method+=","+itos(3+doe8)+"ci1";
-    }
-    else if (level==5) {
-      if (type<12)      method+=",0";
-      else if (type<24) method+=","+itos(1+doe8)+",4,0,3,24,16,18";
-      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
-      else {  // try LZ77 and BWT and pick the smaller
+
+    // Try LZ77+CM and BWT and pick the smallest. At level 5 also try CM.
+    else if (level==4 || level==5) {
+      string s=","+itos(20+arg0);
+      if (type<12)
+        method+=",0";
+      else if (type<24)
+        method+=","+itos(1+doe8)+",4,0,3"+htsz+",16,18";
+      else if (type<48)
+        method+=","+itos(2+doe8)+",8,0,4"+htsz+",16,24c0,0,511";
+      else {  // try LZ77, BWT, and CM (level 5) and pick the smallest
         StringBuffer in2, out1, out2;
-        string method1=method+","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
+        string method1=method+","+itos(2+doe8)+",8,0,4"+htsz+",16,24c0,0,511";
         string method2=method+","+itos(3+doe8)+"ci1";
+        string method3=method+","+itos(doe8)+"ci1,1,1,1,2a"; // level 5
+        if (type&1) method3+="w";
+        method3+="m";
+        string result=method1;
         in2.write(in->c_str(), in->size());
-        compressBlock(in,   &out1, method1, filename, comment, type);
+        compressBlock(&in2, &out1, method1, filename, comment, type);
+        in2.write(in->c_str(), in->size());
         compressBlock(&in2, &out2, method2, filename, comment, type);
-        if (out1.size()<out2.size()) {
-          out->write(out1.c_str(), out1.size());
-          return method1;
+        if (out2.size()<out1.size()) {
+          out1.swap(out2);
+          result=method2;
         }
-        else {
-          out->write(out2.c_str(), out2.size());
-          return method2;
+        if (level==5) {
+          out2.reset();
+          compressBlock(in, &out2, method3, filename, comment, type);
+          if (out2.size()<out1.size()) {
+            out1.swap(out2);
+            result=method3;
+          }
         }
+        out->write(out1.c_str(), out1.size());
+        return result;
       }
     }
+
+    // Slow CM with lots of models
     else if (level==6) {
-      if (type<24)      method+=","+itos(1+doe8)+",4,0,3,24,16,18";
-      else if (type<48) method+=","+itos(2+doe8)+",8,0,4,24,16,24c0,0,511";
-      else {
-        method+=","+itos(doe8)+"ci1,1,1,1,2a";
-        if (type&1) method+="w";
-        method+="m";
-      }
-    }
-    else if (level==7) {
 
       // Model text files
       method+=","+itos(doe8);
@@ -3418,7 +3464,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       method+="c0,2,0,255i1c0,3,0,0,255i1c0,4,0,0,0,255i1mm16ts19t0";
     }
     else 
-      error("method must be 0..7, x, or s");
+      error("method must be 0..6, x, or s");
   }
 
   // Get hash of input
@@ -3742,7 +3788,9 @@ void Jidac::add() {
   // Set block size
   assert(method!="");
   unsigned blocksize=(1<<24)-4096;
-  if (method.size()>1 && isdigit(method[1]))
+  if (isdigit(method[0]) && method[0]>'1')
+    blocksize=(1<<26)-4096;
+  if (method.size()>1)
     blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
 
   // Read archive index list into ht, dt, ver.
