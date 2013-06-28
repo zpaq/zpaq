@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.34 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.35 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -303,21 +303,13 @@ choosing the closer one.
 N6 = use a hash table of 2^N6 elements to store the location of context
 hashes. It requires 4 x 2^N6 bytes of memory for compression only.
 
-N7 = increase minimum match length by 1 after a literal if the offset
-is 2^N7 or more.
-
-N8 = increase minimum match length by 1 after another match if the offset
-is 2^N8 or more.
-
-For example, -method x4,5,4,0,3,24,16,18 specifies a 2^4 =  16 MB block size,
+For example, -method x4,5,4,0,3,24 specifies a 2^4 =  16 MB block size,
 E8E9 + LZ77 (4+1) with variable length codes, minimum match length 4, no
 secondary search (0), search length of 2^3 = 8, hash table size of 2^24
-elements, and increases the minimum match length to 5 if the offset is
-greater than 2^16 (64 KB) after a literal or 2^18 (256 KB) after another
-match. This gives fast and reasonable compression, requiring 96 MB per
+elements. This gives fast and reasonable compression, requiring 96 MB per
 thread to compress and 16 MB per thread to decompress.
 
-The default is method -x4,1,4,0,3,24,16,18
+The default is method -x4,1,4,0,3,24
 
   s
 
@@ -1597,7 +1589,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.34 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.35 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -2215,8 +2207,12 @@ void Jidac::scandir(const char* filename) {
         }
         closedir(dirp);
       }
+      else
+        perror(filename);
     }
   }
+  else
+    perror(filename);
 
 #else  // Windows: expand wildcards in filename
 
@@ -2225,6 +2221,8 @@ void Jidac::scandir(const char* filename) {
   string t=filename;
   if (t.size()>0 && t[t.size()-1]=='/') t+="*";
   HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
+  if (h==INVALID_HANDLE_VALUE)
+    winError(t.c_str());
   while (h!=INVALID_HANDLE_VALUE) {
 
     // For each file, get name, date, size, attributes
@@ -2255,7 +2253,11 @@ void Jidac::scandir(const char* filename) {
         scandir(fn.c_str());
       }
     }
-    if (!FindNextFile(h, &ffd)) break;
+    if (!FindNextFile(h, &ffd)) {
+      if (GetLastError()!=ERROR_NO_MORE_FILES)
+        winError(fn.c_str());
+      break;
+    }
   }
   FindClose(h);
 #endif
@@ -2332,9 +2334,13 @@ BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8): inp(&in) {
 
 // floor(log2(x)) + 1 = number of bits excluding leading zeros (0..32)
 int lg(unsigned x) {
-  for (unsigned i=0; i<32; ++i)
-    if ((1u<<i)>x) return i;
-  return 32;
+  unsigned r=0;
+  if (x>=65536) r=16, x>>=16;
+  if (x>=256) r+=8, x>>=8;
+  if (x>=16) r+=4, x>>=4;
+  assert(x>=0 && x<16);
+  return
+    "\x00\x01\x02\x02\x03\x03\x03\x03\x04\x04\x04\x04\x04\x04\x04\x04"[x]+r;
 }
 
 // return number of 1 bits in x
@@ -2371,8 +2377,6 @@ class LZBuffer: public libzpaq::Reader {
   const unsigned bucket;      // number of matches to search per hash - 1
   const unsigned shift1, shift2;  // how far to shift h1, h2 per hash
   const int minMatchBoth;     // max(minMatch, minMatch2)
-  const unsigned inclit;      // min offset to ++ minMatch after a literal
-  const unsigned incmatch;    // or after a match
   const unsigned rb;          // number of level 1 r bits in match code
   unsigned bits;              // pending output bits (level 1)
   unsigned nbits;             // number of bits in bits
@@ -2453,9 +2457,7 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
     bucketbits(args[4]), bucket((1<<args[4])-1), 
     shift1(minMatch>0 ? (args[5]-1)/minMatch+1 : 1),
     shift2(minMatch2>0 ? (args[5]-1)/minMatch2+1 : 0),
-    minMatchBoth(std::max(minMatch, minMatch2)),
-    inclit(1<<args[6]),
-    incmatch(1<<args[7]),
+    minMatchBoth(std::max(minMatch, minMatch2)+4),
     rb(args[0]>4 ? args[0]-4 : 0),
     bits(0),
     nbits(0),
@@ -2480,18 +2482,23 @@ void LZBuffer::fill() {
     // Search for longest match, or pick closest in case of tie
     // Try the longest context orders first. If a match is found, then
     // skip the lower order as a speed optimization.
-    unsigned blen=0;  // best match length
+    unsigned blen=minMatch-1;  // best match length
     unsigned bp=0;  // pointer to best match
+    unsigned blit=0;  // literals before best match
+    int bscore=0;  // best cost
     if (level==1 || minMatch<=64) {
       if (minMatch2>0) {
         for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h2^k];
-          if (p && (p&mask)==(in[i]&mask)) {
+          if (p && (p&mask)==(in[i+3]&mask)) {
             p>>=checkbits;
-            if (p<i) {
-              unsigned l;
-              for (l=0; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
-              if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
+            if (p<i && i+blen<=n && in[p+blen-1]==in[i+blen-1]) {
+              unsigned l, l1=(in[p]!=in[i]);
+              for (l=1; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
+              if (l>=blen-1) {
+                int score=l*8-lg(i-p)-2*(lit>0)-11-l1*(lit?8:11);
+                if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
+              }
             }
           }
           if (blen>=128) break;
@@ -2502,12 +2509,15 @@ void LZBuffer::fill() {
       if (!minMatch2 || blen<minMatch2) {
         for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h1^k];
-          if (p && (p&mask)==(in[i]&mask)) {
+          if (p && (p&mask)==(in[i+3]&mask)) {
             p>>=checkbits;
-            if (p<i) {
+            if (p<i && i+blen<=n && in[p+blen-1]==in[i+blen-1]) {
               unsigned l;
               for (l=0; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
-              if (l>blen || (l==blen && p>bp)) blen=l, bp=p;
+              if (l>=blen-1) {
+                int score=l*8-lg(i-p)-2*(lit>0)-11;
+                if (score>bscore) blen=l, bp=p, blit=0, bscore=score;
+              }
             }
           }
           if (blen>=128) break;
@@ -2519,9 +2529,11 @@ void LZBuffer::fill() {
     // and then the match. blen is the length of the match.
     assert(i>=bp);
     const unsigned off=i-bp;  // offset
-    if (off>0 && blen>=minMatch+(off>=(lit ? inclit : incmatch))) {
-      write_literal(i, lit);
-      write_match(blen, off);
+    if (off>0 && bscore>0
+        && blen-blit>=minMatch+(level==2)*((off>=(1<<16))+(off>=(1<<24)))) {
+      lit+=blit;
+      write_literal(i+blit, lit);
+      write_match(blen-blit, off);
     }
 
     // Otherwise add to literal length
@@ -2532,13 +2544,13 @@ void LZBuffer::fill() {
 
     // Update index, advance blen bytes
     while (blen--) {
-      unsigned ih=i&bucket;
-      const unsigned p=(i<<checkbits)|(in[i]&mask);
-      assert(ih<=bucket);
       if (i+minMatchBoth<n) {
+        unsigned ih=i&bucket;
+        const unsigned p=(i<<checkbits)|(in[i+3]&mask);
+        assert(ih<=bucket);
         if (minMatch2) {
           ht[h2^ih]=p;
-          h2=(((h2*3)<<shift2)+(in[i+minMatch2]+1)*23456789)&(htsize-1);
+          h2=(((h2*3)<<shift2)+(in[i+minMatch2+1]+1)*23456789)&(htsize-1);
         }
         ht[h1^ih]=p;
         h1=(((h1*3)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
@@ -2594,6 +2606,7 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
 
   // mm,mmm,n,ll,r,q[mmmmm-8] = match n*4+ll, offset ((q-1)<<rb)+r+1
   if (level==1) {
+    if (len<minMatch || len>maxMatch) printf("len=%d minMatch=%d maxMatch=%d\n", len, minMatch, maxMatch), exit(1);
     assert(len>=minMatch && len<=maxMatch);
     assert(off>0);
     assert(len>=4);
@@ -3347,12 +3360,11 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     else if (level==1) {
       if (type<40) method+=",0";
       else {
-        method+=","+itos(1+doe8)+",4";
-        if      (type<80)  method+=",0,1,15";
-        else if (type<128) method+=",0,2,16";
-        else if (type<256) method+=",0,2"+htsz;
-        else               method+=",0,3"+htsz;
-        method+=",16,18";
+        method+=","+itos(1+doe8)+",";
+        if      (type<80)  method+="4,0,1,15";
+        else if (type<128) method+="4,0,2,16";
+        else if (type<256) method+="4,0,2"+htsz;
+        else               method+="5,0,3"+htsz;
       }
     }
 
@@ -3366,7 +3378,6 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
         else if (type<128) method+=",0,3"+htsz;
         else if (type<256) method+=",8,3"+htsz;
         else               method+=",8,4"+htsz;
-        method+=",16,18";
       }
     }
 
@@ -3375,9 +3386,9 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       if (type<16)
         method+=",0";
       else if (type<48)
-        method+=","+itos(1+doe8)+",4,0,3"+htsz+",16,18";
+        method+=","+itos(1+doe8)+",4,0,3"+htsz;
       else
-        method+=","+itos(2+doe8)+",8,0,4"+htsz+",16,24,c0,0,511";
+        method+=","+itos(2+doe8)+",8,0,4"+htsz+",c0,0,511";
     }
 
     // Try LZ77+CM and BWT and pick the smallest. At level 5 also try CM.
@@ -3807,12 +3818,23 @@ void Jidac::add() {
 
   // Sort the files to be added by filename extension
   vector<DTMap::iterator> vf;
+  unsigned deletions=0;
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.edate && (force || p->second.dtv.size()==0
        || p->second.edate!=p->second.dtv.back().date))
     vf.push_back(p);
+    if (p->second.written==0 && p->second.edate==0)
+      ++deletions;
   }
   std::sort(vf.begin(), vf.end(), compareFilename);
+
+  // Test if any files are to be added or deleted
+  if (vf.size()==0 && deletions==0) {
+    if (quiet<MAX_QUIET)
+      printf("Archive %s not updated: nothing to add or delete\n",
+          archive.c_str());
+    return;
+  }  
 
   // Get transaction date for a journaling update
   time_t now=time(NULL);
@@ -3824,9 +3846,10 @@ void Jidac::add() {
 
   // Open archive to append
   if (quiet<MAX_QUIET) {
-    printf("Appending to archive ");
+    printf("Updating ");
     printUTF8(archive.c_str());
-    printf(" with date %s\n", dateToString(date).c_str());
+    printf(" with %u additions and %u deletions at %s\n",
+        size(vf), deletions, dateToString(date).c_str());
   }
   OutputFile out;
   Counter counter;
