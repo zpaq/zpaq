@@ -1,4 +1,4 @@
-/* zpaq.cpp v6.35 - Journaling incremental deduplicating archiver
+/* zpaq.cpp v6.36 - Journaling incremental deduplicating archiver
 
   Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -183,7 +183,8 @@ Set the number of threads to N for parallel compression and decompression.
 The default is to detect the number of processor cores and use that value
 or the limit according to -method, whichever is less. The number of cores
 is detected from the environment variable %NUMBER_OF_PROCESSORS% in
-Windows or /proc/cpuinfo in Linux.
+Windows or /proc/cpuinfo in Linux. If zpaq is compiled for 32 bit
+processors then the default is at most 4.
 
   -fragile
 
@@ -227,7 +228,8 @@ With a single digit, select compression speed, where low values are
 faster and higher values compress smaller. The default is 1.
 N1, if present, selects a maximum block size of 2^(N1+20) - 4096 bytes.
 The default for methods 0, 1, x, s is 4 (16 MB, e.g. -method 14).
-The default for methods 2..5 is 6 (64 MB, e.g. -method 26).
+The default for method 2 is 5 (32 MB e.g. -method 25).
+The default for methods 3..6 is 6 (64 MB, e.g. -method 36).
 
 When the first character is x, select experimental compression methods.
 These are for advanced uses only. The method is described
@@ -303,13 +305,16 @@ choosing the closer one.
 N6 = use a hash table of 2^N6 elements to store the location of context
 hashes. It requires 4 x 2^N6 bytes of memory for compression only.
 
+N7 = lookahead for secondary context. LZ77 will compare the next N5+N7
+bytes, allowing the first N7 not to match and code them as literals.
+
 For example, -method x4,5,4,0,3,24 specifies a 2^4 =  16 MB block size,
 E8E9 + LZ77 (4+1) with variable length codes, minimum match length 4, no
 secondary search (0), search length of 2^3 = 8, hash table size of 2^24
 elements. This gives fast and reasonable compression, requiring 96 MB per
 thread to compress and 16 MB per thread to decompress.
 
-The default is method -x4,1,4,0,3,24
+The default is method -x4,1,4,0,3,24,0
 
   s
 
@@ -352,15 +357,26 @@ has directly to a prediction and has an update rate that decreases with
 higher N1. An ICM maps a context to a bit history and then to a prediction.
 An ICM adapts rapidly to different data types or to sorted data.
 
-N2 in 1..255 includes (offset mod N2) in the context hash. N2 in 1000..1255
-includes the distance to the last occurrence of N2-1000 in the context
-hash.
+If N1 is 1000 or more, then memory usage is adjusted by a factor of
+2^-floor(N1/1000), and the component type is determined by N1%1000. Default
+memory usage depends on the number of bits of context, not to exceed the
+block size. The usage is otherwise 2^sb bytes, where sb is initially
+11 (2 KB) and increased by the contexts below.
+
+N2 in 1..255 includes (offset mod N2) in the context hash. It increases
+sb by floor(log2(N2))+1.  N2 in 1000..1255 includes the distance to the
+last occurrence of N2-1000 in the context hash. It increases sb by 6
+(memory usage by a factor of 64).
 
 N3,... in 0..255 specifies a list of byte context masks reading back from
 the most recently coded byte. Each mask is ANDed with the context byte
-before hashing. a value of 1000 or more is equivalent to a sequence
+before hashing. Each such context increases sb by floor(nbits(N)*3/4)
+where nbits(N) is the number of bits set in N. Thus, N=255 increases
+sb by 6 (memory usage by 64).
+
+A value of N = 1000 or more is equivalent to a sequence
 of N-1000 zeros. Only the last 65536 bytes of context are saved.
-For byte aligned LZ77 only, N3,... in 256..511 specifies either the LZ77
+For byte aligned LZ77 only, N in 256..511 specifies either the LZ77
 parse state if a match/literal code or match offset byte is expected,
 or else a literal byte ANDed with the low 8 bits as with 0..255. For example,
 -method x4,6,8,0,4,24,12,16c0,0,511 specifies E8E9 + byte aligned LZ77 (6),
@@ -377,6 +393,16 @@ For example, -method x4,3ci1,1,2 specifies a 16 MB block (4), BWT (3),
 followed by an order 0 ICM (c) and an ISSE chain of 3 components with
 context orders 1, 2, and 4.
 
+If N is 10 or higher, then the context order is increased by N%10 and
+memory usage is halved for each increment of floor(N/10). The default
+memory usage of each ISSE component in the chain is 64 times the
+previous component for each increment of the context order up to a maximum
+of the block size. For example, x4,3ci1,1,2 would specify 2 KiB (default
+memory usage for a ICM with no other context), 128 KB for the first ISSE,
+8 MiB for the second ISSE, and 1i6 MB (the block size) for the third ISSE.
+ci1,11,12 would reduce the second and third ISSE to 4 MiB and 8 MiB
+respectively.
+
   a
 
 Specifies a MATCH. A MATCH maintains a history buffer and a hash table
@@ -387,7 +413,7 @@ the context hash on the next boundary. The hash is computed as the
 xN1 + 18 - N3 low bits of hash := hash*N1+c+1 where c is the most recently
 coded byte and xN1 is the block size as specified by x. N2 and N3 specify
 how many times to halve the memory usage of the buffer and hash table,
-respectively. For example, -method x4,0a24,0,1 specifies a 16 MB block
+respectively. For example, -method x4,0a24,0,1 specifies a 16 MiB block
 for compression (x4) with no preprocessing (0). The match model uses
 a multiplier of 24, a history buffer the same size as the compression
 buffer (0), and a hash table using half as much memory (1). This means
@@ -409,7 +435,9 @@ A good value is 0, 8, or 16. N2 specifies the update rate. A good value
 is around 16 to 32. For example, -method x6,0ci1,1,1m8,24 specifies
 64 MB blocks, no preprocessing, an order 0-1-2-3 ICM-ISSE chain with a
 final mixer taking all other components as input, order 0 (bitwise order 8)
-context, and a learning rate of 24. Default is m8,24.
+context, and a learning rate of 24. Default is m8,24. Memory usage is
+M*2^(N1+2) bytes up to M times the block size, where M is the number of
+mixer inputs.
 
   t
 
@@ -418,7 +446,7 @@ are the same as MIX. For example,
 -method x6,0ci1,1,1m8,10m16,32t0,24 specifies the previous model with
 2 mixers taking different contexts with different learning rates, and
 then mixing both of them together with no context and a learning rate of 24.
-Default is t8,24.
+Default is t8,24. Memory usage is 2^(N1+2) bytes.
 
   s
 
@@ -438,8 +466,9 @@ rates. Default is s8,32,255.
 Word-model ICM-ISSE chain for modeling text. N1 is the length of the
 chain, with word-level context orders of 0..N1-1. A word is defined
 as a sequence of characters in the range N2..N2+N3-1 after ANDing
-with N4. For Default is w1,65,26,223,20 represents the set [A-Za-z]
-using a context hash multiplier of 20.
+with N4. For Default is w1,65,26,223,20,0 represents the set [A-Za-z]
+using a context hash multiplier of N5 = 20. Memory per chain
+component is 2^-N6 times block size.
 
   f<cfg>
 
@@ -493,6 +522,7 @@ Possible options:
   -DPTHREAD  Use Pthreads instead of Windows threads. Requires pthreadGC2.dll
              or pthreadVC2.dll from http://sourceware.org/pthreads-win32/
   -Dunixtest To make -Dunix work in Windows with MinGW.
+  -Wl,--large-address-aware  To make 3 GB available in 32 bit Windows.
 
 */
 #define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
@@ -533,6 +563,8 @@ Possible options:
 using std::string;
 using std::vector;
 using std::map;
+using std::min;
+using std::max;
 
 // Handle errors in libzpaq and elsewhere
 void libzpaq::error(const char* msg) {
@@ -1224,7 +1256,7 @@ struct Counter: public libzpaq::Writer {
 
 ///////////////////////// NumberOfProcessors ///////////////////////////
 
-// Guess number of cores
+// Guess number of cores. In 32 bit mode, max is 4.
 int numberOfProcessors() {
   int rc=0;  // result
 #ifdef unix
@@ -1254,6 +1286,7 @@ int numberOfProcessors() {
   if (p) rc=atoi(p);
 #endif
   if (rc<1) rc=1;
+  if (sizeof(char*)==4 && rc>4) rc=4;
   return rc;
 }
 
@@ -1589,7 +1622,7 @@ private:
 // Print help message
 void Jidac::usage() {
   printf(
-  "zpaq 6.35 - Journaling incremental deduplicating archiving compressor\n"
+  "zpaq 6.36 - Journaling incremental deduplicating archiving compressor\n"
   "(C) " __DATE__ ", Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
@@ -1749,7 +1782,8 @@ int Jidac::doCommand(int argc, const char** argv) {
   }
 
   // Set threads
-  if (!threads) threads=numberOfProcessors();
+  if (!threads)
+    threads=numberOfProcessors();
 
   // Add .zpaq extension to archive
   if (archive!="" && 
@@ -2357,8 +2391,7 @@ int nbits(unsigned x) {
 // args[3] is the higher context order to search first, or else 0.
 // args[4] is the log2 hash bucket size (number of searches).
 // args[5] is the log2 hash table size.
-// args[6] is the log2 min offset to increment min match after a literal.
-// args[7] is the log2 min offset to increment min match after a match.
+// args[6] is the secondary context look ahead
 
 class LZBuffer: public libzpaq::Reader {
   libzpaq::Array<unsigned> ht;// hash table, confirmation in low bits
@@ -2372,6 +2405,7 @@ class LZBuffer: public libzpaq::Reader {
   const unsigned minMatch2;   // second context order or 0 if not used
   const unsigned maxMatch;    // longest match length allowed
   const unsigned maxLiteral;  // longest literal length allowed
+  const unsigned lookahead;   // second context look ahead
   unsigned h1, h2;            // low, high order context hashes of in[i..]
   const unsigned bucketbits;  // log bucket
   const unsigned bucket;      // number of matches to search per hash - 1
@@ -2449,15 +2483,16 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
     htsize(ht.size()),
     n(inbuf.size()),
     i(0),
-    minMatch(std::max(args[2], (level==1 ? 4 : 1))),
+    minMatch(args[2]),
     minMatch2(args[3]),
     maxMatch(BUFSIZE*3),
     maxLiteral(BUFSIZE/4),
+    lookahead(args[6]),
     h1(0), h2(0),
     bucketbits(args[4]), bucket((1<<args[4])-1), 
     shift1(minMatch>0 ? (args[5]-1)/minMatch+1 : 1),
     shift2(minMatch2>0 ? (args[5]-1)/minMatch2+1 : 0),
-    minMatchBoth(std::max(minMatch, minMatch2)+4),
+    minMatchBoth(max(minMatch, minMatch2+lookahead)+4),
     rb(args[0]>4 ? args[0]-4 : 0),
     bits(0),
     nbits(0),
@@ -2466,6 +2501,8 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
   assert(args[0]>=0);
   assert(args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6);
   assert(level==1 || level==2);
+  if ((minMatch<4 && level==1) || minMatch<1)
+    error("match length $3 too small");
 
   // e8e9 transform
   if (args[1]>4) e8e9(inbuf.data(), n);
@@ -2493,10 +2530,13 @@ void LZBuffer::fill() {
           if (p && (p&mask)==(in[i+3]&mask)) {
             p>>=checkbits;
             if (p<i && i+blen<=n && in[p+blen-1]==in[i+blen-1]) {
-              unsigned l, l1=(in[p]!=in[i]);
-              for (l=1; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
-              if (l>=blen-1) {
-                int score=l*8-lg(i-p)-2*(lit>0)-11-l1*(lit?8:11);
+              unsigned l;  // match length from lookahead
+              for (l=lookahead; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
+              if (l>=minMatch2+lookahead) {
+                int l1;  // length back from lookahead
+                for (l1=lookahead; l1>0 && in[p+l1-1]==in[i+l1-1]; --l1);
+                assert(l1>=0 && l1<=int(lookahead));
+                int score=int(l-l1)*8-lg(i-p)-2*(lit>0)-11;
                 if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
               }
             }
@@ -2514,10 +2554,8 @@ void LZBuffer::fill() {
             if (p<i && i+blen<=n && in[p+blen-1]==in[i+blen-1]) {
               unsigned l;
               for (l=0; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
-              if (l>=blen-1) {
-                int score=l*8-lg(i-p)-2*(lit>0)-11;
-                if (score>bscore) blen=l, bp=p, blit=0, bscore=score;
-              }
+              int score=l*8-lg(i-p)-2*(lit>0)-11;
+              if (score>bscore) blen=l, bp=p, blit=0, bscore=score;
             }
           }
           if (blen>=128) break;
@@ -2545,15 +2583,16 @@ void LZBuffer::fill() {
     // Update index, advance blen bytes
     while (blen--) {
       if (i+minMatchBoth<n) {
-        unsigned ih=i&bucket;
+        unsigned ih=((i*1234547)>>19)&bucket;
         const unsigned p=(i<<checkbits)|(in[i+3]&mask);
         assert(ih<=bucket);
         if (minMatch2) {
           ht[h2^ih]=p;
-          h2=(((h2*3)<<shift2)+(in[i+minMatch2+1]+1)*23456789)&(htsize-1);
+          h2=(((h2*9)<<shift2)
+              +(in[i+minMatch2+lookahead]+1)*23456789)&(htsize-1);
         }
         ht[h1^ih]=p;
-        h1=(((h1*3)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
+        h1=(((h1*5)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
       }
       ++i;
     }
@@ -2606,7 +2645,6 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
 
   // mm,mmm,n,ll,r,q[mmmmm-8] = match n*4+ll, offset ((q-1)<<rb)+r+1
   if (level==1) {
-    if (len<minMatch || len>maxMatch) printf("len=%d minMatch=%d maxMatch=%d\n", len, minMatch, maxMatch), exit(1);
     assert(len>=minMatch && len<=maxMatch);
     assert(off>0);
     assert(len>=4);
@@ -2675,9 +2713,9 @@ string makeConfig(const char* method, int args[]) {
   args[3]=0;  // secondary context length
   args[4]=3;  // log searches
   args[5]=24; // lz77 hash table size
-  args[6]=16; // offset length to increment min match after literal
-  args[7]=18; // offset length to increment min match after match
-  args[8]=0;
+  args[6]=0;  // secondary context look ahead
+  args[7]=0;  // not used
+  args[8]=0;  // not used
   if (isdigit(*++method)) args[0]=0;
   for (int i=0; i<9 && (isdigit(*method) || *method==',' || *method=='.');) {
     if (isdigit(*method))
@@ -3149,24 +3187,24 @@ string makeConfig(const char* method, int args[]) {
     }
 
     // c: context model
-    // N1: 0=ICM 1..256=CM limit N1-1
+    // N1%1000: 0=ICM 1..256=CM limit N1-1
+    // N1/1000: number of times to halve memory
     // N2: 1..255=offset mod N2. 1000..1255=distance to N2-1000
     // N3...: 0..255=byte mask + 256=lz77 state. 1000+=run of N3-1000 zeros.
     if (v[0]=='c') {
       while (v.size()<3) v.push_back(0);
       comp+=itos(ncomp)+" ";
       sb=11;  // count context bits
-      if (v[2]<256) sb+=nbits(v[2]);
+      if (v[2]<256) sb+=lg(v[2]);
       else sb+=6;
-      if (args[1]==2) sb+=8;
       for (unsigned i=3; i<v.size(); ++i)
         if (v[i]<512) sb+=nbits(v[i])*3/4;
       if (sb>membits) sb=membits;
-      if (v[1]==0) comp+="icm "+itos(sb-6)+"\n";
-      else comp+="cm "+itos(sb-2)+" "+itos(v[1]-1)+"\n";
+      if (v[1]%1000==0) comp+="icm "+itos(sb-6-v[1]/1000)+"\n";
+      else comp+="cm "+itos(sb-2-v[1]/1000)+" "+itos(v[1]%1000-1)+"\n";
 
       // special contexts
-      hcomp+="d= " +itos(ncomp)+" *d=0\n";
+      hcomp+="d= "+itos(ncomp)+" *d=0\n";
       if (v[2]>1 && v[2]<=255) {  // periodic context
         if (lg(v[2])!=lg(v[2]-1))
           hcomp+="a=c a&= "+itos(v[2]-1)+" hashd\n";
@@ -3247,16 +3285,16 @@ string makeConfig(const char* method, int args[]) {
       assert(sb>=5);
       hcomp+="d= "+itos(ncomp-1)+" b=c a=*d d++\n";
       for (unsigned i=1; i<v.size() && ncomp<254; ++i) {
-        for (int j=0; j<v[i]; ++j) {
+        for (int j=0; j<v[i]%10; ++j) {
           hcomp+="hash ";
-          if (i<v.size()-1 || j<v[i]-1) hcomp+="b++ ";
+          if (i<v.size()-1 || j<v[i]%10-1) hcomp+="b++ ";
           sb+=6;
         }
         hcomp+="*d=a";
         if (i<v.size()-1) hcomp+=" d++";
         hcomp+="\n";
         if (sb>membits) sb=membits;
-        comp+=itos(ncomp)+" isse "+itos(sb-6)+" "+itos(ncomp-1)+"\n";
+        comp+=itos(ncomp)+" isse "+itos(sb-6-v[i]/10)+" "+itos(ncomp-1)+"\n";
         ++ncomp;
       }
     }
@@ -3273,18 +3311,20 @@ string makeConfig(const char* method, int args[]) {
       ++ncomp;
     }
 
-    // w1,65,26,223,20: ICM-ISSE chain of length N1 with word contexts,
+    // w1,65,26,223,20,0: ICM-ISSE chain of length N1 with word contexts,
     // where a word is a sequence of c such that c&N4 is in N2..N2+N3-1.
     // Word is hashed by: hash := hash*N5+c+1
+    // Decrease memory by 2^-N6.
     if (v[0]=='w') {
       if (v.size()<=1) v.push_back(1);
       if (v.size()<=2) v.push_back(65);
       if (v.size()<=3) v.push_back(26);
       if (v.size()<=4) v.push_back(223);
       if (v.size()<=5) v.push_back(20);
-      comp+=itos(ncomp)+" icm "+itos(membits-6)+"\n";
+      if (v.size()<=6) v.push_back(0);
+      comp+=itos(ncomp)+" icm "+itos(membits-6-v[6])+"\n";
       for (int i=1; i<v[1]; ++i)
-        comp+=itos(ncomp+i)+" isse "+itos(membits-6)+" "
+        comp+=itos(ncomp+i)+" isse "+itos(membits-6-v[6])+" "
             +itos(ncomp+i-1)+"\n";
       hcomp+="a=*c a&= "+itos(v[4])+" a-= "+itos(v[2])+" a&= 255 a< "
            +itos(v[3])+" if\n";
@@ -3299,7 +3339,7 @@ string makeConfig(const char* method, int args[]) {
       hcomp+="  d= "+itos(ncomp)+" *d=0\n"
            "endif\n";
       ncomp+=v[1]-1;
-      sb=membits;
+      sb=membits-v[6];
       ++ncomp;
     }
 
@@ -3339,7 +3379,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   assert(method!="");
   const unsigned n=in->size();  // input size
   const int arg0=method.size()>1
-      ? atoi(method.c_str()+1) : std::max(lg(n+4095)-20, 0);  // block size
+      ? atoi(method.c_str()+1) : max(lg(n+4095)-20, 0);  // block size
   assert((1u<<(arg0+20))>=n+4096);
 
   // Expand default methods
@@ -3378,6 +3418,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
         else if (type<128) method+=",0,3"+htsz;
         else if (type<256) method+=",8,3"+htsz;
         else               method+=",8,4"+htsz;
+        if (doe8 && type>=128) method+=",1";
       }
     }
 
@@ -3397,12 +3438,12 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       if (type<12)
         method+=",0";
       else if (type<24)
-        method+=","+itos(1+doe8)+",4,0,3"+htsz+",16,18";
+        method+=","+itos(1+doe8)+",4,0,3"+htsz;
       else if (type<48)
-        method+=","+itos(2+doe8)+",8,0,4"+htsz+",16,24c0,0,511";
+        method+=","+itos(2+doe8)+",8,0,4"+htsz+"c0,0,511";
       else {  // try LZ77, BWT, and CM (level 5) and pick the smallest
         StringBuffer in2, out1, out2;
-        string method1=method+","+itos(2+doe8)+",8,0,4"+htsz+",16,24c0,0,511";
+        string method1=method+","+itos(2+doe8)+",8,0,4"+htsz+"c0,0,511";
         string method2=method+","+itos(3+doe8)+"ci1";
         string method3=method+","+itos(doe8)+"ci1,1,1,1,2a"; // level 5
         if (type&1) method3+="w";
@@ -3801,6 +3842,8 @@ void Jidac::add() {
   unsigned blocksize=(1<<24)-4096;
   if (isdigit(method[0]) && method[0]>'1')
     blocksize=(1<<26)-4096;
+  if (method[0]=='2')
+    blocksize=(1<<25)-4096;
   if (method.size()>1)
     blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
 
@@ -3973,7 +4016,7 @@ void Jidac::add() {
     // In that case, store it uncompressed.
     if (fi==vf.size()
         || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
-        || (fj==0 && sb.size()>blocksize*3/4
+        || (fj==0 && sb.size()>blocksize/4*3
             && sb.size()+vf[fi]->second.esize>blocksize-MAX_FRAGMENT-2048) 
         || (fj==0 && sb.size()>blocksize/8 && redundancy<sb.size()/32)
         || (fj==0 && sb.size()>blocksize/4 && redundancy<sb.size()/16)
