@@ -1,8 +1,8 @@
-zpaq637.zip, July 15, 2013. Contents:
+zpaq638.zip, July 18, 2013. Contents:
 
-zpaq.exe      6.37   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.37   For 64 bit Windows.
-zpaq.cpp      6.37   zpaq user's guide and source code.
+zpaq.exe      6.38   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.38   For 64 bit Windows.
+zpaq.cpp      6.38   zpaq user's guide and source code.
 libzpaq.h     6.25   libzpaq API documentation and header.
 libzpaq.cpp   6.33   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
@@ -55,6 +55,12 @@ as of the last backup on or before July 1, 2013.
 
 List the archive contents, showing all versions (not just the latest)
 of files at least 1 MB in size.
+
+  zpaq c e:backup -force
+
+Compares the archive contents with the original files and reports
+any differences. -force tells it to compare the file contents rather than
+the dates, attributes, and sizes (which is slower but more reliable).
 
   zpaq
 
