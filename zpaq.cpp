@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.37"
+#define ZPAQ_VERSION "6.38"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -39,6 +39,7 @@ Commands:
   a  add               Add changed files to archive.zpaq
   x  extract           Extract latest versions of files
   l  list              List contents
+  c  compare           List and compare with external files
   d  delete            Mark as deleted in a new version of archive
   t  test              Test archive integrity
   p  purge             Copy only current version to file.zpaq or self
@@ -46,10 +47,9 @@ Options (may be abbreviated):
   -not <file|dir>...   Exclude
   -to <file|dir>...    Rename external files or specify prefix
   -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date
-  -force               a: Add even if unchanged. x: output clobbers
+  -force               a: Add even if unchanged. x, p: output clobbers
   -quiet [N]           Don't show files smaller than N (default none)
   -threads N           Use N threads (default: cores detected)
-  -fragile             Don't add or verify checksums or recovery info
   -method 0...6        Compress faster...better (default: 1)
 list options:
   -summary [N]         Show top N files and types (default: 20)
@@ -122,6 +122,20 @@ system, hidden, read-only, indexed), or an octal number like "100644"
 (as passed to chmod(), meaning rw-r--r--) in Linux. If any special
 Windows attributes are set, then the value is displayed in hex.
 
+  c or -compare
+
+List archive contents as with -list and compare with external files.
+Only differences are shown. The internal file is shown with ">" in
+the first column of the listing and the external file is shown with "<".
+If one or the other file does not exist then it is not shown.
+Files are considered different if one exists but not the other,
+or if the dates, attributes, or sizes differ. With -force, the
+contents are compared, but not the dates or attributes.
+
+When file or directory arguments are given, then only those files and
+directories are compared. The default is to compare every file in the
+archive.
+
   d or -delete
 
 Mark files and directories in the archive as deleted. This actually
@@ -186,6 +200,8 @@ renaming, where a, b, c, d, e can be files or directory trees.
 With add, -to renames the external files. For example,
 "zpaq a arc a b c -to d e" compresses the files (or directories)
 d, e, c, saving the names as a, b, c respectively.
+"zpaq c arc a b c -to d e" compares internal a, b, c to external
+d, e, c respectively.
 
   -until N
   -until YYYYMMDD[HH[MM[SS]]]
@@ -196,6 +212,10 @@ will be truncated at N, discarding any subsquently added contents
 before updating. The version can also be specified as a date and time
 (UCT time zone) as an 8, 10, 12, or 14 digit number in the range
 19000101 to 29991231235959 with the last 6 digits defaulting to 235959.
+In this case, a new version of the archive will be appended to the truncated
+archive and dated with the specified date and time rather than the
+current date and time.
+
 The default is the latest version. For backward compatibility, -version
 is equivalent to -until.
 
@@ -204,7 +224,8 @@ is equivalent to -until.
 Add files even if the dates match. If a file really is identical,
 then it will not be added. When extracting, output files will be
 overwritten. It is required with purge if the output file exists
-or to purge an archive in-place.
+or to purge an archive in-place. With compare, compare the file
+contents instead of the dates and attributes.
 
   -quiet [N]
 
@@ -236,7 +257,7 @@ be faster. Recommended only for testing.
 Compress faster..better. The default is -method 1. (See below for advanced
 compression options).
 
-List options:
+List and compare options:
 
   -summary N
 
@@ -728,8 +749,12 @@ private:
 #ifdef unixtest
 #define lstat(a,b) stat(a,b)
 #define mkdir(a,b) mkdir(a)
+#ifndef fseeko
 #define fseeko(a,b,c) fseeko64(a,b,c)
+#endif
+#ifndef ftello
 #define ftello(a) ftello64(a)
+#endif
 #endif
 
 // signed size of a string or vector
@@ -1665,10 +1690,11 @@ private:
   string unrename(const string& name);  // undo rename
   int64_t read_archive(int *errors=0);  // read index block chain
   void read_args(bool scan, bool mark_all=false);  // read args, scan dirs
-  void scandir(const char* filename);   // scan dirs and add args to dt
-  void addfile(const char* filename, int64_t edate, int64_t esize,
+  void scandir(string filename, bool recurse=true);  // scan dirs to dt
+  void addfile(string filename, int64_t edate, int64_t esize,
                int64_t eattr);          // add external file to dt
   void list_versions(int64_t csize);    // print ver. csize=archive size
+  bool equal(DTMap::const_iterator p);  // compare file to external
 };
 
 // Print help message
@@ -1684,6 +1710,7 @@ void Jidac::usage() {
   "  a  add               Add changed files to archive.zpaq\n"
   "  x  extract           Extract latest versions of files\n"
   "  l  list              List contents\n"
+  "  c  compare           List and compare with external files\n"
   "  d  delete            Mark as deleted in a new version of archive\n"
   "  t  test              Test archive integrity\n"
   "  p  purge             Copy only current version to file.zpaq or self\n"
@@ -1695,7 +1722,7 @@ void Jidac::usage() {
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...6        Compress faster...better (default: 1)\n"
-  "list options:\n"
+  "list/compare options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
   "  -all                 List all versions\n"
@@ -1736,8 +1763,9 @@ string Jidac::unrename(const string& name) {
 // Expand an abbreviated option (with or without a leading "-")
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
-  const char* opts[]={"list","add","extract","delete","test","purge",
-    "method","force","quiet","summary","since","compare",
+  const char* opts[]={
+    "list","add","extract","delete","test","purge","compare",
+    "method","force","quiet","summary","since",
     "to","not","version","until","threads","all","fragile",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
@@ -1749,7 +1777,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<6 && result!="") return result;
+      if (i<7 && result!="") return result;
     }
   }
   if (result=="")
@@ -1766,6 +1794,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   since=0;
   summary=0;
   version=9999999999999LL;
+  date=0;
   threads=0; // 0 = auto-detect
   method="1";  // 0..9
   ht.resize(1);  // element 0 not used
@@ -1775,7 +1804,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   for (int i=1; i<argc; ++i) {
     const string opt=expandOption(argv[i]);
     if ((opt=="-add" || opt=="-extract" || opt=="-list" || opt=="-delete"
-        || opt=="-test" || opt=="-purge")
+        || opt=="-test" || opt=="-purge" || opt=="-compare")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       command=opt;
       archive=argv[++i];
@@ -1818,12 +1847,14 @@ int Jidac::doCommand(int argc, const char** argv) {
         version=version*100+59;
       if (version>=190000000000LL && version<=299912312359LL)
         version=version*100+59;
-      if (version>9999999
-          && (version<19000101000000LL || version>29991231235959LL)) {
-        fprintf(stderr,
-           "Version date %1.0f must be 19000101000000 to 29991231235959\n",
-            double(version));
-        exit(1);
+      if (version>9999999) {
+        if (version<19000101000000LL || version>29991231235959LL) {
+          fprintf(stderr,
+            "Version date %1.0f must be 19000101000000 to 29991231235959\n",
+             double(version));
+          exit(1);
+        }
+        date=version;
       }
     }
     else if (opt=="-method" && i<argc-1)
@@ -1842,13 +1873,13 @@ int Jidac::doCommand(int argc, const char** argv) {
     archive+=".zpaq";
 
   // Get date
-  if (command=="-add" || command=="-delete" || command=="-purge") {
+  if (!date && (command=="-add" || command=="-delete" || command=="-purge")) {
     time_t now=time(NULL);
     tm* t=gmtime(&now);
     date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
         +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
     if (now==-1 || date<20120000000000LL || date>30000000000000LL)
-      error("date is incorrect");
+      error("date is incorrect, use -until YYYYMMDDHHMMSS to set");
   }
 
   // Execute command
@@ -1856,7 +1887,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     printf("zpaq v" ZPAQ_VERSION " journaling archiver, compiled "
            __DATE__ "\n");
   if (size(files) && (command=="-add" || command=="-delete")) add();
-  else if (command=="-list") list();
+  else if (command=="-list" || command=="-compare") list();
   else if (command=="-extract") return extract();
   else if (command=="-test") test();
   else if (command=="-purge") purge();
@@ -2237,7 +2268,7 @@ int64_t Jidac::read_archive(int *errors) {
 // using written=0 for each match. Match all files in dt if no args
 // (files[] is empty). If mark_all is true, then mark deleted files too.
 // If scan is true then recursively scan external directories in args,
-// add to dt, and mark them.
+// or all files if no args, add to dt, and mark them.
 void Jidac::read_args(bool scan, bool mark_all) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
@@ -2262,7 +2293,17 @@ void Jidac::read_args(bool scan, bool mark_all) {
   // Scan external files and directories, insert into dt and mark written=0
   if (scan)
     for (int i=0; i<size(files); ++i)
-      scandir(rename(files[i]).c_str());
+      scandir(rename(files[i]));
+
+  // If no args then scan all files
+  if (scan && size(files)==0) {
+    vector<string> v;
+    for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p)
+      if (mark_all || (p->second.dtv.size() && p->second.dtv.back().date))
+        v.push_back(p->first);
+    for (int i=0; i<size(v); ++i)
+      scandir(rename(v[i]), false);
+  }
 }
 
 // Return the part of fn up to the last slash
@@ -2273,10 +2314,10 @@ string path(const string& fn) {
   return fn.substr(0, n);
 }
 
-// Insert filename (UTF-8 with "/") into dt unless in notfiles.
-// If filename is a directory then also insert its contents.
+// Insert filename (UTF-8 with "/") into dt unless in notfiles. If filename
+// is a directory and recurse is true then also insert its contents.
 // In Windows, filename might have wildcards like "file.*" or "dir/*"
-void Jidac::scandir(const char* filename) {
+void Jidac::scandir(string filename, bool recurse) {
 
 #ifdef unix
 
@@ -2286,42 +2327,48 @@ void Jidac::scandir(const char* filename) {
 
   // Add regular files and directories
   struct stat sb;
-  if (!lstat(filename, &sb)) {
+  if (filename!="" && filename[filename.size()-1]=='/')
+    filename=filename.substr(0, filename.size()-1);
+  if (!lstat(filename.c_str(), &sb)) {
     if (S_ISREG(sb.st_mode))
       addfile(filename, decimal_time(sb.st_mtime), sb.st_size,
               'u'+(sb.st_mode<<8));
 
     // Traverse directory
     if (S_ISDIR(sb.st_mode)) {
-      addfile((string(filename)+"/").c_str(),
-              decimal_time(sb.st_mtime), sb.st_size,
-              'u'+(sb.st_mode<<8));
-      DIR* dirp=opendir(filename);
-      if (dirp) {
-        for (dirent* dp=readdir(dirp); dp; dp=readdir(dirp)) {
-          if (strcmp(".", dp->d_name) && strcmp("..", dp->d_name)) {
-            string s=filename;
-            int len=s.size();
-            if (len>0 && s[len-1]!='/' && s[len-1]!='\\') s+="/";
-            s+=dp->d_name;
-            scandir(s.c_str());
+      addfile(filename+"/", decimal_time(sb.st_mtime), 0,
+             'u'+(sb.st_mode<<8));
+      if (recurse) {
+        DIR* dirp=opendir(filename.c_str());
+        if (dirp) {
+          for (dirent* dp=readdir(dirp); dp; dp=readdir(dirp)) {
+            if (strcmp(".", dp->d_name) && strcmp("..", dp->d_name)) {
+              string s=filename;
+              int len=s.size();
+              if (len>0 && s[len-1]!='/' && s[len-1]!='\\') s+="/";
+              s+=dp->d_name;
+              scandir(s);
+            }
           }
+          closedir(dirp);
         }
-        closedir(dirp);
+        else
+          perror(filename.c_str());
       }
-      else
-        perror(filename);
     }
   }
   else
-    perror(filename);
+    perror(filename.c_str());
 
 #else  // Windows: expand wildcards in filename
 
   // Expand wildcards
   WIN32_FIND_DATA ffd;
   string t=filename;
-  if (t.size()>0 && t[t.size()-1]=='/') t+="*";
+  if (t.size()>0 && t[t.size()-1]=='/') {
+    if (recurse) t+="*";
+    else filename=t=t.substr(0, t.size()-1);
+  }
   HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
   if (h==INVALID_HANDLE_VALUE)
     winError(t.c_str());
@@ -2349,10 +2396,10 @@ void Jidac::scandir(const char* filename) {
     if (edate) {
       if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         fn+="/";
-      addfile(fn.c_str(), edate, esize, eattr);
-      if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      addfile(fn, edate, esize, eattr);
+      if (recurse && (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
         fn+="*";
-        scandir(fn.c_str());
+        scandir(fn);
       }
     }
     if (!FindNextFile(h, &ffd)) {
@@ -2367,7 +2414,7 @@ void Jidac::scandir(const char* filename) {
 
 // Add external file and its date, size, and attributes to dt
 // if eattr satisfies -attribute args.
-void Jidac::addfile(const char* filename, int64_t edate,
+void Jidac::addfile(string filename, int64_t edate,
                     int64_t esize, int64_t eattr) {
   DT& d=dt[unrename(filename)];
   d.edate=edate;
@@ -3776,10 +3823,13 @@ ThreadReturn compressThread(void* arg) {
       cj.state=CJ::COMPRESSING;
       int insize=cj.in.size(), start=0, frags=0;
       int64_t now=mtime();
-      if (insize>=8) {
+      if (insize>=8 && size(cj.filename)==28
+          && cj.filename.substr(0, 3)=="jDC" && cj.filename[17]=='d') {
         const char* p=cj.in.c_str()+insize-8;
         start=btoi(p);
         frags=btoi(p);
+        if (!start)
+          start=atoi(cj.filename.c_str()+18);
       }
       release(job.mutex);
       string m=compressBlock(&cj.in, &cj.out, cj.method, cj.filename.c_str(),
@@ -4438,7 +4488,7 @@ struct Block {  // list of fragments
   bool streaming;       // must decompress sequentially?
   enum {READY, WORKING, GOOD, BAD} state;
   Block(unsigned s, int64_t o):
-    offset(o), start(s), size(0), state(READY) {}
+    offset(o), start(s), size(0), streaming(false), state(READY) {}
 };
 
 struct ExtractJob {         // list of jobs
@@ -5267,6 +5317,40 @@ void Jidac::list_versions(int64_t csize) {
   }
 }
 
+// Test if the internal and external files are equal. If force is true
+// then compare files by contents only, else compare dates,
+// attributes (if both exist), and size.
+bool Jidac::equal(DTMap::const_iterator p) {
+  if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
+    return p->second.edate==0;  // true if neither file exists
+  if (p->second.edate==0) return false;  // external does not exist
+  assert(p->second.dtv.size()>0);
+  if (p->second.dtv.back().size!=p->second.esize) return false;
+  if (force) {
+    if (p->first!="" && p->first[p->first.size()-1]=='/') return true;
+    InputFile in;
+    in.open(rename(p->first).c_str());
+    if (!in.isopen()) return false;
+    libzpaq::SHA1 sha1;
+    for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
+      unsigned f=p->second.dtv.back().ptr[i];
+      if (f<1 || f>=ht.size() || ht[f].csize==HT_BAD) return false;
+      for (int j=ht[f].usize; j>0; --j) {
+        int c=in.get();
+        if (c==EOF) return false;
+        sha1.put(c);
+      }
+      if (memcmp(sha1.result(), ht[f].sha1, 20)!=0) return false;
+    }
+  }
+  else {
+    if (p->second.dtv.back().date!=p->second.edate) return false;
+    if (p->second.dtv.back().attr && p->second.eattr
+        && p->second.dtv.back().attr!=p->second.eattr) return false;
+  }
+  return true;
+}
+
 // List contents
 void Jidac::list() {
 
@@ -5373,40 +5457,55 @@ void Jidac::list() {
     return;
   }
 
-  // Ordinary list
+  // Ordinary list or compare
   int64_t usize=0;
-  unsigned nfiles=0, shown=0;
-  read_args(false, true);
+  unsigned nfiles=0, shown=0, same=0, different=0;
+  read_args(command=="-compare", all);
   if (since<0) since+=ver.size();
   printf("\n"
-    "Ver  Date      Time (UT) Attr           Size File\n"
-    "---- ---------- -------- ------ ------------ ----\n");
+    " Ver  Date      Time (UT) Attr           Size File\n"
+    "----- ---------- -------- ------ ------------ ----\n");
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.written==0) {
+      const bool isequal=command=="-compare" && equal(p);
+      isequal ? ++same : ++different;
       for (unsigned i=0; i<p->second.dtv.size(); ++i) {
         if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=quiet
             && (all || (i+1==p->second.dtv.size() && p->second.dtv[i].date))){
-          printf("%4d ", p->second.dtv[i].version);
-          if (p->second.dtv[i].date) {
-            ++shown;
-            usize+=p->second.dtv[i].size;
-            printf("%s %s %12.0f ",
-                   dateToString(p->second.dtv[i].date).c_str(),
-                   attrToString(p->second.dtv[i].attr).c_str(),
-                   double(p->second.dtv[i].size));
+          if (!isequal) {
+            printf(">%4d ", p->second.dtv[i].version);
+            if (p->second.dtv[i].date) {
+              ++shown;
+              usize+=p->second.dtv[i].size;
+              printf("%s %s %12.0f ",
+                     dateToString(p->second.dtv[i].date).c_str(),
+                     attrToString(p->second.dtv[i].attr).c_str(),
+                     double(p->second.dtv[i].size));
+            }
+            else
+              printf("%-40s", "Deleted");
+            printUTF8(p->first.c_str());
+            printf("\n");
           }
-          else
-            printf("%-40s", "Deleted");
-          printUTF8(p->first.c_str());
-          printf("\n");
         }
+      }
+      if (!isequal && p->second.edate && p->second.esize>=quiet) {
+        printf("<     %s %s %12.0f ",
+            dateToString(p->second.edate).c_str(),
+            attrToString(p->second.eattr).c_str(), 
+            double(p->second.esize));
+        printUTF8(rename(p->first).c_str());
+        printf("\n");
       }
     }
     if (p->second.dtv.size() && p->second.dtv.back().date) ++nfiles;
   }
+  if (command=="-compare")
+    printf("%u of %u files differ\n", different, same+different);
   printf("%u of %u files shown. %1.0f -> %1.0f\n",
          shown, nfiles, double(usize), double(csize));
-  list_versions(csize);
+  if (command=="-list")
+    list_versions(csize);
 }
 
 /////////////////////////////// purge /////////////////////////////////
