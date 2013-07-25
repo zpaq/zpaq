@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.38"
+#define ZPAQ_VERSION "6.39"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -112,7 +112,12 @@ version is specified with -until.
   l or -list
 
 List the archive contents. Each file or directory is shown with a
-version number, date, attributes, uncompressed size, and file name.
+version number, date, attributes, uncompressed size, approximate
+compression ratio, and file name. The compression ratio is estimated
+by assuming that all fragments in a data block have the same ratio. It
+does not account for deduplication or for the overhead of storing the
+version headers, index, or fragment sizes and hashes.
+
 There may be multiple versions of a single file with different version
 numbers. A second table lists for each version number the number of
 fragments, date, number of files added and deleted, and the number
@@ -262,8 +267,9 @@ List and compare options:
   -summary N
 
 When listing contents, show only the top N files, directories, and
-filename extensions by total size. The default is 20. Also show
-a table of deduplication statistics and a table of version dates.
+filename extensions by total size and approximate compression ratio.
+The default is 20. Also show a table of deduplication statistics and a
+table of version dates.
 
   -since N
 
@@ -609,6 +615,7 @@ Possible options:
 #include <unistd.h>
 #include <dirent.h>
 #include <utime.h>
+#include <errno.h>
 
 #else  // Assume Windows
 #define UNICODE
@@ -1617,9 +1624,10 @@ struct DTV {
   int64_t date;          // decimal YYYYMMDDHHMMSS (UT) or 0 if deleted
   int64_t size;          // size or -1 if unknown
   int64_t attr;          // first 8 attribute bytes
+  double csize;          // approximate compressed size
   vector<unsigned> ptr;  // list of fragment indexes to HT
   int version;           // which transaction was it added?
-  DTV(): date(0), size(0), attr(0), version(0) {}
+  DTV(): date(0), size(0), attr(0), csize(0), version(0) {}
 };
 
 // filename entry
@@ -1712,13 +1720,13 @@ void Jidac::usage() {
   "  l  list              List contents\n"
   "  c  compare           List and compare with external files\n"
   "  d  delete            Mark as deleted in a new version of archive\n"
-  "  t  test              Test archive integrity\n"
   "  p  purge             Copy only current version to file.zpaq or self\n"
+  "  t  test              Test archive integrity\n"
   "Options (may be abbreviated):\n"
   "  -not <file|dir>...   Exclude\n"
   "  -to <file|dir>...    Rename external files or specify prefix\n"
   "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
-  "  -force               a: Add even if unchanged. x, p: output clobbers\n"
+  "  -force               a: Add if unchanged. x, p: clobber. c: by content\n"
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...6        Compress faster...better (default: 1)\n"
@@ -1916,10 +1924,12 @@ int64_t Jidac::read_archive(int *errors) {
     lastfile=lastfile.substr(0, size(lastfile)-5); // drop .zpaq
   int64_t block_offset=0;  // start of last block of any type
   int64_t data_offset=0;   // start of last block of fragments (type d)
+  int64_t segment_offset=0;// start of last segment
   bool found_data=false;   // exit if nothing found
   bool first=true;         // first segment in archive?
   enum {NORMAL, ERR, RECOVER} pass=NORMAL;  // recover ht from data blocks?
   StringBuffer os(32832);  // decompressed block
+  map<int64_t, double> compressionRatio;  // block offset -> compression ratio
 
   // Detect archive format and read the filenames, fragment sizes,
   // and hashes. In JIDAC format, these are in the index blocks, allowing
@@ -1936,7 +1946,7 @@ int64_t Jidac::read_archive(int *errors) {
         found_data=true;
       else if (pass==ERR) {
         in.seek(0, SEEK_SET);
-        block_offset=0;
+        segment_offset=block_offset=0;
         if (!d.findBlock()) break;
         pass=RECOVER;
         if (quiet<MAX_QUIET)
@@ -2083,14 +2093,16 @@ int64_t Jidac::read_archive(int *errors) {
                 size(ht), double(num));
               pass=ERR;
             }
+            double usum=0;  // total uncompressed size
             for (unsigned i=0; i<n; ++i) {
               while (ht.size()<=num+i) ht.push_back(HT());
               memcpy(ht[num+i].sha1, s, 20);
               s+=20;
               if (ht[num+i].csize!=HT_BAD) error("duplicate fragment ID");
-              ht[num+i].usize=btoi(s);
+              usum+=ht[num+i].usize=btoi(s);
               ht[num+i].csize=i?-int(i):data_offset;
             }
+            if (usum>0) compressionRatio[data_offset]=bsize/usum;
             data_offset+=bsize;
           }
 
@@ -2099,6 +2111,7 @@ int64_t Jidac::read_archive(int *errors) {
           // or:       date[8] filename 0 na[4] attr[na] ni[4] ptr[ni][4]
           // Read into DT
           else if (filename.s[17]=='i' && pass!=RECOVER) {
+            const bool islist=command=="-list" || command=="-compare";
             const char* s=os.c_str();
             const char* const end=s+os.size();
             while (s<=end-9) {
@@ -2120,15 +2133,25 @@ int64_t Jidac::read_archive(int *errors) {
                   const unsigned ni=btoi(s);
                   dtv.ptr.resize(ni);
                   for (unsigned i=0; i<ni && s<=end-4; ++i) {  // read ptr
-                    dtv.ptr[i]=btoi(s);
-                    if (dtv.ptr[i]<1 || dtv.ptr[i]>=ht.size()+(1<<24))
+                    const unsigned j=dtv.ptr[i]=btoi(s);
+                    if (j<1 || j>=ht.size()+(1<<24))
                       error("bad fragment ID");
-                    while (dtv.ptr[i]>=ht.size()) {
+                    while (j>=ht.size()) {
                       pass=ERR;
                       ht.push_back(HT());
                     }
-                    dtv.size+=ht[dtv.ptr[i]].usize;
-                    ver.back().usize+=ht[dtv.ptr[i]].usize;
+                    dtv.size+=ht[j].usize;
+                    ver.back().usize+=ht[j].usize;
+
+                    // Estimate compressed size
+                    if (islist) {
+                      unsigned k=j;
+                      if (ht[j].csize<0 && ht[j].csize!=HT_BAD)
+                        k+=ht[j].csize;
+                      if (k>0 && k<ht.size() && ht[k].csize!=HT_BAD
+                          && ht[k].csize>=0)
+                        dtv.csize+=compressionRatio[ht[k].csize]*ht[j].usize;
+                    }
                   }
                 }
               }
@@ -2225,6 +2248,7 @@ int64_t Jidac::read_archive(int *errors) {
           dtr.dtv.back().ptr.push_back(size(ht));
           if (usize>=0 && dtr.dtv.back().size>=0) dtr.dtv.back().size+=usize;
           else dtr.dtv.back().size=-1;
+          dtr.dtv.back().csize+=in.tell()-segment_offset;
           if (usize>=0) ver.back().usize+=usize;
           ht.push_back(HT(sha1result+1, usize>0x7fffffff ? -1 : usize,
                           segs ? -segs : block_offset));
@@ -2233,16 +2257,17 @@ int64_t Jidac::read_archive(int *errors) {
         ++segs;
         filename.s="";
         first=false;
-      }
-      block_offset=in.tell();
-    }
+        segment_offset=in.tell();
+      }  // end while findFilename
+      segment_offset=block_offset=in.tell();
+    }  // end try
     catch (std::exception& e) {
       block_offset=in.tell();
       fprintf(stderr, "Skipping block at %1.0f: %s\n", double(block_offset),
               e.what());
       if (errors) ++*errors;
     }
-  }
+  }  // end while true
   if (in.tell()>0 && !found_data) error("archive contains no data");
   in.close();
 
@@ -2357,7 +2382,7 @@ void Jidac::scandir(string filename, bool recurse) {
       }
     }
   }
-  else
+  else if (recurse || errno!=ENOENT)
     perror(filename.c_str());
 
 #else  // Windows: expand wildcards in filename
@@ -2370,7 +2395,9 @@ void Jidac::scandir(string filename, bool recurse) {
     else filename=t=t.substr(0, t.size()-1);
   }
   HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
-  if (h==INVALID_HANDLE_VALUE)
+  if (h==INVALID_HANDLE_VALUE && (recurse ||
+      (GetLastError()!=ERROR_FILE_NOT_FOUND &&
+       GetLastError()!=ERROR_PATH_NOT_FOUND)))
     winError(t.c_str());
   while (h!=INVALID_HANDLE_VALUE) {
 
@@ -2819,13 +2846,10 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
 // Write the initial args into args[0..8].
 string makeConfig(const char* method, int args[]) {
   assert(method);
-  assert(method[0]=='x' || method[0]=='s' || method[0]=='0');
+  const char type=method[0];
+  assert(type=='x' || type=='s' || type=='0');
 
-  // "0" = No compression
-  if (method[0]=='0')
-    return "comp 0 0 0 0 0 hcomp end\n";
-
-  // Read "xN1,N2...N9" into args[0..8] ($1..$9)
+  // Read "{x|s|0}N1,N2...N9" into args[0..8] ($1..$9)
   args[0]=4;  // log block size in MB
   args[1]=1;  // lz77 with variable length codes
   args[2]=4;  // minimum match length
@@ -2843,6 +2867,10 @@ string makeConfig(const char* method, int args[]) {
       args[i]=0;
     ++method;
   }
+
+  // "0..." = No compression
+  if (type=='0')
+    return "comp 0 0 0 0 0 hcomp end\n";
 
   // Generate the postprocessor
   string hdr, pcomp;
@@ -3502,9 +3530,9 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   assert((1u<<(arg0+20))>=n+4096);
 
   // Expand default methods
-  if (isdigit(method[0]) && method[0]>'0') {
+  if (isdigit(method[0])) {
     const int level=method[0]-'0';
-    assert(level>=1 && level<=9);
+    assert(level>=0 && level<=9);
 
     // build models
     const int doe8=(type&2)*2;
@@ -3513,7 +3541,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
 
     // store uncompressed
     if (level==0)
-      method+=",0";
+      method="0"+itos(arg0)+",0";
 
     // LZ77, no model. Store if hard to compress
     else if (level==1) {
@@ -5292,10 +5320,18 @@ void Jidac::test() {
 
 // For counting files and sizes by -list -summary
 struct TOP {
-  int64_t size;
-  int count;
-  TOP(): size(0), count(0) {}
+  double csize;  // compressed size
+  int64_t size;  // uncompressed size
+  int count;     // number of files
+  TOP(): csize(0), size(0), count(0) {}
   void inc(int64_t n) {size+=n; ++count;}
+  void inc(DTMap::const_iterator p) {
+    if (p->second.dtv.size()>0) {
+      size+=p->second.dtv.back().size;
+      csize+=p->second.dtv.back().csize;
+      ++count;
+    }
+  }
 };
 
 void Jidac::list_versions(int64_t csize) {
@@ -5362,8 +5398,8 @@ void Jidac::list() {
     read_args(false);
 
     // Report biggest files, directories, and extensions
-    printf("\nRank      Size (MB)     Files File, Directory/, or .Type\n"
-             "---- -------------- --------- --------------------------\n");
+    printf("\nRank      Size (MB) Ratio     Files File, Directory/, or .Type\n"
+             "---- -------------- ------ --------- --------------------------\n");
     map<string, TOP> top;  // filename or dir -> total size and count
     vector<int> frag(ht.size());  // frag ID -> reference count
     int unknown_ref=0;  // count fragments and references with unknown size
@@ -5371,20 +5407,20 @@ void Jidac::list() {
     for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
       if (p->second.dtv.size() && p->second.dtv.back().date
           && p->second.written==0) {
-        top[""].inc(p->second.dtv.back().size);
-        top[p->first].inc(p->second.dtv.back().size);
+        top[""].inc(p);
+        top[p->first].inc(p);
         int ext=0;  // location of . in filename
         for (unsigned i=0; i<p->first.size(); ++i) {
           if (p->first[i]=='/') {
-            top[p->first.substr(0, i+1)].inc(p->second.dtv.back().size);
+            top[p->first.substr(0, i+1)].inc(p);
             ext=0;
           }
           else if (p->first[i]=='.') ext=i;
         }
         if (ext)
-          top[lowercase(p->first.substr(ext))].inc(p->second.dtv.back().size);
+          top[lowercase(p->first.substr(ext))].inc(p);
         else
-          top["."].inc(p->second.dtv.back().size);
+          top["."].inc(p);
         for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
           const unsigned j=p->second.dtv.back().ptr[i];
           if (j<frag.size()) {
@@ -5402,7 +5438,8 @@ void Jidac::list() {
     for (map<int64_t, vector<string> >::const_iterator p=st.begin();
          p!=st.end() && i<=summary; ++p) {
       for (unsigned j=0; i<=summary && j<p->second.size(); ++i, ++j) {
-        printf("%4d %14.6f %9d ", i, (-p->first)/1000000.0,
+        printf("%4d %14.6f %6.4f %9d ", i, (-p->first)/1000000.0,
+               top[p->second[j].c_str()].csize/max(int64_t(1), -p->first),
                top[p->second[j].c_str()].count);
         printUTF8(p->second[j].c_str());
         printf("\n");
@@ -5463,8 +5500,8 @@ void Jidac::list() {
   read_args(command=="-compare", all);
   if (since<0) since+=ver.size();
   printf("\n"
-    " Ver  Date      Time (UT) Attr           Size File\n"
-    "----- ---------- -------- ------ ------------ ----\n");
+    " Ver  Date      Time (UT) Attr           Size Ratio  File\n"
+    "----- ---------- -------- ------ ------------ ------ ----\n");
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.written==0) {
       const bool isequal=command=="-compare" && equal(p);
@@ -5477,20 +5514,22 @@ void Jidac::list() {
             if (p->second.dtv[i].date) {
               ++shown;
               usize+=p->second.dtv[i].size;
-              printf("%s %s %12.0f ",
+              printf("%s %s %12.0f %6.4f ",
                      dateToString(p->second.dtv[i].date).c_str(),
                      attrToString(p->second.dtv[i].attr).c_str(),
-                     double(p->second.dtv[i].size));
+                     double(p->second.dtv[i].size),
+                     p->second.dtv[i].size>0
+                       ? p->second.dtv[i].csize/p->second.dtv[i].size : 1.0);
             }
             else
-              printf("%-40s", "Deleted");
+              printf("%-47s", "Deleted");
             printUTF8(p->first.c_str());
             printf("\n");
           }
         }
       }
       if (!isequal && p->second.edate && p->second.esize>=quiet) {
-        printf("<     %s %s %12.0f ",
+        printf("<     %s %s %12.0f        ",
             dateToString(p->second.edate).c_str(),
             attrToString(p->second.eattr).c_str(), 
             double(p->second.esize));
@@ -5637,9 +5676,8 @@ void Jidac::purge() {
   int64_t deleted_bytes=0;
   unsigned deleted_blocks=0;
   for (unsigned i=1; i<blist.size(); ++i) {
-    if (size(files)==0 && blist[i].used)
-      if (blist[i].start<size(hdr))
-        error("cannot purge fragile archive in place");
+    if (size(files)==0 && blist[i].used && blist[i].start<size(hdr))
+      error("cannot purge fragile archive in place");
     if (!blist[i].used) {
       deleted_bytes+=blist[i].end-blist[i].start;
       ++deleted_blocks;
