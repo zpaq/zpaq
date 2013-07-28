@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.39"
+#define ZPAQ_VERSION "6.40"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -51,6 +51,7 @@ Options (may be abbreviated):
   -quiet [N]           Don't show files smaller than N (default none)
   -threads N           Use N threads (default: cores detected)
   -method 0...6        Compress faster...better (default: 1)
+  -noattributes        Ignore/don't save file attributes
 list options:
   -summary [N]         Show top N files and types (default: 20)
   -since N             List from N'th update or last -N updates
@@ -67,11 +68,11 @@ existing abbreviations ambiguous. Commands:
 
 Add files and directory trees to the archive. Directories are scanned
 recursively to add subdirectories and their contents. Only ordinary
-files and directories are added, not special types (devices, symbolic
-links, etc). Symbolic links are not followed. File names and directories
-may be specified with absolute or relative paths or no paths, and will
-be saved that way. The last-modified date is saved, rounded to the nearest
-second. Windows attributes or Linux permissions are saved. However,
+files and directories are added, not special types (devices, symbolic links,
+etc). Symbolic links and reparse points are not followed. File names and
+directories may be specified with absolute or relative paths or no paths,
+and will be saved that way. The last-modified date is saved, rounded to the
+nearest second. Windows attributes or Linux permissions are saved. However,
 additional metadata such as owner, group, extended attributes (xattrs,
 ACLs, alternate streams) are not saved.
 
@@ -261,6 +262,15 @@ be faster. Recommended only for testing.
 
 Compress faster..better. The default is -method 1. (See below for advanced
 compression options).
+
+  -noattributes
+
+Ignore Windows file attributes (archive, read-only, system, hidden, index)
+and Linux permissions. The add commmand will not save them in the archive.
+The extract command will ignore any saved attributes and create files with
+default attributes and permissions. The list command will not show them.
+The compare command will treat files as identical if only the attributes
+differ. The purge command will remove any saved attributes.
 
 List and compare options:
 
@@ -1679,6 +1689,7 @@ private:
   string method;            // 0..9, default "1"
   bool force;               // -force option
   bool all;                 // -all option
+  bool noattributes;        // -noattributes option
 
   // Archive state
   vector<HT> ht;            // list of fragments
@@ -1730,6 +1741,7 @@ void Jidac::usage() {
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...6        Compress faster...better (default: 1)\n"
+  "  -noattributes        Ignore/don't save file attributes\n"
   "list/compare options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
@@ -1773,7 +1785,7 @@ string Jidac::unrename(const string& name) {
 string expandOption(const char* opt) {
   const char* opts[]={
     "list","add","extract","delete","test","purge","compare",
-    "method","force","quiet","summary","since",
+    "method","force","quiet","summary","since","noattributes",
     "to","not","version","until","threads","all","fragile",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
@@ -1798,7 +1810,7 @@ int Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
-  force=all=false;
+  force=all=noattributes=false;
   since=0;
   summary=0;
   version=9999999999999LL;
@@ -1827,6 +1839,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-force") force=true;
     else if (opt=="-all") all=true;
     else if (opt=="-fragile") fragile=true;
+    else if (opt=="-noattributes") noattributes=true;
     else if (opt=="-since" && i<argc-1)
       since=atoi(argv[++i]);
     else if (opt=="-summary") {
@@ -2129,6 +2142,7 @@ int64_t Jidac::read_archive(int *errors) {
                 const unsigned na=btoi(s);
                 for (unsigned i=0; i<na && s<end; ++i, ++s)  // read attr
                   if (i<8) dtv.attr+=int64_t(*s&255)<<(i*8);
+                if (noattributes) dtv.attr=0;
                 if (s<=end-4) {
                   const unsigned ni=btoi(s);
                   dtv.ptr.resize(ni);
@@ -2240,7 +2254,7 @@ int64_t Jidac::read_archive(int *errors) {
           if (filename.s.size()>0 || first) {
             dtr.dtv.push_back(DTV());
             dtr.dtv.back().date=fdate;
-            dtr.dtv.back().attr=fattr;
+            dtr.dtv.back().attr=noattributes?0:fattr;
             dtr.dtv.back().version=size(ver)-1;
             ++ver.back().updates;
           }
@@ -2410,11 +2424,12 @@ void Jidac::scandir(string filename, bool recurse) {
     const int64_t esize=ffd.nFileSizeLow+(int64_t(ffd.nFileSizeHigh)<<32);
     const int64_t eattr='w'+(int64_t(ffd.dwFileAttributes)<<8);
 
-    // Ignore the names "." and ".." or any path/name in notfiles
+    // Ignore links, the names "." and ".." or any path/name in notfiles
     t=wtou(ffd.cFileName);
-    if (t=="." || t=="..") edate=0;  // don't add
+    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
+        || t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
-    for (int i=0; i<size(notfiles); ++i)
+    for (int i=0; edate && i<size(notfiles); ++i)
       if (ispath(notfiles[i].c_str(), unrename(fn).c_str()))
         edate=0;
 
@@ -2446,7 +2461,7 @@ void Jidac::addfile(string filename, int64_t edate,
   DT& d=dt[unrename(filename)];
   d.edate=edate;
   d.esize=esize;
-  d.eattr=eattr;
+  d.eattr=noattributes?0:eattr;
   d.written=0;
 }
 
@@ -4393,7 +4408,8 @@ void Jidac::add() {
        || p->second.edate!=p->second.dtv.back().date)) {
       if (dtr.dtv.size()==0 // new file
          || dtr.edate!=dtr.dtv.back().date  // date change
-         || dtr.eattr!=dtr.dtv.back().attr  // attr change
+         || (dtr.eattr && dtr.dtv.back().attr
+             && dtr.eattr!=dtr.dtv.back().attr)  // attr change
          || dtr.eptr!=dtr.dtv.back().ptr) { // content change
         is+=ltob(dtr.edate)+p->first+'\0';
         if ((dtr.eattr&255)=='u') {  // unix attributes
@@ -5500,8 +5516,9 @@ void Jidac::list() {
   read_args(command=="-compare", all);
   if (since<0) since+=ver.size();
   printf("\n"
-    " Ver  Date      Time (UT) Attr           Size Ratio  File\n"
-    "----- ---------- -------- ------ ------------ ------ ----\n");
+    " Ver  Date      Time (UT) %s        Size Ratio  File\n"
+    "----- ---------- -------- %s------------ ------ ----\n",
+    noattributes?"":"Attr   ", noattributes?"":"------ ");
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.written==0) {
       const bool isequal=command=="-compare" && equal(p);
@@ -5514,24 +5531,28 @@ void Jidac::list() {
             if (p->second.dtv[i].date) {
               ++shown;
               usize+=p->second.dtv[i].size;
-              printf("%s %s %12.0f %6.4f ",
+              printf("%s %s%12.0f %6.4f ",
                      dateToString(p->second.dtv[i].date).c_str(),
-                     attrToString(p->second.dtv[i].attr).c_str(),
+                     noattributes ? "" :
+                       (attrToString(p->second.dtv[i].attr)+" ").c_str(),
                      double(p->second.dtv[i].size),
                      p->second.dtv[i].size>0
                        ? p->second.dtv[i].csize/p->second.dtv[i].size : 1.0);
             }
-            else
-              printf("%-47s", "Deleted");
+            else {
+              printf("%-40s", "Deleted");
+              if (!noattributes) printf("       ");
+            }
             printUTF8(p->first.c_str());
             printf("\n");
           }
         }
       }
       if (!isequal && p->second.edate && p->second.esize>=quiet) {
-        printf("<     %s %s %12.0f        ",
+        printf("<     %s %s%12.0f        ",
             dateToString(p->second.edate).c_str(),
-            attrToString(p->second.eattr).c_str(), 
+            noattributes ? "" :
+              (attrToString(p->second.eattr)+" ").c_str(), 
             double(p->second.esize));
         printUTF8(rename(p->first).c_str());
         printf("\n");
