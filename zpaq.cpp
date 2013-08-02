@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.40"
+#define ZPAQ_VERSION "6.41"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -38,21 +38,22 @@ Usage: command archive.zpaq [file|dir]... -options...
 Commands:
   a  add               Add changed files to archive.zpaq
   x  extract           Extract latest versions of files
+  r  restore           Delete changes before extracting
   l  list              List contents
   c  compare           List and compare with external files
   d  delete            Mark as deleted in a new version of archive
-  t  test              Test archive integrity
   p  purge             Copy only current version to file.zpaq or self
+  t  test              Test archive integrity
 Options (may be abbreviated):
   -not <file|dir>...   Exclude
   -to <file|dir>...    Rename external files or specify prefix
   -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date
-  -force               a: Add even if unchanged. x, p: output clobbers
+  -force               a: Add all. x, p: clobber. r, c: compare contents
   -quiet [N]           Don't show files smaller than N (default none)
   -threads N           Use N threads (default: cores detected)
   -method 0...6        Compress faster...better (default: 1)
   -noattributes        Ignore/don't save file attributes
-list options:
+list/compare options:
   -summary [N]         Show top N files and types (default: 20)
   -since N             List from N'th update or last -N updates
   -all                 List all versions
@@ -86,14 +87,15 @@ the archive. When a directory is added, any files that existed in
 the old version of the directory but not the new version are marked
 as deleted in the current version but remain in the archive.
 
-For all commands, file names and directories may be specified with
-wildcards. A * matches any string of length 0 or more up to the
-next slash. A ? matches exactly one character. In Linux, names with
-wildcards must be quoted to protect them from the shell. In Windows,
-the forward (/) and back (\) slash are equivalent and stored as (/).
-When adding directories, a trailing slash like c:\ is eqivalent
-to all of the files in that directory but not the directory itself,
-as in c:\*
+If an argument has a trailing slash like "dir/" then it means to add
+the contents of dir but not dir itself (i.e. don't store its attributes
+or date). Without the trailing slash, dir is also stored. It is
+extracted in either case.
+
+In Windows, wildcards are interpreted in the usual way. A * matches
+any string and a ? matches any character. A backslash \ and a forward
+slash / are interpreted the same way as a directory path separator.
+In Linux, wildcards are interpreted by the shell, not by zpaq.
 
 If the archive is "" (an empty string), then zpaq will test compression
 (report size and time) without writing to disk.
@@ -109,6 +111,29 @@ restored as saved. Attributes saved in Windows will not be restored
 in Linux and vice versa. If there are multiple versions of a file
 saved, then the latest version will be extracted unless an earlier
 version is specified with -until.
+
+Arguments may have wildcards. A ? matches any character including /,
+and * matches any string, including strings containing /. In Linux,
+arguments with wildcards have to be quoted to protect them from the shell.
+
+  r or -restore
+
+Delete the named files and directories and then extract them.
+At least one file or directory argument is required. All of the arguments
+must match a corresponding file or directory in the archive exactly as
+saved, case sensitive (even in Windows) without wildcards (except that a
+trailing slash or backslash is optional for directories). If this test
+passes, then the external files and dirctories are restored to the state in
+the archive by deleting any external files that do not exist, and creating
+or overwriting any external files that differ. Files are assumed to be
+identical if the sizes, dates, and attributes (if stored) match.
+With the -force option, the contents are also compared with the stored
+checksums, which must also match. This test takes longer but is more
+reliable.
+
+A backup like "zpaq a archive c:\" does not normally store "c:/" as
+a directory. Thus "zpaq r archive c:\" would not overwrite the entire disk.
+The top level directories would have to be restored separately.
 
   l or -list
 
@@ -128,6 +153,9 @@ system, hidden, read-only, indexed), or an octal number like "100644"
 (as passed to chmod(), meaning rw-r--r--) in Linux. If any special
 Windows attributes are set, then the value is displayed in hex.
 
+If any arguments are passed, then only those files or directories are
+listed. Arguments may have wildcards as with the extract command.
+
   c or -compare
 
 List archive contents as with -list and compare with external files.
@@ -139,14 +167,15 @@ or if the dates, attributes, or sizes differ. With -force, the
 contents are compared, but not the dates or attributes.
 
 When file or directory arguments are given, then only those files and
-directories are compared. The default is to compare every file in the
-archive.
+directories are compared. Arguments may have wildcards as with the
+extract command. The default is to compare every file in the archive.
 
   d or -delete
 
 Mark files and directories in the archive as deleted. This actually
 makes the archive slightly larger. The files can still be extracted
-by rolling back to an earlier version using -until.
+by rolling back to an earlier version using -until. Wildcards are
+allowed as with extract.
 
   t or -test
 
@@ -187,13 +216,9 @@ Options:
   -not
 
 Exclude files and directories (before renaming) from being added,
-extracted, listed, or deleted. For example
-"zpaq a arc calgary -not *book?"
+extracted, listed, deleted, compared, or restored. Wildcards are
+allowed as with extract. For example "zpaq a arc calgary -not *book?"
 will add all the files in calgary except book1 and book2.
-Wildcards * and ? will match any string or character respectively,
-including (unlike the filename arguments) the "/" character.
-In Linux, arguments with wildcards should be quoted to protect them
-from the shell.
 
   -to
 
@@ -230,8 +255,8 @@ is equivalent to -until.
 Add files even if the dates match. If a file really is identical,
 then it will not be added. When extracting, output files will be
 overwritten. It is required with purge if the output file exists
-or to purge an archive in-place. With compare, compare the file
-contents instead of the dates and attributes.
+or to purge an archive in-place. With compare and restore, compare the
+file contents instead of the dates and attributes.
 
   -quiet [N]
 
@@ -267,10 +292,11 @@ compression options).
 
 Ignore Windows file attributes (archive, read-only, system, hidden, index)
 and Linux permissions. The add commmand will not save them in the archive.
-The extract command will ignore any saved attributes and create files with
-default attributes and permissions. The list command will not show them.
-The compare command will treat files as identical if only the attributes
-differ. The purge command will remove any saved attributes.
+The extract and restore commands will ignore any saved attributes and create
+files with default attributes and permissions. The list command will not
+show them. The compare and restore commands will treat files as identical
+if only the attributes differ. The purge command will remove any saved
+attributes.
 
 List and compare options:
 
@@ -1513,34 +1539,28 @@ inline int tolowerW(int c) {
   return c;
 }
 
-// Return true if path a is a prefix of path b.
-// Match ? in a to any char in b except delim or NUL
-// Match * in a to any string in b up to delim or NUL
-// Otherwise a must match b up to a delim or NUL in b.
+// Return true if strings a == b or a+"/" is a prefix of b.
+// Match ? in a to any char in b.
+// Match * in a to any string in b.
 // In Windows, not case sensitive.
-// Default delim is NUL
-bool ispath(const char* a, const char* b, int delim=0) {
-  for (;*a && *b; ++a, ++b) {
+bool ispath(const char* a, const char* b) {
+  for (; *a; ++a, ++b) {
     const int ca=tolowerW(*a);
     const int cb=tolowerW(*b);
-    if (ca==0 || (ca==delim && !a[1]))
-      return cb==0 || cb==delim;
-    else if (ca=='?') {
-      if (cb==0 || cb==delim) return false;
-    }
-    else if (ca=='*') {
+    if (ca=='*') {
       while (true) {
         if (ispath(a+1, b)) return true;
         if (!*b) return false;
-        if (*b==delim) return false;
         ++b;
       }
+    }
+    else if (ca=='?') {
+      if (*b==0) return false;
     }
     else if (ca!=cb)
       return false;
   }
-  if (*a) return false;
-  return *b==0 || *b==delim;
+  return *b==0 || *b=='/';
 }
 
 // Convert string to lower case
@@ -1713,7 +1733,7 @@ private:
   void addfile(string filename, int64_t edate, int64_t esize,
                int64_t eattr);          // add external file to dt
   void list_versions(int64_t csize);    // print ver. csize=archive size
-  bool equal(DTMap::const_iterator p);  // compare file to external
+  template <typename DT_ITER> bool equal(DT_ITER p);  // compare to file
 };
 
 // Print help message
@@ -1728,6 +1748,7 @@ void Jidac::usage() {
   "Commands:\n"
   "  a  add               Add changed files to archive.zpaq\n"
   "  x  extract           Extract latest versions of files\n"
+  "  r  restore           Delete external files and extract\n"
   "  l  list              List contents\n"
   "  c  compare           List and compare with external files\n"
   "  d  delete            Mark as deleted in a new version of archive\n"
@@ -1737,7 +1758,7 @@ void Jidac::usage() {
   "  -not <file|dir>...   Exclude\n"
   "  -to <file|dir>...    Rename external files or specify prefix\n"
   "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
-  "  -force               a: Add if unchanged. x, p: clobber. c: by content\n"
+  "  -force               a: Add always. x,p: clobber. r,c: compare content\n"
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...6        Compress faster...better (default: 1)\n"
@@ -1784,7 +1805,7 @@ string Jidac::unrename(const string& name) {
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
   const char* opts[]={
-    "list","add","extract","delete","test","purge","compare",
+    "list","add","extract","restore","delete","test","purge","compare",
     "method","force","quiet","summary","since","noattributes",
     "to","not","version","until","threads","all","fragile",0};
   assert(opt);
@@ -1797,7 +1818,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<7 && result!="") return result;
+      if (i<8 && result!="") return result;
     }
   }
   if (result=="")
@@ -1823,8 +1844,9 @@ int Jidac::doCommand(int argc, const char** argv) {
   // Get optional options
   for (int i=1; i<argc; ++i) {
     const string opt=expandOption(argv[i]);
-    if ((opt=="-add" || opt=="-extract" || opt=="-list" || opt=="-delete"
-        || opt=="-test" || opt=="-purge" || opt=="-compare")
+    if ((opt=="-add" || opt=="-extract" || opt=="-list"
+        || opt=="-delete" || opt=="-restore" || opt=="-test"
+        || opt=="-purge" || opt=="-compare")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       command=opt;
       archive=argv[++i];
@@ -1909,7 +1931,8 @@ int Jidac::doCommand(int argc, const char** argv) {
            __DATE__ "\n");
   if (size(files) && (command=="-add" || command=="-delete")) add();
   else if (command=="-list" || command=="-compare") list();
-  else if (command=="-extract") return extract();
+  else if (command=="-extract" || (command=="-restore" && size(files)>0))
+    return extract();
   else if (command=="-test") test();
   else if (command=="-purge") purge();
   else usage();
@@ -2307,7 +2330,7 @@ int64_t Jidac::read_archive(int *errors) {
 // using written=0 for each match. Match all files in dt if no args
 // (files[] is empty). If mark_all is true, then mark deleted files too.
 // If scan is true then recursively scan external directories in args,
-// or all files if no args, add to dt, and mark them.
+// or all files in dt if no args, add to dt, and mark them.
 void Jidac::read_args(bool scan, bool mark_all) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
@@ -2319,7 +2342,7 @@ void Jidac::read_args(bool scan, bool mark_all) {
     }
     bool matched=size(files)==0;
     for (int i=0; !matched && i<size(files); ++i)
-      if (ispath(files[i].c_str(), p->first.c_str(), '/'))
+      if (ispath(files[i].c_str(), p->first.c_str()))
         matched=true;
     for (int i=0; matched && i<size(notfiles); ++i)
       if (ispath(notfiles[i].c_str(), p->first.c_str()))
@@ -4464,6 +4487,42 @@ void Jidac::add() {
 
 /////////////////////////////// extract ///////////////////////////////
 
+// Test if the internal and external files are equal. If force is true
+// then compare files by contents only, else compare dates,
+// attributes (if both exist), and size.
+template <typename DT_ITER>
+bool Jidac::equal(DT_ITER p) {
+  if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
+    return p->second.edate==0;  // true if neither file exists
+  if (p->second.edate==0) return false;  // external does not exist
+  assert(p->second.dtv.size()>0);
+  if (p->second.dtv.back().size!=p->second.esize) return false;
+  if (force) {
+    if (p->first!="" && p->first[p->first.size()-1]=='/') return true;
+    InputFile in;
+    in.open(rename(p->first).c_str());
+    if (!in.isopen()) return false;
+    libzpaq::SHA1 sha1;
+    for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
+      unsigned f=p->second.dtv.back().ptr[i];
+      if (f<1 || f>=ht.size() || ht[f].csize==HT_BAD) return false;
+      for (int j=ht[f].usize; j>0; --j) {
+        int c=in.get();
+        if (c==EOF) return false;
+        sha1.put(c);
+      }
+      if (memcmp(sha1.result(), ht[f].sha1, 20)!=0) return false;
+    }
+    if (in.get()!=EOF) return false;
+  }
+  else {
+    if (p->second.dtv.back().date!=p->second.edate) return false;
+    if (p->second.dtv.back().attr && p->second.eattr
+        && p->second.dtv.back().attr!=p->second.eattr) return false;
+  }
+  return true;
+}
+
 // Create directories as needed. For example if path="/tmp/foo/bar"
 // then create directories /, /tmp, and /tmp/foo unless they exist.
 // Change \ to / in path. Set date and attributes if not 0.
@@ -4640,18 +4699,20 @@ ThreadReturn decompressThread(void* arg) {
 
       // Verify fragment checksums if present
       const char* q=out.c_str();
-      for (unsigned j=b.start; !fragile && j<b.start+b.size; ++j) {
-        libzpaq::SHA1 sha1;
-        for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
-        if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
-          for (int k=0; k<20; ++k) {
-            if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
-              lock(job.mutex);
-              fprintf(stderr, 
-                     "Job %d: fragment %d size %d checksum failed\n",
-                     jobNumber, j, job.jd.ht[j].usize);
-              release(job.mutex);
-              error("bad checksum");
+      for (unsigned j=b.start; j<b.start+b.size; ++j) {
+        if (!fragile) {
+          libzpaq::SHA1 sha1;
+          for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
+          if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
+            for (int k=0; k<20; ++k) {
+              if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
+                lock(job.mutex);
+                fprintf(stderr, 
+                       "Job %d: fragment %d size %d checksum failed\n",
+                       jobNumber, j, job.jd.ht[j].usize);
+                release(job.mutex);
+                error("bad checksum");
+              }
             }
           }
         }
@@ -4763,31 +4824,105 @@ ThreadReturn decompressThread(void* arg) {
   return 0;
 }
 
-// Extract files from archive. Return 1 if error else 0.
+// Extract or restore files from archive. Return 1 if error else 0.
 int Jidac::extract() {
 
   // Read HT, DT
   if (!read_archive())
     return 1;
-  read_args(false);
+  if (command=="-extract")
+    read_args(false);
+  else {  // restore
+
+    // Test that all files or directories to restore exist in archive
+    if (size(files)<1) error("nothing to restore");
+    for (int i=0; i<size(files); ++i) {
+      DTMap::const_iterator p=dt.find(files[i]);
+      if (p==dt.end())
+        p=dt.find(files[i]+"/");
+      if (p==dt.end() || p->second.dtv.size()==0
+         || p->second.dtv.back().date==0) {
+        printUTF8(files[i].c_str(), stderr);
+        fprintf(stderr, " not found in archive\n");
+        return 1;
+      }
+    }
+
+    // Compare marked files and directories in reverse order (bottom up
+    // traversal). If the files differ then delete the external file.
+    // If they are the same then unmark them.
+    // If they are the same except for dates and attributes then reset them.
+    read_args(true);
+    for (DTMap::reverse_iterator p=dt.rbegin(); p!=dt.rend(); ++p) {
+      if (p->second.written==0) {
+        string fn=rename(p->first);
+        if (equal(p) && p->second.dtv.size()>0 && p->second.edate) {
+          if (p->second.dtv.back().date!=p->second.edate
+              || (p->second.eattr && p->second.dtv.back().attr &&
+              p->second.eattr!=p->second.dtv.back().attr)) {
+            if (p->second.esize>=quiet) {
+              printf("Resetting to %s %s: ",
+                  attrToString(p->second.dtv.back().attr).c_str(),
+                  dateToString(p->second.dtv.back().date).c_str());
+              printUTF8(fn.c_str());
+              printf("\n");
+            }
+            OutputFile out;
+            out.open(fn.c_str());
+            if (out.isopen()) {
+              out.close(p->second.dtv.back().date,
+                        p->second.dtv.back().attr);
+              p->second.written=-1;  // unmark if date and attr change OK
+            }
+          }
+          else  // dates and attributes equal
+            p->second.written=-1;  // unmark if date and attr matches
+        }
+        else {  // not equal, delete external file or directory
+          if (p->second.edate) {
+            if (fn!="" && fn[fn.size()-1]=='/') {  // delete directory
+              fn=fn.substr(0, fn.size()-1);
+#ifdef unix
+              bool ok=!rmdir(fn.c_str());
+#else
+              bool ok=RemoveDirectory(utow(fn.c_str()).c_str());
+#endif
+              if (ok && quiet<0) {
+                printf("Deleted ");
+                printUTF8(fn.c_str());
+                printf("/\n");
+              }
+            }
+            else {
+#ifdef unix
+              bool ok=!remove(fn.c_str());
+#else
+              bool ok=DeleteFile(utow(fn.c_str()).c_str());
+#endif
+              if (ok && quiet<0) {
+                printf("Deleted ");
+                printUTF8(fn.c_str());
+                printf("\n");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Map fragments to blocks.
   // Mark blocks with unknown or large fragment sizes as streaming.
   ExtractJob job(*this);
   vector<unsigned> hti(ht.size());  // fragment index -> block index
-  int64_t usize=0;
   for (unsigned i=1; i<ht.size(); ++i) {
     if (ht[i].csize!=HT_BAD) {
-      if (ht[i].csize>=0) {
+      if (ht[i].csize>=0)
         job.block.push_back(Block(i, ht[i].csize));
-        usize=0;
-      }
       assert(job.block.size()>0);
       hti[i]=job.block.size()-1;
       if (ht[i].usize<0 || ht[i].usize>(1<<26))
         job.block.back().streaming=true;
-      if (usize<0 || ht[i].usize<0) usize=-1;
-      else usize+=ht[i].usize;
     }
   }
 
@@ -4795,7 +4930,7 @@ int Jidac::extract() {
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.dtv.size() && p->second.dtv.back().date
         && p->second.written==0) {
-      if (!force) {
+      if (!force && command=="-extract") {
         if (exists(rename(p->first))) {
           fprintf(stderr, "File exists: ");
           printUTF8(rename(p->first).c_str(), stderr);
@@ -5369,40 +5504,6 @@ void Jidac::list_versions(int64_t csize) {
   }
 }
 
-// Test if the internal and external files are equal. If force is true
-// then compare files by contents only, else compare dates,
-// attributes (if both exist), and size.
-bool Jidac::equal(DTMap::const_iterator p) {
-  if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
-    return p->second.edate==0;  // true if neither file exists
-  if (p->second.edate==0) return false;  // external does not exist
-  assert(p->second.dtv.size()>0);
-  if (p->second.dtv.back().size!=p->second.esize) return false;
-  if (force) {
-    if (p->first!="" && p->first[p->first.size()-1]=='/') return true;
-    InputFile in;
-    in.open(rename(p->first).c_str());
-    if (!in.isopen()) return false;
-    libzpaq::SHA1 sha1;
-    for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
-      unsigned f=p->second.dtv.back().ptr[i];
-      if (f<1 || f>=ht.size() || ht[f].csize==HT_BAD) return false;
-      for (int j=ht[f].usize; j>0; --j) {
-        int c=in.get();
-        if (c==EOF) return false;
-        sha1.put(c);
-      }
-      if (memcmp(sha1.result(), ht[f].sha1, 20)!=0) return false;
-    }
-  }
-  else {
-    if (p->second.dtv.back().date!=p->second.edate) return false;
-    if (p->second.dtv.back().attr && p->second.eattr
-        && p->second.dtv.back().attr!=p->second.eattr) return false;
-  }
-  return true;
-}
-
 // List contents
 void Jidac::list() {
 
@@ -5414,8 +5515,9 @@ void Jidac::list() {
     read_args(false);
 
     // Report biggest files, directories, and extensions
-    printf("\nRank      Size (MB) Ratio     Files File, Directory/, or .Type\n"
-             "---- -------------- ------ --------- --------------------------\n");
+    printf(
+      "\nRank      Size (MB) Ratio     Files File, Directory/, or .Type\n"
+      "---- -------------- ------ --------- --------------------------\n");
     map<string, TOP> top;  // filename or dir -> total size and count
     vector<int> frag(ht.size());  // frag ID -> reference count
     int unknown_ref=0;  // count fragments and references with unknown size
