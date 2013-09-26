@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.41"
+#define ZPAQ_VERSION "6.42"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -53,10 +53,11 @@ Options (may be abbreviated):
   -threads N           Use N threads (default: cores detected)
   -method 0...6        Compress faster...better (default: 1)
   -noattributes        Ignore/don't save file attributes
-list/compare options:
+list options:
   -summary [N]         Show top N files and types (default: 20)
   -since N             List from N'th update or last -N updates
   -all                 List all versions
+  -duplicates          List duplicate files
 
 The archive file name must end with ".zpaq" or the extension will be
 assumed. Commands and options may be abbreviated as long as it is not
@@ -316,6 +317,12 @@ last -N updates. Default is 0 (all).
 
 List all versions of each file, including deletions. The default is to
 list only the latest version, or not list it if it is deleted.
+
+  -duplicates
+
+After listing a file, list all files identical to it with a leading "=".
+Comparison is by the list of fragment IDs, which may not catch matches
+if the files are deduplicated in a nonstandard way.
 
 
 Advanced compression options:
@@ -863,13 +870,16 @@ void printUTF8(const char* s, FILE* f=stdout) {
 }
 
 // Return relative time in milliseconds
+int64_t global_start=0;  // set at start of main()
 int64_t mtime() {
 #ifdef unix
   timeval tv;
   gettimeofday(&tv, 0);
   return tv.tv_sec*1000LL+tv.tv_usec/1000;
 #else
-  return clock()*1000.0/CLOCKS_PER_SEC;
+  int64_t t=GetTickCount();
+  if (t<global_start) t+=0x100000000LL;
+  return t;
 #endif
 }
 
@@ -1539,7 +1549,8 @@ inline int tolowerW(int c) {
   return c;
 }
 
-// Return true if strings a == b or a+"/" is a prefix of b.
+// Return true if strings a == b or a+"/" is a prefix of b
+// or a ends in "/" and is a prefix of b.
 // Match ? in a to any char in b.
 // Match * in a to any string in b.
 // In Windows, not case sensitive.
@@ -1557,6 +1568,8 @@ bool ispath(const char* a, const char* b) {
     else if (ca=='?') {
       if (*b==0) return false;
     }
+    else if (ca==cb && ca=='/' && a[1]==0)
+      return true;
     else if (ca!=cb)
       return false;
   }
@@ -1710,6 +1723,7 @@ private:
   bool force;               // -force option
   bool all;                 // -all option
   bool noattributes;        // -noattributes option
+  bool duplicates;          // -duplicates option
 
   // Archive state
   vector<HT> ht;            // list of fragments
@@ -1763,10 +1777,11 @@ void Jidac::usage() {
   "  -threads N           Use N threads (default: %d detected)\n"
   "  -method 0...6        Compress faster...better (default: 1)\n"
   "  -noattributes        Ignore/don't save file attributes\n"
-  "list/compare options:\n"
+  "list options:\n"
   "  -summary [N]         Show top N files and types (default: 20)\n"
   "  -since N             List from N'th update or last -N updates\n"
   "  -all                 List all versions\n"
+  "  -duplicates          Label duplicate files with =\n"
   "See zpaq.cpp for more options and complete documentation.\n",
   threads);
   exit(1);
@@ -1807,7 +1822,7 @@ string expandOption(const char* opt) {
   const char* opts[]={
     "list","add","extract","restore","delete","test","purge","compare",
     "method","force","quiet","summary","since","noattributes",
-    "to","not","version","until","threads","all","fragile",0};
+    "to","not","version","until","threads","all","fragile","duplicates",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -1831,7 +1846,7 @@ int Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
-  force=all=noattributes=false;
+  force=all=noattributes=duplicates=false;
   since=0;
   summary=0;
   version=9999999999999LL;
@@ -1862,6 +1877,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-all") all=true;
     else if (opt=="-fragile") fragile=true;
     else if (opt=="-noattributes") noattributes=true;
+    else if (opt=="-duplicates") duplicates=true;
     else if (opt=="-since" && i<argc-1)
       since=atoi(argv[++i]);
     else if (opt=="-summary") {
@@ -4188,6 +4204,7 @@ void Jidac::add() {
   unsigned exe=0;      // number of fragments containing x86 (exe, dll)
   const int ON=4;      // number of order-1 tables to save
   unsigned char o1prev[ON*256]={0};  // last ON order 1 predictions
+  libzpaq::Array<char> fragbuf(MAX_FRAGMENT);
   while (fi<vf.size() || frags>0) {
 
     // Compress a block if (1) end of input, (2) block is full,
@@ -4280,17 +4297,18 @@ void Jidac::add() {
     while (true) {
       c=in.get();
       if (c!=EOF) {
-        sb.put(c);
         if (c==o1[c1]) h=(h+c+1)*314159265u, ++hits;
         else h=(h+c+1)*271828182u;
         o1[c1]=c;
         c1=c;
         sha1.put(c);
-        ++sz;
+        fragbuf[sz++]=c;
       }
       if (c==EOF || (h<65536 && sz>=MIN_FRAGMENT) || sz>=MAX_FRAGMENT)
         break;
     }
+    assert(sz<=MAX_FRAGMENT);
+    sb.write(&fragbuf[0], sz);
     inputsize+=sz;
 
     // Look for matching fragment
@@ -4802,7 +4820,12 @@ ThreadReturn decompressThread(void* arg) {
           usize+=job.jd.ht[ptr[++j]].usize;
         }
         assert(q+usize<=out.c_str()+out.size());
-        job.outf.write(q, offset, usize);
+        int k=0;  // number of leading zeros to skip writing (optimization)
+        while (k<usize && q[k]==0) ++k;
+        if (k>0 && k==usize && j+1==ptr.size()) --k; // always write last byte
+        if (k<4096) k=0;  // don't skip small zero blocks
+        if (k<usize)
+          job.outf.write(q+k, offset+k, usize-k);
         offset+=usize;
         if (dtr.written==size(ptr)) {  // close file
           assert(dtr.dtv.size()>0);
@@ -5504,6 +5527,15 @@ void Jidac::list_versions(int64_t csize) {
   }
 }
 
+// Return p<q for sorting files by fragment ID list
+bool compareFragmentList(DTMap::const_iterator p, DTMap::const_iterator q) {
+  if (q->second.dtv.size()==0) return false;
+  if (p->second.dtv.size()==0) return true;
+  if (p->second.dtv.back().ptr<q->second.dtv.back().ptr) return true;
+  if (q->second.dtv.back().ptr<p->second.dtv.back().ptr) return false;
+  return p->first<q->first;
+}
+
 // List contents
 void Jidac::list() {
 
@@ -5612,44 +5644,58 @@ void Jidac::list() {
     return;
   }
 
+  // Make list of files to list
+  read_args(command=="-compare", all);
+  vector<DTMap::const_iterator> filelist;
+  for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p)
+    if (p->second.written==0)
+      filelist.push_back(p);
+  if (duplicates)
+    sort(filelist.begin(), filelist.end(), compareFragmentList);
+
   // Ordinary list or compare
   int64_t usize=0;
   unsigned nfiles=0, shown=0, same=0, different=0;
-  read_args(command=="-compare", all);
   if (since<0) since+=ver.size();
   printf("\n"
     " Ver  Date      Time (UT) %s        Size Ratio  File\n"
     "----- ---------- -------- %s------------ ------ ----\n",
     noattributes?"":"Attr   ", noattributes?"":"------ ");
-  for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (p->second.written==0) {
-      const bool isequal=command=="-compare" && equal(p);
-      isequal ? ++same : ++different;
-      for (unsigned i=0; i<p->second.dtv.size(); ++i) {
-        if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=quiet
-            && (all || (i+1==p->second.dtv.size() && p->second.dtv[i].date))){
-          if (!isequal) {
-            printf(">%4d ", p->second.dtv[i].version);
-            if (p->second.dtv[i].date) {
-              ++shown;
-              usize+=p->second.dtv[i].size;
-              printf("%s %s%12.0f %6.4f ",
-                     dateToString(p->second.dtv[i].date).c_str(),
-                     noattributes ? "" :
-                       (attrToString(p->second.dtv[i].attr)+" ").c_str(),
-                     double(p->second.dtv[i].size),
-                     p->second.dtv[i].size>0
-                       ? p->second.dtv[i].csize/p->second.dtv[i].size : 1.0);
-            }
-            else {
-              printf("%-40s", "Deleted");
-              if (!noattributes) printf("       ");
-            }
-            printUTF8(p->first.c_str());
-            printf("\n");
+  for (unsigned fi=0; fi<filelist.size(); ++fi) {
+    DTMap::const_iterator p=filelist[fi];
+    const bool isequal=command=="-compare" && equal(p);
+    isequal ? ++same : ++different;
+    for (unsigned i=0; i<p->second.dtv.size(); ++i) {
+      if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=quiet
+          && (all || (i+1==p->second.dtv.size() && p->second.dtv[i].date))){
+        if (!isequal) {
+          if (duplicates && fi>0 && filelist[fi-1]->second.dtv.size()
+              && p->second.dtv[i].ptr==filelist[fi-1]->second.dtv.back().ptr)
+            printf("=");
+          else
+            printf(">");
+          printf("%4d ", p->second.dtv[i].version);
+          if (p->second.dtv[i].date) {
+            ++shown;
+            usize+=p->second.dtv[i].size;
+            printf("%s %s%12.0f %6.4f ",
+                   dateToString(p->second.dtv[i].date).c_str(),
+                   noattributes ? "" :
+                     (attrToString(p->second.dtv[i].attr)+" ").c_str(),
+                   double(p->second.dtv[i].size),
+                   p->second.dtv[i].size>0
+                     ? p->second.dtv[i].csize/p->second.dtv[i].size : 1.0);
           }
+          else {
+            printf("%-40s", "Deleted");
+            if (!noattributes) printf("       ");
+          }
+          printUTF8(p->first.c_str());
+          printf("\n");
         }
       }
+
+      // Print compared external files that differ
       if (!isequal && p->second.edate && p->second.esize>=quiet) {
         printf("<     %s %s%12.0f        ",
             dateToString(p->second.edate).c_str(),
@@ -6021,7 +6067,7 @@ int main() {
   const char** argv=&argp[0];
 #endif
 
-  int64_t start=mtime();  // get start time
+  global_start=mtime();  // get start time
   init_mutex(global_mutex);
   int errorcode=0;
   try {
@@ -6033,7 +6079,7 @@ int main() {
     errorcode=1;
   }
   if (quiet<MAX_QUIET) {
-    printf("%1.3f seconds", (mtime()-start)/1000.0);
+    printf("%1.3f seconds", (mtime()-global_start)/1000.0);
     if (errorcode) printf(" (with errors)");
     printf("\n");
   }
