@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.33 implementation - June 20, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.43 implementation - Dec. 19, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -96,6 +96,7 @@ void SHA1::init() {
   h[2]=0x98BADCFE;
   h[3]=0x10325476;
   h[4]=0xC3D2E1F0;
+  memset(w, 0, sizeof(w));
 }
 
 // Return old result and start a new hash
@@ -147,6 +148,505 @@ void SHA1::process() {
   #undef f
   #undef r
   h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e;
+}
+
+//////////////////////////// SHA256 //////////////////////////
+
+void SHA256::init() {
+  len0=len1=0;
+  s[0]=0x6a09e667;
+  s[1]=0xbb67ae85;
+  s[2]=0x3c6ef372;
+  s[3]=0xa54ff53a;
+  s[4]=0x510e527f;
+  s[5]=0x9b05688c;
+  s[6]=0x1f83d9ab;
+  s[7]=0x5be0cd19;
+  memset(w, 0, sizeof(w));
+}
+
+void SHA256::process() {
+
+  #define ror(a,b) ((a)>>(b)|(a<<(32-(b))))
+
+  #define m(i) \
+     w[(i)&15]+=w[(i-7)&15] \
+       +(ror(w[(i-15)&15],7)^ror(w[(i-15)&15],18)^(w[(i-15)&15]>>3)) \
+       +(ror(w[(i-2)&15],17)^ror(w[(i-2)&15],19)^(w[(i-2)&15]>>10))
+
+  #define r(a,b,c,d,e,f,g,h,i) { \
+    unsigned t1=ror(e,14)^e; \
+    t1=ror(t1,5)^e; \
+    h+=ror(t1,6)+((e&f)^(~e&g))+k[i]+w[(i)&15]; } \
+    d+=h; \
+    {unsigned t1=ror(a,9)^a; \
+    t1=ror(t1,11)^a; \
+    h+=ror(t1,2)+((a&b)^(c&(a^b))); }
+
+  #define mr(a,b,c,d,e,f,g,h,i) m(i); r(a,b,c,d,e,f,g,h,i);
+
+  #define r8(i) \
+    r(a,b,c,d,e,f,g,h,i);   \
+    r(h,a,b,c,d,e,f,g,i+1); \
+    r(g,h,a,b,c,d,e,f,i+2); \
+    r(f,g,h,a,b,c,d,e,i+3); \
+    r(e,f,g,h,a,b,c,d,i+4); \
+    r(d,e,f,g,h,a,b,c,i+5); \
+    r(c,d,e,f,g,h,a,b,i+6); \
+    r(b,c,d,e,f,g,h,a,i+7);
+
+  #define mr8(i) \
+    mr(a,b,c,d,e,f,g,h,i);   \
+    mr(h,a,b,c,d,e,f,g,i+1); \
+    mr(g,h,a,b,c,d,e,f,i+2); \
+    mr(f,g,h,a,b,c,d,e,i+3); \
+    mr(e,f,g,h,a,b,c,d,i+4); \
+    mr(d,e,f,g,h,a,b,c,i+5); \
+    mr(c,d,e,f,g,h,a,b,i+6); \
+    mr(b,c,d,e,f,g,h,a,i+7);
+
+  static const unsigned k[64]={
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+  unsigned a=s[0];
+  unsigned b=s[1];
+  unsigned c=s[2];
+  unsigned d=s[3];
+  unsigned e=s[4];
+  unsigned f=s[5];
+  unsigned g=s[6];
+  unsigned h=s[7];
+
+  r8(0);
+  r8(8);
+  mr8(16);
+  mr8(24);
+  mr8(32);
+  mr8(40);
+  mr8(48);
+  mr8(56);
+
+  s[0]+=a;
+  s[1]+=b;
+  s[2]+=c;
+  s[3]+=d;
+  s[4]+=e;
+  s[5]+=f;
+  s[6]+=g;
+  s[7]+=h;
+
+  #undef mr8
+  #undef r8
+  #undef mr
+  #undef r
+  #undef m
+  #undef ror
+};
+
+// Return old result and start a new hash
+const char* SHA256::result() {
+
+  // pad and append length
+  const unsigned s1=len1, s0=len0;
+  put(0x80);
+  while ((len0&511)!=448) put(0);
+  put(s1>>24);
+  put(s1>>16);
+  put(s1>>8);
+  put(s1);
+  put(s0>>24);
+  put(s0>>16);
+  put(s0>>8);
+  put(s0);
+
+  // copy s to hbuf
+  for (int i=0; i<8; ++i) {
+    hbuf[4*i]=s[i]>>24;
+    hbuf[4*i+1]=s[i]>>16;
+    hbuf[4*i+2]=s[i]>>8;
+    hbuf[4*i+3]=s[i];
+  }
+
+  // return hash prior to clearing state
+  init();
+  return hbuf;
+}
+
+//////////////////////////// AES /////////////////////////////
+
+// Some AES code is derived from libtomcrypt 1.17 (public domain).
+
+#define Te4_0 0x000000FF & Te4
+#define Te4_1 0x0000FF00 & Te4
+#define Te4_2 0x00FF0000 & Te4
+#define Te4_3 0xFF000000 & Te4
+
+// Extract byte n of x
+static inline unsigned byte(unsigned x, unsigned n) {return (x>>(8*n))&255;}
+
+// x = y[0..3] MSB first
+static inline void LOAD32H(U32& x, const char* y) {
+  const unsigned char* u=(const unsigned char*)y;
+  x=u[0]<<24|u[1]<<16|u[2]<<8|u[3];
+}
+
+// y[0..3] = x MSB first
+static inline void STORE32H(U32& x, unsigned char* y) {
+  y[0]=x>>24;
+  y[1]=x>>16;
+  y[2]=x>>8;
+  y[3]=x;
+}
+
+#define setup_mix(temp) \
+  ((Te4_3[byte(temp, 2)]) ^ (Te4_2[byte(temp, 1)]) ^ \
+   (Te4_1[byte(temp, 0)]) ^ (Te4_0[byte(temp, 3)]))
+
+// Initialize encryption tables and round key. keylen is 16, 24, or 32.
+AES_CTR::AES_CTR(const char* key, int keylen, const char* iv) {
+  assert(key  != NULL);
+  assert(keylen==16 || keylen==24 || keylen==32);
+
+  // Initialize IV (default 0)
+  iv0=iv1=0;
+  if (iv) {
+    LOAD32H(iv0, iv);
+    LOAD32H(iv1, iv+4);
+  }
+
+  // Initialize encryption tables
+  for (int i=0; i<256; ++i) {
+    unsigned s1=
+    "\x63\x7c\x77\x7b\xf2\x6b\x6f\xc5\x30\x01\x67\x2b\xfe\xd7\xab\x76"
+    "\xca\x82\xc9\x7d\xfa\x59\x47\xf0\xad\xd4\xa2\xaf\x9c\xa4\x72\xc0"
+    "\xb7\xfd\x93\x26\x36\x3f\xf7\xcc\x34\xa5\xe5\xf1\x71\xd8\x31\x15"
+    "\x04\xc7\x23\xc3\x18\x96\x05\x9a\x07\x12\x80\xe2\xeb\x27\xb2\x75"
+    "\x09\x83\x2c\x1a\x1b\x6e\x5a\xa0\x52\x3b\xd6\xb3\x29\xe3\x2f\x84"
+    "\x53\xd1\x00\xed\x20\xfc\xb1\x5b\x6a\xcb\xbe\x39\x4a\x4c\x58\xcf"
+    "\xd0\xef\xaa\xfb\x43\x4d\x33\x85\x45\xf9\x02\x7f\x50\x3c\x9f\xa8"
+    "\x51\xa3\x40\x8f\x92\x9d\x38\xf5\xbc\xb6\xda\x21\x10\xff\xf3\xd2"
+    "\xcd\x0c\x13\xec\x5f\x97\x44\x17\xc4\xa7\x7e\x3d\x64\x5d\x19\x73"
+    "\x60\x81\x4f\xdc\x22\x2a\x90\x88\x46\xee\xb8\x14\xde\x5e\x0b\xdb"
+    "\xe0\x32\x3a\x0a\x49\x06\x24\x5c\xc2\xd3\xac\x62\x91\x95\xe4\x79"
+    "\xe7\xc8\x37\x6d\x8d\xd5\x4e\xa9\x6c\x56\xf4\xea\x65\x7a\xae\x08"
+    "\xba\x78\x25\x2e\x1c\xa6\xb4\xc6\xe8\xdd\x74\x1f\x4b\xbd\x8b\x8a"
+    "\x70\x3e\xb5\x66\x48\x03\xf6\x0e\x61\x35\x57\xb9\x86\xc1\x1d\x9e"
+    "\xe1\xf8\x98\x11\x69\xd9\x8e\x94\x9b\x1e\x87\xe9\xce\x55\x28\xdf"
+    "\x8c\xa1\x89\x0d\xbf\xe6\x42\x68\x41\x99\x2d\x0f\xb0\x54\xbb\x16"
+    [i]&255;
+    unsigned s2=s1<<1;
+    if (s2>=0x100) s2^=0x11b;
+    unsigned s3=s1^s2;
+    Te0[i]=s2<<24|s1<<16|s1<<8|s3;
+    Te1[i]=s3<<24|s2<<16|s1<<8|s1;
+    Te2[i]=s1<<24|s3<<16|s2<<8|s1;
+    Te3[i]=s1<<24|s1<<16|s3<<8|s2;
+    Te4[i]=s1<<24|s1<<16|s1<<8|s1;
+  }
+
+  // setup the forward key
+  Nr = 10 + ((keylen/8)-2)*2;  // 10, 12, or 14 rounds
+  int i = 0;
+  U32* rk = &ek[0];
+  U32 temp;
+  static const U32 rcon[10] = {
+    0x01000000UL, 0x02000000UL, 0x04000000UL, 0x08000000UL,
+    0x10000000UL, 0x20000000UL, 0x40000000UL, 0x80000000UL,
+    0x1B000000UL, 0x36000000UL};  // round constants
+
+  LOAD32H(rk[0], key   );
+  LOAD32H(rk[1], key +  4);
+  LOAD32H(rk[2], key +  8);
+  LOAD32H(rk[3], key + 12);
+  if (keylen == 16) {
+    for (;;) {
+      temp  = rk[3];
+      rk[4] = rk[0] ^ setup_mix(temp) ^ rcon[i];
+      rk[5] = rk[1] ^ rk[4];
+      rk[6] = rk[2] ^ rk[5];
+      rk[7] = rk[3] ^ rk[6];
+      if (++i == 10) {
+         break;
+      }
+      rk += 4;
+    }
+  }
+  else if (keylen == 24) {
+    LOAD32H(rk[4], key + 16);
+    LOAD32H(rk[5], key + 20);
+    for (;;) {
+      temp = rk[5];
+      rk[ 6] = rk[ 0] ^ setup_mix(temp) ^ rcon[i];
+      rk[ 7] = rk[ 1] ^ rk[ 6];
+      rk[ 8] = rk[ 2] ^ rk[ 7];
+      rk[ 9] = rk[ 3] ^ rk[ 8];
+      if (++i == 8) {
+        break;
+      }
+      rk[10] = rk[ 4] ^ rk[ 9];
+      rk[11] = rk[ 5] ^ rk[10];
+      rk += 6;
+    }
+  }
+  else if (keylen == 32) {
+    LOAD32H(rk[4], key + 16);
+    LOAD32H(rk[5], key + 20);
+    LOAD32H(rk[6], key + 24);
+    LOAD32H(rk[7], key + 28);
+    for (;;) {
+      temp = rk[7];
+      rk[ 8] = rk[ 0] ^ setup_mix(temp) ^ rcon[i];
+      rk[ 9] = rk[ 1] ^ rk[ 8];
+      rk[10] = rk[ 2] ^ rk[ 9];
+      rk[11] = rk[ 3] ^ rk[10];
+      if (++i == 7) {
+        break;
+      }
+      temp = rk[11];
+      rk[12] = rk[ 4] ^ setup_mix(temp<<24|temp>>8);
+      rk[13] = rk[ 5] ^ rk[12];
+      rk[14] = rk[ 6] ^ rk[13];
+      rk[15] = rk[ 7] ^ rk[14];
+      rk += 8;
+    }
+  }
+}
+
+// Encrypt to ct[16]
+void AES_CTR::encrypt(U32 s0, U32 s1, U32 s2, U32 s3, unsigned char* ct) {
+  int r = Nr >> 1;
+  U32 *rk = &ek[0];
+  U32 t0=0, t1=0, t2=0, t3=0;
+  s0 ^= rk[0];
+  s1 ^= rk[1];
+  s2 ^= rk[2];
+  s3 ^= rk[3];
+  for (;;) {
+    t0 =
+      Te0[byte(s0, 3)] ^
+      Te1[byte(s1, 2)] ^
+      Te2[byte(s2, 1)] ^
+      Te3[byte(s3, 0)] ^
+      rk[4];
+    t1 =
+      Te0[byte(s1, 3)] ^
+      Te1[byte(s2, 2)] ^
+      Te2[byte(s3, 1)] ^
+      Te3[byte(s0, 0)] ^
+      rk[5];
+    t2 =
+      Te0[byte(s2, 3)] ^
+      Te1[byte(s3, 2)] ^
+      Te2[byte(s0, 1)] ^
+      Te3[byte(s1, 0)] ^
+      rk[6];
+    t3 =
+      Te0[byte(s3, 3)] ^
+      Te1[byte(s0, 2)] ^
+      Te2[byte(s1, 1)] ^
+      Te3[byte(s2, 0)] ^
+      rk[7];
+
+    rk += 8;
+    if (--r == 0) {
+      break;
+    }
+
+    s0 =
+      Te0[byte(t0, 3)] ^
+      Te1[byte(t1, 2)] ^
+      Te2[byte(t2, 1)] ^
+      Te3[byte(t3, 0)] ^
+      rk[0];
+    s1 =
+      Te0[byte(t1, 3)] ^
+      Te1[byte(t2, 2)] ^
+      Te2[byte(t3, 1)] ^
+      Te3[byte(t0, 0)] ^
+      rk[1];
+    s2 =
+      Te0[byte(t2, 3)] ^
+      Te1[byte(t3, 2)] ^
+      Te2[byte(t0, 1)] ^
+      Te3[byte(t1, 0)] ^
+      rk[2];
+    s3 =
+      Te0[byte(t3, 3)] ^
+      Te1[byte(t0, 2)] ^
+      Te2[byte(t1, 1)] ^
+      Te3[byte(t2, 0)] ^
+      rk[3];
+  }
+
+  // apply last round and map cipher state to byte array block:
+  s0 =
+    (Te4_3[byte(t0, 3)]) ^
+    (Te4_2[byte(t1, 2)]) ^
+    (Te4_1[byte(t2, 1)]) ^
+    (Te4_0[byte(t3, 0)]) ^
+    rk[0];
+  STORE32H(s0, ct);
+  s1 =
+    (Te4_3[byte(t1, 3)]) ^
+    (Te4_2[byte(t2, 2)]) ^
+    (Te4_1[byte(t3, 1)]) ^
+    (Te4_0[byte(t0, 0)]) ^
+    rk[1];
+  STORE32H(s1, ct+4);
+  s2 =
+    (Te4_3[byte(t2, 3)]) ^
+    (Te4_2[byte(t3, 2)]) ^
+    (Te4_1[byte(t0, 1)]) ^
+    (Te4_0[byte(t1, 0)]) ^
+    rk[2];
+  STORE32H(s2, ct+8);
+  s3 =
+    (Te4_3[byte(t3, 3)]) ^
+    (Te4_2[byte(t0, 2)]) ^
+    (Te4_1[byte(t1, 1)]) ^
+    (Te4_0[byte(t2, 0)]) ^ 
+    rk[3];
+  STORE32H(s3, ct+12);
+}
+
+// Encrypt or decrypt slice buf[0..n-1] at offset by XOR with AES(i) where
+// i is the 128 bit big-endian distance from the start in 16 byte blocks.
+void AES_CTR::encrypt(char* buf, int n, U64 offset) {
+  for (U64 i=offset/16; i<=(offset+n)/16; ++i) {
+    unsigned char ct[16];
+    encrypt(iv0, iv1, i>>32, i, ct);
+    for (int j=0; j<16; ++j) {
+      const int k=i*16-offset+j;
+      if (k>=0 && k<n)
+        buf[k]^=ct[j];
+    }
+  }
+}
+
+#undef setup_mix
+#undef Te4_3
+#undef Te4_2
+#undef Te4_1
+#undef Te4_0
+
+//////////////////////////// stretchKey //////////////////////
+
+// PBKDF2(pw[0..pwlen], salt[0..saltlen], c) to buf[0..dkLen-1]
+// using HMAC-SHA256, for the special case of c = 1 iterations
+// output size dkLen a multiple of 32, and pwLen <= 64.
+static void pbkdf2(const char* pw, int pwLen, const char* salt, int saltLen,
+                   int c, char* buf, int dkLen) {
+  assert(c==1);
+  assert(dkLen%32==0);
+  assert(pwLen<=64);
+
+  libzpaq::SHA256 sha256;
+  char b[32];
+  for (int i=1; i*32<=dkLen; ++i) {
+    for (int j=0; j<pwLen; ++j) sha256.put(pw[j]^0x36);
+    for (int j=pwLen; j<64; ++j) sha256.put(0x36);
+    for (int j=0; j<saltLen; ++j) sha256.put(salt[j]);
+    for (int j=24; j>=0; j-=8) sha256.put(i>>j);
+    memcpy(b, sha256.result(), 32);
+    for (int j=0; j<pwLen; ++j) sha256.put(pw[j]^0x5c);
+    for (int j=pwLen; j<64; ++j) sha256.put(0x5c);
+    for (int j=0; j<32; ++j) sha256.put(b[j]);
+    memcpy(buf+i*32-32, sha256.result(), 32);
+  }
+}
+
+// Hash b[0..15] using 8 rounds of salsa20
+// Modified from http://cr.yp.to/salsa20.html (public domain) to 8 rounds
+static void salsa8(U32* b) {
+  unsigned x[16]={0};
+  memcpy(x, b, 64);
+  for (int i=0; i<4; ++i) {
+    #define R(a,b) (((a)<<(b))+((a)>>(32-b)))
+    x[ 4] ^= R(x[ 0]+x[12], 7);  x[ 8] ^= R(x[ 4]+x[ 0], 9);
+    x[12] ^= R(x[ 8]+x[ 4],13);  x[ 0] ^= R(x[12]+x[ 8],18);
+    x[ 9] ^= R(x[ 5]+x[ 1], 7);  x[13] ^= R(x[ 9]+x[ 5], 9);
+    x[ 1] ^= R(x[13]+x[ 9],13);  x[ 5] ^= R(x[ 1]+x[13],18);
+    x[14] ^= R(x[10]+x[ 6], 7);  x[ 2] ^= R(x[14]+x[10], 9);
+    x[ 6] ^= R(x[ 2]+x[14],13);  x[10] ^= R(x[ 6]+x[ 2],18);
+    x[ 3] ^= R(x[15]+x[11], 7);  x[ 7] ^= R(x[ 3]+x[15], 9);
+    x[11] ^= R(x[ 7]+x[ 3],13);  x[15] ^= R(x[11]+x[ 7],18);
+    x[ 1] ^= R(x[ 0]+x[ 3], 7);  x[ 2] ^= R(x[ 1]+x[ 0], 9);
+    x[ 3] ^= R(x[ 2]+x[ 1],13);  x[ 0] ^= R(x[ 3]+x[ 2],18);
+    x[ 6] ^= R(x[ 5]+x[ 4], 7);  x[ 7] ^= R(x[ 6]+x[ 5], 9);
+    x[ 4] ^= R(x[ 7]+x[ 6],13);  x[ 5] ^= R(x[ 4]+x[ 7],18);
+    x[11] ^= R(x[10]+x[ 9], 7);  x[ 8] ^= R(x[11]+x[10], 9);
+    x[ 9] ^= R(x[ 8]+x[11],13);  x[10] ^= R(x[ 9]+x[ 8],18);
+    x[12] ^= R(x[15]+x[14], 7);  x[13] ^= R(x[12]+x[15], 9);
+    x[14] ^= R(x[13]+x[12],13);  x[15] ^= R(x[14]+x[13],18);
+    #undef R
+  }
+  for (int i=0; i<16; ++i) b[i]+=x[i];
+}
+
+// BlockMix_{Salsa20/8, r} on b[0..128*r-1]
+static void blockmix(U32* b, int r) {
+  assert(r<=8);
+  U32 x[16];
+  U32 y[256];
+  memcpy(x, b+32*r-16, 64);
+  for (int i=0; i<2*r; ++i) {
+    for (int j=0; j<16; ++j) x[j]^=b[i*16+j];
+    salsa8(x);
+    memcpy(&y[i*16], x, 64);
+  }
+  for (int i=0; i<r; ++i) memcpy(b+i*16, &y[i*32], 64);
+  for (int i=0; i<r; ++i) memcpy(b+(i+r)*16, &y[i*32+16], 64);
+}
+
+// Mix b[0..128*r-1]. Uses 128*r*n bytes of memory and O(r*n) time
+static void smix(char* b, int r, int n) {
+  libzpaq::Array<U32> x(32*r), v(32*r*n);
+  for (int i=0; i<r*128; ++i) x[i/4]+=(b[i]&255)<<i%4*8;
+  for (int i=0; i<n; ++i) {
+    memcpy(&v[i*r*32], &x[0], r*128);
+    blockmix(&x[0], r);
+  }
+  for (int i=0; i<n; ++i) {
+    U32 j=x[(2*r-1)*16]&(n-1);
+    for (int k=0; k<r*32; ++k) x[k]^=v[j*r*32+k];
+    blockmix(&x[0], r);
+  }
+  for (int i=0; i<r*128; ++i) b[i]=x[i/4]>>(i%4*8);
+}
+
+// Strengthen password pw[0..pwlen-1] and salt[0..saltlen-1]
+// to produce key buf[0..buflen-1]. Uses O(n*r*p) time and 128*r*n bytes
+// of memory. n must be a power of 2 and r <= 8.
+void scrypt(const char* pw, int pwlen,
+            const char* salt, int saltlen,
+            int n, int r, int p, char* buf, int buflen) {
+  assert(r<=8);
+  assert(n>0 && (n&(n-1))==0);  // power of 2?
+  libzpaq::Array<char> b(p*r*128);
+  pbkdf2(pw, pwlen, salt, saltlen, 1, &b[0], p*r*128);
+  for (int i=0; i<p; ++i) smix(&b[i*r*128], r, n);
+  pbkdf2(pw, pwlen, &b[0], p*r*128, 1, buf, buflen);
+}
+
+// Stretch key in[0..31], assumed to be SHA256(password), with
+// NUL terminate salt to produce new key out[0..31]
+void stretchKey(char* out, const char* in, const char* salt) {
+  scrypt(in, 32, salt, 32, 1<<14, 8, 1, out, 32);
 }
 
 //////////////////////////// Component ///////////////////////
@@ -2710,7 +3210,7 @@ int ZPAQL::assemble() {
     put5(0x48897424,56);      // mov [rsp+56], rsi
     put5(0x48895424,48);      // mov [rsp+48], rdx
     put5(0x48894c24,40);      // mov [rsp+40], rcx
-#ifdef unix
+#if defined(unix) && !defined(__CYGWIN__)
     put2l(0x48bf, this);      // mov rdi, this
 #else  // Windows
     put2l(0x48b9, this);      // mov rcx, this
@@ -3270,7 +3770,7 @@ int Predictor::assemble_p() {
   if (S==4)
     put4(0x8b7c2414);         // mov edi,[esp+0x14] ; pr
   else {
-#ifndef unix
+#if !defined(unix) || defined(__CYGWIN__)
     put3(0x4889cf);           // mov rdi, rcx (1st arg in Win64)
 #endif
   }
@@ -3659,7 +4159,7 @@ int Predictor::assemble_p() {
     put4(0x8b6c2418);          // mov ebp,[esp+0x18] ; (2nd arg = y)
   }
   else {
-#ifdef unix                    // (1st arg already in rdi)
+#if defined(unix) && !defined(__CYGWIN__)  // (1st arg already in rdi)
     put3(0x4889f5);            // mov rbp, rsi (2nd arg in Linux-64)
 #else
     put3(0x4889cf);            // mov rdi, rcx (1st arg in Win64)

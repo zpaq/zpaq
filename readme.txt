@@ -1,10 +1,10 @@
-zpaq642.zip, Sept. 26, 2013. Contents:
+zpaq643.zip, Dec. 20, 2013. Contents:
 
-zpaq.exe      6.42   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.42   For 64 bit Windows.
-zpaq.cpp      6.42   zpaq user's guide and source code.
-libzpaq.h     6.25   libzpaq API documentation and header.
-libzpaq.cpp   6.33   libzpaq API source code.
+zpaq.exe      6.43   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.43   For 64 bit Windows.
+zpaq.cpp      6.43   zpaq user's guide and source code.
+libzpaq.h     6.43   libzpaq API documentation and header.
+libzpaq.cpp   6.43   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
 divsufsort.c  2.00   libdivsufsort-lite source code.
 Makefile             To compile in Linux: make
@@ -99,7 +99,7 @@ not work on 64 bit executables.
 
 You can compile using Visual Studio as follows:
 
-  cl /O2 /EHsc zpaq.cpp libzpaq.cpp divsufsort.c
+  cl /O2 /EHsc /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c advapi32.lib
 
 The following are needed to compile:
 
