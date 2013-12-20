@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.25 header - Apr 19, 2013.
+/* libzpaq.h - LIBZPAQ Version 6.43 header - Dec. 20, 2013.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -442,6 +442,8 @@ of decompression, the HCOMP and PCOMP strings are read from the archive.
 The preprocessor command (from "PCOMP cmd ;") is not saved in the compressed
 data.
 
+OTHER CLASSES
+
 The Array template class is convenient for creating arrays aligned on
 64 byte addresses. It calls error("Out of memory") if needed.
 It is used as follows:
@@ -462,6 +464,46 @@ cannot be copied or assigned. You can also specify the size:
 which is equivalent to n << e except that it calls error("Array too big")
 rather than overflow if n << e would require more than 32 bits. If
 compiled with -DDEBUG, then bounds are checked at run time.
+
+There is a class libzpaq::SHA256 with an identical interface to SHA1
+which returns a 32 byte SHA-256 hash. It is not part of the ZPAQ standard.
+
+The AES_CTR class allows encryption in CTR mode with 128, 192, or 256
+bit keys. The public members are:
+
+class AES_CTR {
+public:
+  AES_CTR(const char* key, int keylen, char* iv=0);
+  void encrypt(U32 s0, U32 s1, U32 s2, U32 s3, unsigned char* ct);
+  void encrypt(char* buf, int n, U64 offset);
+};
+
+The constructor initializes with a 16, 24, or 32 byte key. The length
+is given by keylen. iv can be an 8 byte string or NULL. If not NULL
+then iv0, iv1 are initialized with iv[0..7] in big-endian order, else 0.
+
+encrypt(s0, s1, s2, s3, ct) encrypts a plaintext block divided into
+4 32-bit words MSB first. The first byte of plaintext is the high 8
+bits of s0. The output is to ct[16].
+
+encrypt(buf, n, offset) encrypts or decrypts an n byte slice of a string
+starting at offset. The i'th 16 byte block is encrypted by XOR with
+the result (in ct) of encrypt(iv0, iv1, i>>32, i&0xffffffff, ct) starting
+with i = 0. For example:
+
+  AES_CTR a("a 128 bit key!!!", 16);
+  char buf[500];             // some data 
+  a.encrypt(buf, 100, 0);    // encrypt first 100 bytes
+  a.encrypt(buf, 400, 100);  // encrypt next 400 bytes
+  a.encrypt(buf, 500, 0);    // decrypt in one step
+
+stretchKey(char* out, const char* in, const char* salt);
+
+Generate a 32 byte key out[0..31] from key[0..31] and salt[0..31]
+using scrypt(key, salt, N=16384, r=8, p=1). key[0..31] should be
+the SHA-256 hash of the password. With these parameters, the function
+uses 0.1 to 0.3 seconds and 16 MiB memory.
+Scrypt is defined in http://www.tarsnap.com/scrypt/scrypt.pdf
 
 Other classes and functions defined here are for internal use.
 Use at your own risk.
@@ -586,6 +628,61 @@ private:
   char hbuf[20];    // result
   void process();   // hash 1 block
 };
+
+//////////////////////////// SHA256 //////////////////////////
+
+// For computing SHA-256 checksums
+// http://en.wikipedia.org/wiki/SHA-2
+class SHA256 {
+public:
+  void put(int c) {  // hash 1 byte
+    unsigned& r=w[len0>>5&15];
+    r=(r<<8)|(c&255);
+    if (!(len0+=8)) ++len1;
+    if ((len0&511)==0) process();
+  }
+  double size() const {return len0/8+len1*536870912.0;} // size in bytes
+  uint64_t usize() const {return len0/8+(U64(len1)<<29);} //size in bytes
+  const char* result();  // get hash and reset
+  SHA256() {init();}
+private:
+  void init();           // reset, but don't clear hbuf
+  unsigned len0, len1;   // length in bits (low, high)
+  unsigned s[8];         // hash state
+  unsigned w[16];        // input buffer
+  char hbuf[32];         // result
+  void process();        // hash 1 block
+};
+
+//////////////////////////// AES /////////////////////////////
+
+// For encrypting with AES in CTR mode.
+// The i'th 16 byte block is encrypted by XOR with AES(i)
+// (i is big endian or MSB first, starting with 0).
+class AES_CTR {
+  U32 Te0[256], Te1[256], Te2[256], Te3[256], Te4[256]; // encryption tables
+  U32 ek[60];  // round key
+  int Nr;  // number of rounds (10, 12, 14 for AES 128, 192, 256)
+  U32 iv0, iv1;  // first 8 bytes in CTR mode
+public:
+  AES_CTR(const char* key, int keylen, const char* iv=0);
+    // Schedule: keylen is 16, 24, or 32, iv is 8 bytes or NULL
+  void encrypt(U32 s0, U32 s1, U32 s2, U32 s3, unsigned char* ct);
+  void encrypt(char* buf, int n, U64 offset);  // encrypt n bytes of buf
+};
+
+//////////////////////////// stretchKey //////////////////////
+
+// Strengthen password pw[0..pwlen-1] and salt[0..saltlen-1]
+// to produce key buf[0..buflen-1]. Uses O(n*r*p) time and 128*r*n bytes
+// of memory. n must be a power of 2 and r <= 8.
+void scrypt(const char* pw, int pwlen,
+            const char* salt, int saltlen,
+            int n, int r, int p, char* buf, int buflen);
+
+// Generate a strong key out[0..31] key[0..31] and salt[0..31].
+// Calls scrypt(key, 32, salt, 32, 16384, 8, 1, out, 32);
+void stretchKey(char* out, const char* key, const char* salt);
 
 //////////////////////////// ZPAQL ///////////////////////////
 
