@@ -1,8 +1,8 @@
-zpaq644.zip, Jan 9, 2014. Contents:
+zpaq645.zip, Jan 12, 2014. Contents:
 
-zpaq.exe      6.44   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.44   For 64 bit Windows.
-zpaq.cpp      6.44   zpaq user's guide and source code.
+zpaq.exe      6.45   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.45   For 64 bit Windows.
+zpaq.cpp      6.45   zpaq user's guide and source code.
 libzpaq.h     6.43   libzpaq API documentation and header.
 libzpaq.cpp   6.43   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
