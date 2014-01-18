@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.45"
+#define ZPAQ_VERSION "6.46"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -34,31 +34,32 @@ archiver that improve compression will still produce archives that
 older decompressers can read, because the decompression instructions
 are stored in the archive.
 
-Usage: command archive.zpaq [file|dir]... -options...
+zpaq (C) 2009-2013, Dell Inc. This is free software under GPL v3.
+
+Usage: zpaq command archive[.zpaq] [file|dir]... -options...
 Commands:
   a  add               Add changed files to archive.zpaq
   x  extract           Extract latest versions of files
   l  list              List contents
-  c  compare           List and compare with external files
+  c  compare           Compare with external files
   d  delete            Mark as deleted in a new version of archive
   t  test              Test archive integrity
-  p  purge -to out[.zpaq]   Permanently remove old versions
-  e  encrypt -to out[.zpaq] [""|new password]  Remove|change password
+  p  purge -to archive[.zpaq]   Permanently remove old versions
+  e  encrypt -to archive[.zpaq] [""|new password]  Remove|change password
 Options (may be abbreviated):
+  -to <file|dir>...    Rename external files
   -not <file|dir>...   Exclude
-  -to <file|dir>...    x,c,p,e: rename output (may be same). a: rename input
-  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date
-  -force               a: Add always. x: clobber. c: compare content
-  -threads N           a,x,t: Use N threads (default: 2 detected)
-  -method 0...6        a: Compress faster...better (default: 1)
+  -until N|YYYYMMDD[HH[MM[SS]]]   Revert to version N or date
   -noattributes        Ignore/don't save file attributes
   -key [password]      Create or access encrypted archive
   -quiet [N]           Don't show files smaller than N (default none)
-list options:
-  -summary [N]         Show top N files and types (default: 20)
-  -since N             List from N'th update or last -N updates
-  -all                 List all versions
-  -duplicates          Label duplicate files with =
+  -force               a: Add always. x: overwrite existing files
+  -method 0...6        a: Compress faster...better (default: 1)
+  -threads N           Use N threads (default: cores detected)
+  -all                 l: List all versions. c: compare metadata too
+  -summary [N]         l: List top N files and types (default: 20)
+  -since N             l: List from N'th update or last -N updates
+  -duplicates          l: List by size and label identical files with =
 
 The archive file name must end with ".zpaq" or the extension will be
 assumed. Commands and options may be abbreviated as long as it is not
@@ -141,17 +142,23 @@ listed. Arguments may have wildcards as with the extract command.
 
   c or -compare
 
-List archive contents as with -list and compare with external files.
-Only differences are shown. The internal file is shown with ">" in
-the first column of the listing and the external file is shown with "<".
-If one or the other file does not exist then it is not shown.
-Files are considered different if one exists but not the other,
-or if the dates, attributes, or sizes differ. With -force, the
-contents are compared, but not the dates or attributes.
+Show differences between the archive and external files. If no
+arguments are given, then compare all files in the archive. If
+file or directory arguments are given, then compare just those
+files or directories. Wildcards or -to may be used as with extract.
 
-When file or directory arguments are given, then only those files and
-directories are compared. Arguments may have wildcards as with the
-extract command. The default is to compare every file in the archive.
+Files are compared by size, or if the sizes are the same, then
+by computing SHA-1 hashes and comparing with the
+stored hashes. With -all, dates and attributes are compared too.
+With -all -noattributes, or if no attributes are stored or if
+they are stored for a diffrent operating system, then attributes
+are not compared. If differences are found, then return an exit
+status of 1, else 0.
+
+Differences are displayed with a leading ">" for internal files
+and "<" for external files. A final count of differences is printed.
+-quiet N suppresses listing of files when both the internal and
+external size are less than N bytes.
 
   d or -delete
 
@@ -334,8 +341,7 @@ is equivalent to -until.
 
 Add files even if the dates match. If a file really is identical,
 then it will not be added. When extracting, output files will be
-overwritten. With compare, compare the file contents instead of the dates
-and attributes.
+overwritten.
 
   -threads N
 
@@ -376,9 +382,6 @@ With N, show only files or blocks of size at least N bytes but
 otherwise display normally. Without N, the effect is to suppress all output
 except errors.
 
-
-List and compare options:
-
   -summary N
 
 When listing contents, show only the top N files, directories, and
@@ -395,6 +398,7 @@ last -N updates. Default is 0 (all).
 
 List all versions of each file, including deletions. The default is to
 list only the latest version, or not list it if it is deleted.
+When comparing files, compare dates an attributes in addition to contents.
 
   -duplicates
 
@@ -414,6 +418,16 @@ smaller archives and compress faster, but make it more difficult
 It is not possible to completely test fragile archives. With -extract,
 checksums (if present) are not verified during extraction, which can
 be faster. Recommended only for testing.
+
+  -fragment N
+
+Set the deduplication fragment range to (64..8128)*2^N with an average
+size of 1024*2^N bytes. The default is 6. Values other than 6 do not
+conform to the recommendations for the ZPAQ standard, but are still
+compliant. An archive updated with a different value than when first
+created will not deduplicate against existing files. Small values
+may improve deduplication up to a point but require more memory and
+disk space for the larger fragment list.
 
   -method {0..6|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
 
@@ -2009,6 +2023,7 @@ private:
   int threads;              // default is number of cores
   int since;                // First version to -list
   int summary;              // Arg to -summary
+  int fragment;             // Log average fragment size in KB, default 6
   string method;            // 0..9, default "1"
   bool force;               // -force option
   bool all;                 // -all option
@@ -2025,9 +2040,10 @@ private:
   vector<VER> ver;          // version info
 
   // Commands
-  void add();               // add, delete, show, sha1, sha256
-  int extract();            // extract or restore, return 1 if error else 0
-  void list();              // list or compare
+  void add();               // add or delete
+  int extract();            // extract, return 1 if error else 0
+  void list();              // list
+  int compare();            // compare, return 1 if differences else 0
   void test();              // test
   void purge();             // purge
   void encrypt();           // encrypt to new_password
@@ -2042,7 +2058,7 @@ private:
   void addfile(string filename, int64_t edate, int64_t esize,
                int64_t eattr);          // add external file to dt
   void list_versions(int64_t csize);    // print ver. csize=archive size
-  template <typename DT_ITER> bool equal(DT_ITER p);  // compare to file
+  bool equal(DTMap::const_iterator p);  // compare to file
 };
 
 // Print help message
@@ -2053,34 +2069,33 @@ void Jidac::usage() {
   "DEBUG version\n"
 #endif
   "\n"
-  "Usage: command archive.zpaq [file|dir]... -options...\n"
+  "Usage: zpaq command archive[.zpaq] [file|dir]... -options...\n"
   "Commands:\n"
   "  a  add               Add changed files to archive.zpaq\n"
   "  x  extract           Extract latest versions of files\n"
   "  l  list              List contents\n"
-  "  c  compare           List and compare with external files\n"
+  "  c  compare           Compare with external files\n"
   "  d  delete            Mark as deleted in a new version of archive\n"
   "  t  test              Test archive integrity\n"
-  "  p  purge -to out[.zpaq]   Permanently remove old versions\n"
-  "  e  encrypt -to out[.zpaq] [\"\"|new password]  Remove|change password\n"
+  "  p  purge -to archive[.zpaq]   Permanently remove old versions\n"
+  "  e  encrypt -to archive[.zpaq] [\"\"|new password] "
+    " Remove|change password\n"
   "Options (may be abbreviated):\n"
+  "  -to <file|dir>...    Rename external files\n"
   "  -not <file|dir>...   Exclude\n"
-  "  -to <file|dir>...    x,c,p,e: rename output (may be same)."
-     " a: rename input\n"
-  "  -until N|YYYYMMDD[HH[MM[SS]]]    Revert to version number or date\n"
-  "  -force               a: Add always. x: clobber. c: compare content\n"
-  "  -threads N           a,x,t: Use N threads (default: %d detected)\n"
-  "  -method 0...6        a: Compress faster...better (default: 1)\n"
+  "  -until N|YYYYMMDD[HH[MM[SS]]]   Revert to version N or date (%14.0f)\n"
   "  -noattributes        Ignore/don't save file attributes\n"
   "  -key [password]      Create or access encrypted archive\n"
   "  -quiet [N]           Don't show files smaller than N (default none)\n"
-  "list options:\n"
-  "  -summary [N]         Show top N files and types (default: 20)\n"
-  "  -since N             List from N'th update or last -N updates\n"
-  "  -all                 List all versions\n"
-  "  -duplicates          Label duplicate files with =\n"
+  "  -force               a: Add always. x: overwrite existing files\n"
+  "  -method 0...6        a: Compress faster...better (default: 1)\n"
+  "  -threads N           Use N threads (default: %d detected)\n"
+  "  -all                 l: List all versions. c: compare metadata too\n"
+  "  -summary [N]         l: List top N files and types (default: 20)\n"
+  "  -since N             l: List from N'th update or last -N updates\n"
+  "  -duplicates          l: List by size and label identical files with =\n"
   "See zpaq.cpp for more options and complete documentation.\n",
-  threads);
+  double(date), threads);
   exit(1);
 }
 
@@ -2119,7 +2134,8 @@ string expandOption(const char* opt) {
   const char* opts[]={
     "list","add","extract","delete","test","purge","compare","encrypt",
     "method","force","quiet","summary","since","noattributes","key",
-    "to","not","version","until","threads","all","fragile","duplicates",0};
+    "to","not","version","until","threads","all","fragile","duplicates",
+    "fragment",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -2150,11 +2166,20 @@ int Jidac::doCommand(int argc, const char** argv) {
   version=9999999999999LL;
   date=0;
   threads=0; // 0 = auto-detect
+  fragment=6;
   password=0;  // no password
   new_password=0;  // no new password
   method="1";  // 0..9
   ht.resize(1);  // element 0 not used
   ver.resize(1); // version 0
+
+  // Get date
+  time_t now=time(NULL);
+  tm* t=gmtime(&now);
+  date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
+      +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
+  if (now==-1 || date<20120000000000LL || date>30000000000000LL)
+    error("date is incorrect, use -until YYYYMMDDHHMMSS to set");
 
   // Get optional options
   for (int i=1; i<argc; ++i) {
@@ -2184,6 +2209,8 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-duplicates") duplicates=true;
     else if (opt=="-since" && i<argc-1)
       since=atoi(argv[++i]);
+    else if (opt=="-fragment" && i<argc-1)
+      fragment=atoi(argv[++i]);
     else if (opt=="-summary") {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
@@ -2242,22 +2269,13 @@ int Jidac::doCommand(int argc, const char** argv) {
   if (!threads)
     threads=numberOfProcessors();
 
-  // Get date
-  if (!date && (command=="-add" || command=="-delete" || command=="-purge")) {
-    time_t now=time(NULL);
-    tm* t=gmtime(&now);
-    date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
-        +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
-    if (now==-1 || date<20120000000000LL || date>30000000000000LL)
-      error("date is incorrect, use -until YYYYMMDDHHMMSS to set");
-  }
-
   // Execute command
   if (quiet<MAX_QUIET)
     fprintf(con, "zpaq v" ZPAQ_VERSION " journaling archiver, compiled "
            __DATE__ "\n");
   if (size(files) && (command=="-add" || command=="-delete")) add();
-  else if (command=="-list" || command=="-compare") list();
+  else if (command=="-list") list();
+  else if (command=="-compare") return compare();
   else if (command=="-extract") return extract();
   else if (command=="-test") test();
   else if (command=="-purge") purge();
@@ -2285,9 +2303,9 @@ int64_t Jidac::read_archive(int *errors) {
   string lastfile=archive; // last named file in streaming format
   if (size(lastfile)>5)
     lastfile=lastfile.substr(0, size(lastfile)-5); // drop .zpaq
-  int64_t block_offset=0;  // start of last block of any type
-  int64_t data_offset=0;   // start of last block of fragments (type d)
-  int64_t segment_offset=0;// start of last segment
+  int64_t block_offset=32*(password!=0);  // start of last block of any type
+  int64_t data_offset=block_offset;    // start of last block of d fragments
+  int64_t segment_offset=block_offset; // start of last segment
   bool found_data=false;   // exit if nothing found
   bool first=true;         // first segment in archive?
   enum {NORMAL, ERR, RECOVER} pass=NORMAL;  // recover ht from data blocks?
@@ -2308,8 +2326,8 @@ int64_t Jidac::read_archive(int *errors) {
       if (d.findBlock())
         found_data=true;
       else if (pass==ERR) {
-        in.seek(32*(password!=0), SEEK_SET);
-        segment_offset=block_offset=0;
+        segment_offset=block_offset=32*(password!=0);
+        in.seek(block_offset, SEEK_SET);
         if (!d.findBlock()) break;
         pass=RECOVER;
         if (quiet<MAX_QUIET)
@@ -4372,6 +4390,8 @@ void Jidac::add() {
     blocksize=(1<<25)-4096;
   if (method.size()>1)
     blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+  if (fragment<0 || fragment>19 || (1u<<(12+fragment))>blocksize)
+    error("fragment size too large");
 
   // Read archive index list into ht, dt, ver.
   const int64_t header_pos=
@@ -4535,8 +4555,8 @@ void Jidac::add() {
 
   // Compress until end of last file
   assert(method!="");
-  const unsigned MIN_FRAGMENT=4096;   // fragment size limits
-  const unsigned MAX_FRAGMENT=520192;
+  const unsigned MIN_FRAGMENT=64<<fragment;   // fragment size limits
+  const unsigned MAX_FRAGMENT=8128<<fragment;
   unsigned fi=0;       // file number in vf
   unsigned fj=0;       // fragment number in file
   InputFile in;        // currently open input file
@@ -4648,7 +4668,8 @@ void Jidac::add() {
         sha1.put(c);
         fragbuf[sz++]=c;
       }
-      if (c==EOF || (h<65536 && sz>=MIN_FRAGMENT) || sz>=MAX_FRAGMENT)
+      if (c==EOF || (h<(1u<<22>>fragment) && sz>=MIN_FRAGMENT)
+         || sz>=MAX_FRAGMENT)
         break;
     }
     assert(sz<=MAX_FRAGMENT);
@@ -4850,39 +4871,29 @@ void Jidac::add() {
 
 /////////////////////////////// extract ///////////////////////////////
 
-// Test if the internal and external files are equal. If force is true
-// then compare files by contents only, else compare dates,
-// attributes (if both exist), and size.
-template <typename DT_ITER>
-bool Jidac::equal(DT_ITER p) {
+// Return true if the internal and external file contents are equal
+bool Jidac::equal(DTMap::const_iterator p) {
   if (p->second.dtv.size()==0 || p->second.dtv.back().date==0)
     return p->second.edate==0;  // true if neither file exists
   if (p->second.edate==0) return false;  // external does not exist
   assert(p->second.dtv.size()>0);
   if (p->second.dtv.back().size!=p->second.esize) return false;
-  if (force) {
-    if (p->first!="" && p->first[p->first.size()-1]=='/') return true;
-    InputFile in;
-    in.open(rename(p->first).c_str());
-    if (!in.isopen()) return false;
-    libzpaq::SHA1 sha1;
-    for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
-      unsigned f=p->second.dtv.back().ptr[i];
-      if (f<1 || f>=ht.size() || ht[f].csize==HT_BAD) return false;
-      for (int j=ht[f].usize; j>0; --j) {
-        int c=in.get();
-        if (c==EOF) return false;
-        sha1.put(c);
-      }
-      if (memcmp(sha1.result(), ht[f].sha1, 20)!=0) return false;
+  if (p->first!="" && p->first[p->first.size()-1]=='/') return true;
+  InputFile in;
+  in.open(rename(p->first).c_str());
+  if (!in.isopen()) return false;
+  libzpaq::SHA1 sha1;
+  for (unsigned i=0; i<p->second.dtv.back().ptr.size(); ++i) {
+    unsigned f=p->second.dtv.back().ptr[i];
+    if (f<1 || f>=ht.size() || ht[f].csize==HT_BAD) return false;
+    for (int j=ht[f].usize; j>0; --j) {
+      int c=in.get();
+      if (c==EOF) return false;
+      sha1.put(c);
     }
-    if (in.get()!=EOF) return false;
+    if (memcmp(sha1.result(), ht[f].sha1, 20)!=0) return false;
   }
-  else {
-    if (p->second.dtv.back().date!=p->second.edate) return false;
-    if (p->second.dtv.back().attr && p->second.eattr
-        && p->second.dtv.back().attr!=p->second.eattr) return false;
-  }
+  if (in.get()!=EOF) return false;
   return true;
 }
 
@@ -5264,7 +5275,7 @@ int Jidac::extract() {
         job.block.push_back(Block(i, ht[i].csize));
       assert(job.block.size()>0);
       hti[i]=job.block.size()-1;
-      if (ht[i].usize<0 || ht[i].usize>(1<<26))
+      if (ht[i].usize<0 || ht[i].usize>(1<<30))
         job.block.back().streaming=true;
     }
   }
@@ -5964,7 +5975,7 @@ void Jidac::list() {
   }
 
   // Make list of files to list
-  read_args(command=="-compare", all);
+  read_args(false, all);
   vector<DTMap::const_iterator> filelist;
   for (DTMap::const_iterator p=dt.begin(); p!=dt.end(); ++p)
     if (p->second.written==0)
@@ -5972,9 +5983,9 @@ void Jidac::list() {
   if (duplicates)
     sort(filelist.begin(), filelist.end(), compareFragmentList);
 
-  // Ordinary list or compare
+  // Ordinary list
   int64_t usize=0;
-  unsigned nfiles=0, shown=0, same=0, different=0;
+  unsigned nfiles=0, shown=0;
   if (since<0) since+=ver.size();
   fprintf(con, "\n"
     " Ver  Date      Time (UT) %s        Size Ratio  File\n"
@@ -5982,64 +5993,95 @@ void Jidac::list() {
     noattributes?"":"Attr   ", noattributes?"":"------ ");
   for (unsigned fi=0; fi<filelist.size(); ++fi) {
     DTMap::const_iterator p=filelist[fi];
-    const bool isequal=command=="-compare" && equal(p);
-    isequal ? ++same : ++different;
     for (unsigned i=0; i<p->second.dtv.size(); ++i) {
       if (p->second.dtv[i].version>=since && p->second.dtv[i].size>=quiet
           && (all || (i+1==p->second.dtv.size() && p->second.dtv[i].date))) {
-        if (!isequal) {
-          if (duplicates && fi>0 && filelist[fi-1]->second.dtv.size()
-              && p->second.dtv[i].ptr==filelist[fi-1]->second.dtv.back().ptr)
-            fprintf(con, "=");
-          else
-            fprintf(con, ">");
-          fprintf(con, "%4d ", p->second.dtv[i].version);
-          if (p->second.dtv[i].date) {
-            ++shown;
-            usize+=p->second.dtv[i].size;
-            double ratio=1.0;
-            if (p->second.dtv[i].size>0)
-              ratio=p->second.dtv[i].csize/p->second.dtv[i].size;
-            if (ratio>9.9999) ratio=9.9999;
-            fprintf(con, "%s %s%12.0f %6.4f ",
-                   dateToString(p->second.dtv[i].date).c_str(),
-                   noattributes ? "" :
-                     (attrToString(p->second.dtv[i].attr)+" ").c_str(),
-                   double(p->second.dtv[i].size), ratio);
-          }
-          else {
-            fprintf(con, "%-40s", "Deleted");
-            if (!noattributes) fprintf(con, "       ");
-          }
-          string s=rename(p->first);
-          printUTF8(p->first.c_str(), con);
-          if (s!=p->first) {
-            fprintf(con, " -> ");
-            printUTF8(s.c_str(), con);
-          }
-          fprintf(con, "\n");
+        if (duplicates && fi>0 && filelist[fi-1]->second.dtv.size()
+            && p->second.dtv[i].ptr==filelist[fi-1]->second.dtv.back().ptr)
+          fprintf(con, "=");
+        else
+          fprintf(con, ">");
+        fprintf(con, "%4d ", p->second.dtv[i].version);
+        if (p->second.dtv[i].date) {
+          ++shown;
+          usize+=p->second.dtv[i].size;
+          double ratio=1.0;
+          if (p->second.dtv[i].size>0)
+            ratio=p->second.dtv[i].csize/p->second.dtv[i].size;
+          if (ratio>9.9999) ratio=9.9999;
+          fprintf(con, "%s %s%12.0f %6.4f ",
+                 dateToString(p->second.dtv[i].date).c_str(),
+                 noattributes ? "" :
+                   (attrToString(p->second.dtv[i].attr)+" ").c_str(),
+                 double(p->second.dtv[i].size), ratio);
         }
+        else {
+          fprintf(con, "%-40s", "Deleted");
+          if (!noattributes) fprintf(con, "       ");
+        }
+        string s=rename(p->first);
+        printUTF8(p->first.c_str(), con);
+        if (s!=p->first) {
+          fprintf(con, " -> ");
+          printUTF8(s.c_str(), con);
+        }
+        fprintf(con, "\n");
       }
-    }
-
-    // Print compared external files that differ
-    if (!isequal && p->second.edate && p->second.esize>=quiet) {
-      fprintf(con, "<     %s %s%12.0f        ",
-          dateToString(p->second.edate).c_str(),
-          noattributes ? "" :
-            (attrToString(p->second.eattr)+" ").c_str(), 
-          double(p->second.esize));
-      printUTF8(rename(p->first).c_str(), con);
-      fprintf(con, "\n");
     }
     if (p->second.dtv.size() && p->second.dtv.back().date) ++nfiles;
   }
-  if (command=="-compare")
-    fprintf(con, "%u of %u files differ\n", different, same+different);
   fprintf(con, "%u of %u files shown. %1.0f -> %1.0f\n",
          shown, nfiles, double(usize), double(csize));
-  if (command=="-list")
-    list_versions(csize);
+  list_versions(csize);
+}
+
+/////////////////////////////// compare ///////////////////////////////
+
+// Compare archive with external files and list differences.
+// Return 1 if differences are found, else 0.
+int Jidac::compare() {
+  if (archive!="") read_archive();
+  read_args(true);
+  int count=0, differences=0;
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+    if (p->second.written!=0) continue;
+    bool isequal=p->second.edate>0 && p->second.dtv.size()>0
+        && p->second.dtv.back().date>0;  // both files exist?
+    if (all && isequal)
+      isequal=p->second.edate==p->second.dtv.back().date;  // same date?
+    if (all && isequal && (p->second.eattr&255) // attributes present,
+        && (p->second.dtv.back().attr&255)      // same OS, and different?
+        && ((p->second.eattr^p->second.dtv.back().attr)&255)==0)
+      isequal=p->second.eattr==p->second.dtv.back().attr;
+    if (isequal)
+      isequal=equal(p);  // same contents
+    ++count;
+    if (!isequal) ++differences;
+    if (!isequal && (p->second.esize>=quiet
+        || (p->second.dtv.size()>0 && p->second.dtv.back().size>=quiet))) {
+      if (p->second.dtv.size()>0 && p->second.dtv.back().date) {
+        fprintf(con, "> %s %s%12.0f ",
+            dateToString(p->second.dtv.back().date).c_str(),
+            noattributes ? "" :
+              (attrToString(p->second.dtv.back().attr)+" ").c_str(), 
+            double(p->second.dtv.back().size));
+        printUTF8(p->first.c_str(), con);
+        fprintf(con, "\n");
+      }
+      if (p->second.edate) {
+        fprintf(con, "< %s %s%12.0f ",
+            dateToString(p->second.edate).c_str(),
+            noattributes ? "" :
+              (attrToString(p->second.eattr)+" ").c_str(), 
+            double(p->second.esize));
+        printUTF8(rename(p->first).c_str(), con);
+        fprintf(con, "\n");
+      }
+    }
+  }
+  if (quiet<MAX_QUIET)
+    fprintf(con, "%d of %d files differ\n", differences, count);
+  return differences>0;
 }
 
 /////////////////////////////// purge /////////////////////////////////
