@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.46"
+#define ZPAQ_VERSION "6.47"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -46,6 +46,7 @@ Commands:
   t  test              Test archive integrity
   p  purge -to archive[.zpaq]   Permanently remove old versions
   e  encrypt -to archive[.zpaq] [""|new password]  Remove|change password
+  s  snip -to out -since -N    Copy last N updates
 Options (may be abbreviated):
   -to <file|dir>...    Rename external files
   -not <file|dir>...   Exclude
@@ -58,7 +59,7 @@ Options (may be abbreviated):
   -threads N           Use N threads (default: cores detected)
   -all                 l: List all versions. c: compare metadata too
   -summary [N]         l: List top N files and types (default: 20)
-  -since N             l: List from N'th update or last -N updates
+  -since N             l,x,c: From N'th update or last -N updates
   -duplicates          l: List by size and label identical files with =
 
 The archive file name must end with ".zpaq" or the extension will be
@@ -254,6 +255,28 @@ unchanged. There is a probability of about 10^-9 that one of these values
 will be detected when the first password is incorrect and the archive
 will be overwritten with random bytes.
 
+  s or snip archive[.zpaq] [-to out] [-since M] [-until N] [-force]
+
+Copies versions M..N of archive.zpaq to out, or N+M+1..N if M < 0.
+Each add or delete command appends a version to the archive, starting
+with 1. The defaults are M = -1, N = number of versions in archive.zpaq,
+which results in just the most recent version being copied to out.
+If out contains wildcards, then * is replaced with the version
+number (resulting in one file per version) and ? is
+replaced with a single digit of the version number. The default
+is archive.zpaq.part????? which produces files archive.zpaq.part00001,
+archive.zpaq.part00002, etc. When these files are concatenated together
+it will reproduce the original archive.  If any output files already
+exist then they are appended. The -force option overwrites them instead.
+
+Snip is used to synchronize a local and remote backup without uploading
+the entire backup after each update:
+
+  zpaq a backup files
+  zpaq s backup -to diff -force
+  rcp diff host:diff
+  rsh host 'cat diff >> backup.zpaq'
+
 
 Options:
 
@@ -340,7 +363,7 @@ is equivalent to -until.
   -force
 
 Add files even if the dates match. If a file really is identical,
-then it will not be added. When extracting, output files will be
+then it will not be added. For extract and snip, output files will be
 overwritten.
 
   -threads N
@@ -391,14 +414,16 @@ table of version dates.
 
   -since N
 
-List only versions N and later. If N is negative then list only the
-last -N updates. Default is 0 (all).
+List, compare, or extract only versions N and later. If N is negative
+then list, compare, or extract only the last -N updates. Default is 0 (all).
+For snip, the default is -1 (last version only).
 
   -all
 
 List all versions of each file, including deletions. The default is to
 list only the latest version, or not list it if it is deleted.
-When comparing files, compare dates an attributes in addition to contents.
+Also list a table of versions like -summary.
+When comparing files, compare dates and attributes in addition to contents.
 
   -duplicates
 
@@ -733,6 +758,7 @@ Possible options:
 
 */
 #define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
+#define UNICODE  // For Windows
 #include "libzpaq.h"
 #include "divsufsort.h"
 #include <stdio.h>
@@ -777,7 +803,6 @@ int tcsetattr(int, int, termios*) {return 0;}
 #endif
 
 #else  // Assume Windows
-#define UNICODE
 #include <windows.h>
 #include <wincrypt.h>
 #include <io.h>
@@ -2047,6 +2072,7 @@ private:
   void test();              // test
   void purge();             // purge
   void encrypt();           // encrypt to new_password
+  void snip();              // snip -to out -since -1
   void usage();             // help
 
   // Support functions
@@ -2064,36 +2090,56 @@ private:
 // Print help message
 void Jidac::usage() {
   fprintf(con, 
-  "zpaq (C) 2009-2013, Dell Inc. This is free software under GPL v3.\n"
+  "zpaq (C) 2009-2014, Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
   "DEBUG version\n"
 #endif
   "\n"
-  "Usage: zpaq command archive[.zpaq] [file|dir]... -options...\n"
-  "Commands:\n"
-  "  a  add               Add changed files to archive.zpaq\n"
-  "  x  extract           Extract latest versions of files\n"
-  "  l  list              List contents\n"
-  "  c  compare           Compare with external files\n"
-  "  d  delete            Mark as deleted in a new version of archive\n"
-  "  t  test              Test archive integrity\n"
-  "  p  purge -to archive[.zpaq]   Permanently remove old versions\n"
-  "  e  encrypt -to archive[.zpaq] [\"\"|new password] "
-    " Remove|change password\n"
-  "Options (may be abbreviated):\n"
-  "  -to <file|dir>...    Rename external files\n"
-  "  -not <file|dir>...   Exclude\n"
-  "  -until N|YYYYMMDD[HH[MM[SS]]]   Revert to version N or date (%14.0f)\n"
-  "  -noattributes        Ignore/don't save file attributes\n"
-  "  -key [password]      Create or access encrypted archive\n"
-  "  -quiet [N]           Don't show files smaller than N (default none)\n"
-  "  -force               a: Add always. x: overwrite existing files\n"
-  "  -method 0...6        a: Compress faster...better (default: 1)\n"
-  "  -threads N           Use N threads (default: %d detected)\n"
-  "  -all                 l: List all versions. c: compare metadata too\n"
-  "  -summary [N]         l: List top N files and types (default: 20)\n"
-  "  -since N             l: List from N'th update or last -N updates\n"
-  "  -duplicates          l: List by size and label identical files with =\n"
+  "zpaq journaling (append-only) archiver for incremental backups.\n"
+  "Usage: zpaq command archive files... -options...\n"
+  "Archive is assumed to have a .zpaq extension if not specified.\n"
+  "Files can be directories in which case the whole tree is included.\n"
+  "Commands may be abbreviated to one letter (or x for extract):\n"
+  "add             Compress and append files if last-modified date"
+    " has changed.\n"
+  "                If already in archive then keep both old and new"
+    " versions.\n"
+  "extract         Decompress named files (default: entire contents).\n"
+  "list            List named files (default: entire contents).\n"
+  "compare         Compare with external files (default: entire contents).\n"
+  "delete          Mark as deleted in a new version of archive.\n"
+  "test            Test archive integrity.\n"
+  "purge -to out[.zpaq]\n"
+  "                Permanently remove old versions. out can be self.\n"
+  "encrypt -to out[.zpaq] [\"\"|new password]\n"
+  "                Remove|change AES-256 password. out can be self.\n"
+  "snip [-to out]  Append another copy of the last update to out.\n"
+  "                (default: archive.zpaq.part\?\?\?\?\?, where * or ?\n"
+  "                is replaced by the version number or its digits).\n"
+  "\n"
+  "Options (may be abbreviated if not ambiguous):\n"
+  "-to files...    Rename args or specify external prefix, e.g.\n"
+  "                zpaq x archive file1 dir1 -to file2 dir2"
+    "  (rename output)\n"
+  "                zpaq x archive -to tmp/        (extract all to tmp/all)\n"
+  "-not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj\n"
+  "-until N        Revert archive to the N'th update (default: last).\n"
+  "                All commands will ignore later updates. Add and delete\n"
+  "                will truncate the archive before updating.\n"
+  "-until YYYYMMDD[HH[MM[SS]]]  Revert by date (UT)."
+    " HHMMSS defaults to 235959.\n"
+  "                Default is current date: %14.0f\n"
+  "-since N        Start at version N or -N from end if N < 0.\n"
+  "                Default: 1 for list, extract, compare, -1 for snip.\n"
+  "-noattributes   Ignore/don't save file attributes or permissions.\n"
+  "-key [password] Create or access encrypted archive (default: prompt).\n"
+  "-quiet [N]      Don't show files smaller than N (default none).\n"
+  "-force          a: Add always. x,s: overwrite existing files.\n"
+  "-method 0...6   a: Compress faster...better (default: 1).\n"
+  "-threads N      Use N threads (default: %d detected).\n"
+  "-all            l: List all versions. c: compare dates, attributes too.\n"
+  "-summary [N]    l: List top N (20) files and types and a version table.\n"
+  "-duplicates     l: List by size and label identical files with =\n"
   "See zpaq.cpp for more options and complete documentation.\n",
   double(date), threads);
   exit(1);
@@ -2132,7 +2178,7 @@ string Jidac::unrename(const string& name) {
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
   const char* opts[]={
-    "list","add","extract","delete","test","purge","compare","encrypt",
+    "list","add","extract","delete","test","purge","compare","encrypt","snip",
     "method","force","quiet","summary","since","noattributes","key",
     "to","not","version","until","threads","all","fragile","duplicates",
     "fragment",0};
@@ -2147,7 +2193,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<8 && result!="") return result;
+      if (i<9 && result!="") return result;
     }
   }
   if (result=="")
@@ -2185,9 +2231,8 @@ int Jidac::doCommand(int argc, const char** argv) {
   for (int i=1; i<argc; ++i) {
     const string opt=expandOption(argv[i]);
     if ((opt=="-add" || opt=="-extract" || opt=="-list"
-        || opt=="-delete" || opt=="-restore" || opt=="-test"
-        || opt=="-purge" || opt=="-compare" || opt=="-encrypt"
-        || opt=="-show" || opt=="-sha1" || opt=="-sha256")
+        || opt=="-delete" || opt=="-compare" || opt=="-test"
+        || opt=="-purge"  || opt=="-encrypt" || opt=="-snip")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       archive=argv[++i];
       if (archive!="" &&   // Add .zpaq extension
@@ -2280,6 +2325,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   else if (command=="-test") test();
   else if (command=="-purge") purge();
   else if (command=="-encrypt") encrypt();
+  else if (command=="-snip") snip();
   else usage();
   return 0;
 }
@@ -2679,6 +2725,7 @@ int64_t Jidac::read_archive(int *errors) {
 void Jidac::read_args(bool scan, bool mark_all) {
 
   // Match to files[] except notfiles[] or match all if files[] is empty
+  if (since<0) since+=ver.size();
   if (quiet<MAX_QUIET && scan && size(files))
     fprintf(con, "Scanning files\n");
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
@@ -2694,7 +2741,8 @@ void Jidac::read_args(bool scan, bool mark_all) {
       if (ispath(notfiles[i].c_str(), p->first.c_str()))
         matched=false;
     if (matched &&
-        (mark_all || (p->second.dtv.size() && p->second.dtv.back().date)))
+        (mark_all || (p->second.dtv.size() && p->second.dtv.back().date
+        && p->second.dtv.back().version>=since)))
       p->second.written=0;
   }
 
@@ -4161,6 +4209,7 @@ class CompressJob {
   int front;             // next to remove from queue
   libzpaq::Writer* out;  // archive
   Semaphore empty;       // number of empty buffers ready to fill
+  Semaphore compressors; // number of compressors available to run
 public:
   friend ThreadReturn compressThread(void* arg);
   friend ThreadReturn writeThread(void* arg);
@@ -4170,6 +4219,7 @@ public:
     if (!q) throw std::bad_alloc();
     init_mutex(mutex);
     empty.init(t);
+    compressors.init(t/2);
     for (int i=0; i<t; ++i) {
       q[i].full.init(0);
       q[i].compressed.init(0);
@@ -4180,6 +4230,7 @@ public:
       q[i].compressed.destroy();
       q[i].full.destroy();
     }
+    compressors.destroy();
     empty.destroy();
     destroy_mutex(mutex);
     delete[] q;
@@ -4256,8 +4307,10 @@ ThreadReturn compressThread(void* arg) {
           start=atoi(cj.filename.c_str()+18);
       }
       release(job.mutex);
+      job.compressors.wait();
       string m=compressBlock(&cj.in, &cj.out, cj.method, cj.filename.c_str(),
                              0, cj.type);
+      job.compressors.signal();
       lock(job.mutex);
       if (quiet<=insize) {
         bytes_processed+=insize-8-4*frags;
@@ -4545,12 +4598,12 @@ void Jidac::add() {
   const int64_t header_end=archive=="" ? counter.pos : out.tell();
 
   // Start compress and write jobs
-  vector<ThreadID> tid(threads);
+  vector<ThreadID> tid(threads*2);
   ThreadID wid;
-  CompressJob job(threads, outp);
+  CompressJob job(tid.size(), outp);
   if (quiet<MAX_QUIET)
-    fprintf(con, "Starting %d compression jobs\n", threads);
-  for (int i=0; i<threads; ++i) run(tid[i], compressThread, &job);
+    fprintf(con, "Starting %d compression jobs\n", size(tid));
+  for (int i=0; i<size(tid); ++i) run(tid[i], compressThread, &job);
   run(wid, writeThread, &job);
 
   // Compress until end of last file
@@ -4762,7 +4815,7 @@ void Jidac::add() {
   assert(sb.size()==0);
   assert(!in.isopen());
   job.write(sb, 0, "");  // signal end of input
-  for (int i=0; i<threads; ++i)
+  for (int i=0; i<size(tid); ++i)
     join(tid[i]);
   join(wid);
 
@@ -5986,7 +6039,6 @@ void Jidac::list() {
   // Ordinary list
   int64_t usize=0;
   unsigned nfiles=0, shown=0;
-  if (since<0) since+=ver.size();
   fprintf(con, "\n"
     " Ver  Date      Time (UT) %s        Size Ratio  File\n"
     "----- ---------- -------- %s------------ ------ ----\n",
@@ -6032,7 +6084,7 @@ void Jidac::list() {
   }
   fprintf(con, "%u of %u files shown. %1.0f -> %1.0f\n",
          shown, nfiles, double(usize), double(csize));
-  list_versions(csize);
+  if (all) list_versions(csize);
 }
 
 /////////////////////////////// compare ///////////////////////////////
@@ -6537,6 +6589,64 @@ void Jidac::encrypt() {
     fprintf(con, "Password added to %s\n", archive.c_str());
   }
   out.close();
+}
+
+/////////////////////////////// snip //////////////////////////////////
+
+// In s substitute wildcards * with n and ? with a digit of n
+string subn(const string& s, int n) {
+  string r="";
+  for (int i=size(s)-1; i>=0; --i) {
+    if (s[i]=='*') r=itos(n)+r, n=0;
+    else if (s[i]=='?') r=char(n%10+'0')+r, n/=10;
+    else r=s[i]+r;
+  }
+  return r;
+}
+
+// Append versions in since..until or until-since+1..until (if since < 0
+// default -1) to tofiles[0] or archive+".part?????" and replace
+// wildcards * with version number or ? with single digits.
+// -force overwrites, else appends.
+
+void Jidac::snip() {
+  if (size(tofiles)<1) tofiles.push_back(archive+".part?????");
+  const int64_t csize=read_archive();
+  if (since==0) since=-1;
+  if (since<0) since+=ver.size();
+  if (since<1) since=1;
+  if (size(ver)>1) ver[1].offset=0;
+
+  // If force then delete output files
+  if (force) {
+    for (int i=since; i<size(ver); ++i) {
+      string fn=subn(tofiles[0], i);
+      remove(fn.c_str());
+    }
+  }
+
+  // Copy versions
+  InputFile in;
+  if (!in.open(archive.c_str())) return;
+  for (int i=since; i<size(ver); ++i) {
+    int64_t versize=(i>=size(ver)-1 ? csize : ver[i+1].offset)-ver[i].offset;
+    string fn=subn(tofiles[0], i);
+    OutputFile out;
+    if (!out.open(fn.c_str())) continue;
+    int c;
+    int64_t j;
+    in.seek(ver[i].offset, SEEK_SET);
+    for (j=ver[i].offset; j<ver[i].offset+versize && (c=in.get())!=EOF; ++j)
+      out.put(c);
+    if (versize>=quiet) {
+      printUTF8(archive.c_str(), con);
+      fprintf(con, " [%1.0f..%1.0f] ver %d -> ", ver[i].offset+0.0, j-1.0, i);
+      printUTF8(fn.c_str(), con);
+      fprintf(con, "\n");
+    }
+    out.close();
+  }
+  in.close();
 }
 
 /////////////////////////////// main //////////////////////////////////
