@@ -1,8 +1,8 @@
-zpaq646.zip, Jan 17, 2014. Contents:
+zpaq647.zip, Jan 21, 2014. Contents:
 
-zpaq.exe      6.46   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.46   For 64 bit Windows.
-zpaq.cpp      6.46   zpaq user's guide and source code.
+zpaq.exe      6.47   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.47   For 64 bit Windows.
+zpaq.cpp      6.47   zpaq user's guide and source code.
 libzpaq.h     6.43   libzpaq API documentation and header.
 libzpaq.cpp   6.43   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
@@ -73,7 +73,7 @@ same file.
 
 TO COMPILE
 
-zpaq.exe was compiled with MinGW g++ 4.8.0 and compressed
+zpaq.exe was compiled with MinGW g++ 4.8.1 and compressed
 with upx 3.08w as follows:
 
   g++ -O3 -s -m64 -static -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq64
