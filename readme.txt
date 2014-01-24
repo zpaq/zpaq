@@ -1,10 +1,10 @@
-zpaq647.zip, Jan 21, 2014. Contents:
+zpaq648.zip, Jan 23, 2014. Contents:
 
-zpaq.exe      6.47   Archiver, 32 bit Windows command line executable.
-zpaq64.exe    6.47   For 64 bit Windows.
-zpaq.cpp      6.47   zpaq user's guide and source code.
+zpaq.exe      6.48   Archiver, 32 bit Windows command line executable.
+zpaq64.exe    6.48   For 64 bit Windows.
+zpaq.cpp      6.48   zpaq user's guide and source code.
 libzpaq.h     6.43   libzpaq API documentation and header.
-libzpaq.cpp   6.43   libzpaq API source code.
+libzpaq.cpp   6.48   libzpaq API source code.
 divsufsort.h  2.00   libdivsufsoft-lite header.
 divsufsort.c  2.00   libdivsufsort-lite source code.
 Makefile             To compile in Linux: make

@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.43 implementation - Dec. 19, 2013.
+/* libzpaq.cpp - LIBZPAQ Version 6.48 implementation - Jan. 23, 2014.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -2064,8 +2064,9 @@ int Decoder::decode(int p) {
   assert(curr>=low && curr<=high);
   U32 mid=low+U32(((high-low)*U64(U32(p)))>>16);  // split range
   assert(high>mid && mid>=low);
-  int y=curr<=mid;
-  if (y) high=mid; else low=mid+1; // pick half
+  int y;
+  if (curr<=mid) y=1, high=mid;  // pick half
+  else y=0, low=mid+1;
   while ((high^low)<0x1000000) { // shift out identical leading bytes
     high=high<<8|255;
     low=low<<8;
