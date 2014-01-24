@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.47"
+#define ZPAQ_VERSION "6.48"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -46,7 +46,7 @@ Commands:
   t  test              Test archive integrity
   p  purge -to archive[.zpaq]   Permanently remove old versions
   e  encrypt -to archive[.zpaq] [""|new password]  Remove|change password
-  s  snip -to out -since -N    Copy last N updates
+  s  split [-to] out -since -N    Copy last N updates
 Options (may be abbreviated):
   -to <file|dir>...    Rename external files
   -not <file|dir>...   Exclude
@@ -255,7 +255,7 @@ unchanged. There is a probability of about 10^-9 that one of these values
 will be detected when the first password is incorrect and the archive
 will be overwritten with random bytes.
 
-  s or snip archive[.zpaq] [-to out] [-since M] [-until N] [-force]
+  s or split archive[.zpaq] [[-to] out] [-since M] [-until N] [-force]
 
 Copies versions M..N of archive.zpaq to out, or N+M+1..N if M < 0.
 Each add or delete command appends a version to the archive, starting
@@ -267,15 +267,32 @@ replaced with a single digit of the version number. The default
 is archive.zpaq.part????? which produces files archive.zpaq.part00001,
 archive.zpaq.part00002, etc. When these files are concatenated together
 it will reproduce the original archive.  If any output files already
-exist then they are appended. The -force option overwrites them instead.
+exist and are exactly the same size as the current offset then they
+are appended. The -force option overwrites them instead.
 
-Snip is used to synchronize a local and remote backup without uploading
+Split is used to synchronize a local and remote backup without uploading
 the entire backup after each update:
 
   zpaq a backup files
   zpaq s backup -to diff -force
   rcp diff host:diff
-  rsh host 'cat diff >> backup.zpaq'
+  rsh host 'cat diff >> backup.zpaq
+
+Or to maintain two copies of an archive:
+
+  zpaq a backup1 files
+  zpaq s backup1 -to backup2.zpaq  (fails if initial sizes differ)
+
+
+  j or join archive files... -force
+
+Concatenate files to archive. Unless -force is given, test that the
+files are valid journaling version sequences produced by split and
+that the result will be a valid journaling archive with no duplicates,
+gaps, or out of order versions, or else else exit with an error.
+If archive is "" then do this test without writing to disk.
+Files are appended in lexicographical order regardless of their
+order on the command line.
 
 
 Options:
@@ -363,8 +380,8 @@ is equivalent to -until.
   -force
 
 Add files even if the dates match. If a file really is identical,
-then it will not be added. For extract and snip, output files will be
-overwritten.
+then it will not be added. For extract and split, output files will be
+overwritten. For join, skip testing before concatenation.
 
   -threads N
 
@@ -1140,8 +1157,17 @@ bool exists(string filename) {
   struct stat sb;
   return !lstat(filename.c_str(), &sb);
 #else
-  return GetFileAttributes(utow(filename.c_str()).c_str())
+  return GetFileAttributes(utow(filename.c_str(), true).c_str())
          !=INVALID_FILE_ATTRIBUTES;
+#endif
+}
+
+// Delete a file, return true if successful
+bool delete_file(const char* filename) {
+#ifdef unix
+  return remove(filename)==0;
+#else
+  return DeleteFile(utow(filename, true).c_str());
 #endif
 }
 
@@ -1152,9 +1178,11 @@ protected:
   int ptr;  // next byte to read or write in buf
   libzpaq::Array<char> buf;  // I/O buffer
   libzpaq::AES_CTR *aes;  // if not NULL then encrypt
+  int64_t eoff;  // extra offset for multi-file encryption
+  int ref;  // 1 if aes is allocated locally
   void setup_key(const char* filename, const char* password);
-  File(): ptr(0), buf(BUFSIZE), aes(0) {}
-  ~File() {if (aes) delete aes;}
+  File(): ptr(0), buf(BUFSIZE), aes(0), eoff(0), ref(0) {}
+  ~File() {if (aes && ref) delete aes;}
 };
 
 // If password then set aes and initialize encryption
@@ -1163,6 +1191,7 @@ void File::setup_key(const char* password, const char* salt) {
   char key[32];
   libzpaq::stretchKey(key, password, salt);
   aes=new libzpaq::AES_CTR(key, 32, salt);
+  ref=1;
 }
 
 // File types accepting UTF-8 filenames
@@ -1174,14 +1203,22 @@ class InputFile: public File, public libzpaq::Reader {
 public:
   InputFile(): in(0), n(0) {}
 
-  // Open file for reading. Return true if successful
-  bool open(const char* filename, const char* password=0) {
+  // Open file for reading. Return true if successful.
+  // If aes then encrypt with aes+eoff else with password.
+  bool open(const char* filename, const char* password=0,
+            libzpaq::AES_CTR* a=0, int64_t e=0) {
     in=fopen(filename, "rb");
     if (!in) perror(filename);
-    else if (password) {
-      char salt[32];
-      if (fread(salt, 1, 32, in)!=32) error("missing salt");
-      setup_key(password, salt);
+    else {
+      if (a) {
+        aes=a;
+        eoff=e;
+      }
+      else if (password) {
+        char salt[32];
+        if (fread(salt, 1, 32, in)!=32) error("missing salt");
+        setup_key(password, salt);
+      }
     }
     n=ptr=0;
     return in!=0;
@@ -1198,7 +1235,7 @@ public:
       n=fread(&buf[0], 1, BUFSIZE, in);
       ptr=0;
       if (aes) {
-        int64_t off=tell();
+        int64_t off=tell()+eoff;
         if (off<32) error("attempt to read salt");
         aes->encrypt(&buf[0], n, off);
       }
@@ -1238,22 +1275,30 @@ public:
   bool isopen() {return out!=0;}
 
   // Open for append/update or create if needed.
-  bool open(const char* filename, const char* password=0) {
+  // If aes then encrypt with aes+eoff else password.
+  bool open(const char* filename, const char* password=0,
+            libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(!isopen());
     ptr=0;
     this->filename=filename;
     out=fopen(filename, "rb+");
     if (!out) out=fopen(filename, "wb+");
     if (!out) perror(filename);
-    else if (password) {
-      char salt[32]={0};
-      fseeko(out, 0, SEEK_SET);
-      if (fread(salt, 1, 32, out)!=32) {
-        random(salt, 32);
-        fseeko(out, 0, SEEK_SET);
-        if (fwrite(salt, 1, 32, out)!=32) error("failed to write salt");
+    else {
+      if (a) {
+        aes=a;
+        eoff=e;
       }
-      setup_key(password, salt);
+      else if (password) {
+        char salt[32]={0};
+        fseeko(out, 0, SEEK_SET);
+        if (fread(salt, 1, 32, out)!=32) {
+          random(salt, 32);
+          fseeko(out, 0, SEEK_SET);
+          if (fwrite(salt, 1, 32, out)!=32) error("failed to write salt");
+        }
+        setup_key(password, salt);
+      }
     }
     if (out) fseeko(out, 0, SEEK_END);
     return isopen();
@@ -1265,7 +1310,7 @@ public:
       assert(isopen());
       assert(ptr>0 && ptr<=BUFSIZE);
       if (aes) {
-        int64_t off=ftello(out);
+        int64_t off=ftello(out)+eoff;
         if (off<32) error("attempt to overwrite salt");
         aes->encrypt(&buf[0], ptr, off);
       }
@@ -1283,7 +1328,7 @@ public:
     flush();
     int nr=fread(bufp, 1, size, out);
     if (aes) {
-      int64_t off=tell()-nr;
+      int64_t off=tell()-nr+eoff;
       if (off<32) error("attempt to read salt");
       aes->encrypt(bufp, nr, off);
     }
@@ -1398,20 +1443,28 @@ public:
   InputFile():
     in(INVALID_HANDLE_VALUE), n(0) {}
 
-  // Open for reading. Return true if successful
-  bool open(const char* filename, const char* password=0) {
+  // Open for reading. Return true if successful.
+  // Encrypt with aes+e if aes else with password.
+  bool open(const char* filename, const char* password=0,
+            libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(in==INVALID_HANDLE_VALUE);
     n=ptr=0;
     std::wstring w=utow(filename, true);
     in=CreateFile(w.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (in==INVALID_HANDLE_VALUE) winError(filename);
-    else if (password) {
-      char salt[32];
-      ReadFile(in, salt, 32, &n, NULL);
-      if (n!=32) error("missing salt");
-      n=0;
-      setup_key(password, salt);
+    else  {
+      if (a) {
+        aes=a;
+        eoff=e;
+      }
+      else if (password) {
+        char salt[32];
+        ReadFile(in, salt, 32, &n, NULL);
+        if (n!=32) error("missing salt");
+        n=0;
+        setup_key(password, salt);
+      }
     }
     return in!=INVALID_HANDLE_VALUE;
   }
@@ -1426,7 +1479,7 @@ public:
       ReadFile(in, &buf[0], BUFSIZE, &n, NULL);
       if (n==0) return EOF;
       if (aes) {
-        int64_t off=tell();
+        int64_t off=tell()+eoff;
         if (off<32) error("attempt to read salt");
         aes->encrypt(&buf[0], n, off);
       }
@@ -1477,7 +1530,9 @@ public:
   }
 
   // Open file ready to update or append, create if needed.
-  bool open(const char* filename_, const char* password=0) {
+  // If aes then encrypt with aes+e else password.
+  bool open(const char* filename_, const char* password=0,
+            libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(!isopen());
     ptr=0;
     filename=utow(filename_, true);
@@ -1486,7 +1541,11 @@ public:
     if (out==INVALID_HANDLE_VALUE) winError(filename_);
     else {
       LONG hi=0;
-      if (password) {
+      if (a) {
+        aes=a;
+        eoff=e;
+      }
+      else if (password) {
         SetFilePointer(out, 0, &hi, FILE_BEGIN);
         char salt[32]={0};
         DWORD n=0;
@@ -1513,7 +1572,7 @@ public:
     if (ptr) {
       DWORD n=0;
       if (aes) {
-        int64_t off=tell()-ptr;
+        int64_t off=tell()-ptr+eoff;
         if (off<32) error("attempt to overwrite salt");
         aes->encrypt(&buf[0], ptr, off);
       }
@@ -1544,7 +1603,7 @@ public:
     DWORD result=0;
     ReadFile(out, bufp, DWORD(size), &result, NULL);
     if (aes) {
-      int64_t off=tell()-result;
+      int64_t off=tell()-result+eoff;
       if (off<32) error("attempt to read salt");
       aes->encrypt(bufp, result, tell()-result);
     }
@@ -2072,7 +2131,8 @@ private:
   void test();              // test
   void purge();             // purge
   void encrypt();           // encrypt to new_password
-  void snip();              // snip -to out -since -1
+  void split();             // split -to out -since -1
+  void join_split();        // join files to archive
   void usage();             // help
 
   // Support functions
@@ -2090,57 +2150,56 @@ private:
 // Print help message
 void Jidac::usage() {
   fprintf(con, 
-  "zpaq (C) 2009-2014, Dell Inc. This is free software under GPL v3.\n"
+"zpaq (C) 2009-2014, Dell Inc. This is free software under GPL v3.\n"
 #ifndef NDEBUG
-  "DEBUG version\n"
+"DEBUG version\n"
 #endif
-  "\n"
-  "zpaq journaling (append-only) archiver for incremental backups.\n"
-  "Usage: zpaq command archive files... -options...\n"
-  "Archive is assumed to have a .zpaq extension if not specified.\n"
-  "Files can be directories in which case the whole tree is included.\n"
-  "Commands may be abbreviated to one letter (or x for extract):\n"
-  "add             Compress and append files if last-modified date"
-    " has changed.\n"
-  "                If already in archive then keep both old and new"
-    " versions.\n"
-  "extract         Decompress named files (default: entire contents).\n"
-  "list            List named files (default: entire contents).\n"
-  "compare         Compare with external files (default: entire contents).\n"
-  "delete          Mark as deleted in a new version of archive.\n"
-  "test            Test archive integrity.\n"
-  "purge -to out[.zpaq]\n"
-  "                Permanently remove old versions. out can be self.\n"
-  "encrypt -to out[.zpaq] [\"\"|new password]\n"
-  "                Remove|change AES-256 password. out can be self.\n"
-  "snip [-to out]  Append another copy of the last update to out.\n"
-  "                (default: archive.zpaq.part\?\?\?\?\?, where * or ?\n"
-  "                is replaced by the version number or its digits).\n"
-  "\n"
-  "Options (may be abbreviated if not ambiguous):\n"
-  "-to files...    Rename args or specify external prefix, e.g.\n"
-  "                zpaq x archive file1 dir1 -to file2 dir2"
-    "  (rename output)\n"
-  "                zpaq x archive -to tmp/        (extract all to tmp/all)\n"
-  "-not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj\n"
-  "-until N        Revert archive to the N'th update (default: last).\n"
-  "                All commands will ignore later updates. Add and delete\n"
-  "                will truncate the archive before updating.\n"
-  "-until YYYYMMDD[HH[MM[SS]]]  Revert by date (UT)."
-    " HHMMSS defaults to 235959.\n"
-  "                Default is current date: %14.0f\n"
-  "-since N        Start at version N or -N from end if N < 0.\n"
-  "                Default: 1 for list, extract, compare, -1 for snip.\n"
-  "-noattributes   Ignore/don't save file attributes or permissions.\n"
-  "-key [password] Create or access encrypted archive (default: prompt).\n"
-  "-quiet [N]      Don't show files smaller than N (default none).\n"
-  "-force          a: Add always. x,s: overwrite existing files.\n"
-  "-method 0...6   a: Compress faster...better (default: 1).\n"
-  "-threads N      Use N threads (default: %d detected).\n"
-  "-all            l: List all versions. c: compare dates, attributes too.\n"
-  "-summary [N]    l: List top N (20) files and types and a version table.\n"
-  "-duplicates     l: List by size and label identical files with =\n"
-  "See zpaq.cpp for more options and complete documentation.\n",
+"\n"
+"zpaq is a journaling (append-only) archiver for incremental backups.\n"
+"Usage: zpaq command archive files... -options...\n"
+"Commands may be abbreviated to one letter (or x for extract):\n"
+"Archive is assumed to have a .zpaq extension if not specified.\n"
+"Archive can be \"\" for testing (no files updated).\n"
+"Files can be directories in which case the whole tree is included.\n"
+"\n"
+"add             Compress and append files with new last-modified dates.\n"
+"                If already in archive then keep both old and new versions.\n"
+"extract         Decompress named files (default: entire contents).\n"
+"list            List named files (default: entire contents).\n"
+"compare         Compare with external files (default: entire contents).\n"
+"delete          Mark as deleted in a new version of archive.\n"
+"test            Test archive integrity.\n"
+"purge -to out[.zpaq]                Remove old versions. out can be self.\n"
+"encrypt -to out[.zpaq] [password]   Set AES-256 password. out can be self.\n"
+"                password can be \"\" to decrypt (default: prompt) e.g.\n"
+"                zpaq e backup -key old passwd -to backup new passwd\n"
+"split [-to out] Test size and append copy of last update to out.\n"
+"                (default: archive.zpaq.part\?\?\?\?\?, where * or ?\n"
+"                is replaced by the version number or its digits).\n"
+"join            Test and append split files to archive.\n"
+"\n"
+"Options (may be abbreviated if not ambiguous):\n"
+"-to files...    a,x,c: Rename external files or specify prefix, e.g.\n"
+"                zpaq x backup file1 dir1 -to file2 dir2  (rename output).\n"
+            "    zpaq x backup -to tmp/  (extract all to tmp/all).\n"
+"-not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj\n"
+"-until N        Revert archive to the N'th update (default: last).\n"
+"                All commands will ignore later updates.\n"
+"                Add, delete, join will truncate archive before updating.\n"
+"-until YYYYMMDD[HH[MM[SS]]]  Revert by date (UT). HHMMSS default: 235959.\n"
+"                Default is current date: %14.0f\n"
+"-since N        Start at version N or -N from end if N < 0.\n"
+"                Default: 1 for list, extract, compare, -1 for split.\n"
+"-noattributes   Ignore/don't save file attributes or permissions.\n"
+"-key [password] Create or access encrypted archive (default: prompt).\n"
+"-quiet [N]      Don't show files smaller than N (default none).\n"
+"-force          a: Add always. x,s: overwrite. j: skip test.\n"
+"-method 0...6   a: Compress faster...better (default: 1).\n"
+"-threads N      Use N threads (default: %d detected).\n"
+"-all            l: List all versions. c: compare dates, attributes too.\n"
+"-summary [N]    l: List top N (20) files and types and a version table.\n"
+"-duplicates     l: List by size and label identical files with =\n"
+"See zpaq.cpp for more options and complete documentation.\n",
   double(date), threads);
   exit(1);
 }
@@ -2178,7 +2237,8 @@ string Jidac::unrename(const string& name) {
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
   const char* opts[]={
-    "list","add","extract","delete","test","purge","compare","encrypt","snip",
+    "list","add","extract","delete","test","purge","compare","encrypt",
+    "split","join",
     "method","force","quiet","summary","since","noattributes","key",
     "to","not","version","until","threads","all","fragile","duplicates",
     "fragment",0};
@@ -2193,7 +2253,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<9 && result!="") return result;
+      if (i<10 && result!="") return result;
     }
   }
   if (result=="")
@@ -2224,15 +2284,14 @@ int Jidac::doCommand(int argc, const char** argv) {
   tm* t=gmtime(&now);
   date=(t->tm_year+1900)*10000000000LL+(t->tm_mon+1)*100000000LL
       +t->tm_mday*1000000+t->tm_hour*10000+t->tm_min*100+t->tm_sec;
-  if (now==-1 || date<20120000000000LL || date>30000000000000LL)
-    error("date is incorrect, use -until YYYYMMDDHHMMSS to set");
 
   // Get optional options
   for (int i=1; i<argc; ++i) {
     const string opt=expandOption(argv[i]);
     if ((opt=="-add" || opt=="-extract" || opt=="-list"
         || opt=="-delete" || opt=="-compare" || opt=="-test"
-        || opt=="-purge"  || opt=="-encrypt" || opt=="-snip")
+        || opt=="-purge"  || opt=="-encrypt" || opt=="-split"
+        || opt=="-join")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       archive=argv[++i];
       if (archive!="" &&   // Add .zpaq extension
@@ -2314,6 +2373,10 @@ int Jidac::doCommand(int argc, const char** argv) {
   if (!threads)
     threads=numberOfProcessors();
 
+  // Test date
+  if (now==-1 || date<20120000000000LL || date>30000000000000LL)
+    error("date is incorrect, use -until YYYYMMDDHHMMSS to set");
+
   // Execute command
   if (quiet<MAX_QUIET)
     fprintf(con, "zpaq v" ZPAQ_VERSION " journaling archiver, compiled "
@@ -2325,7 +2388,8 @@ int Jidac::doCommand(int argc, const char** argv) {
   else if (command=="-test") test();
   else if (command=="-purge") purge();
   else if (command=="-encrypt") encrypt();
-  else if (command=="-snip") snip();
+  else if (command=="-split") split();
+  else if (command=="-join") join_split();
   else usage();
   return 0;
 }
@@ -2825,7 +2889,7 @@ void Jidac::scandir(string filename, bool recurse) {
     if (recurse) t+="*";
     else filename=t=t.substr(0, t.size()-1);
   }
-  HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
+  HANDLE h=FindFirstFile(utow(t.c_str(), true).c_str(), &ffd);
   if (h==INVALID_HANDLE_VALUE && (recurse ||
       (GetLastError()!=ERROR_FILE_NOT_FOUND &&
        GetLastError()!=ERROR_PATH_NOT_FOUND)))
@@ -4960,7 +5024,7 @@ void makepath(string& path, int64_t date=0, int64_t attr=0) {
 #ifdef unix
       int ok=!mkdir(path.c_str(), 0777);
 #else
-      int ok=CreateDirectory(utow(path.c_str()).c_str(), 0);
+      int ok=CreateDirectory(utow(path.c_str(), true).c_str(), 0);
 #endif
       if (ok && quiet<=0) {
         fprintf(con, "Created directory ");
@@ -4988,7 +5052,7 @@ void makepath(string& path, int64_t date=0, int64_t attr=0) {
   for (int i=0; i<size(filename); ++i)  // change to backslashes
     if (filename[i]=='/') filename[i]='\\';
   if (date>0) {
-    HANDLE out=CreateFile(utow(filename.c_str()).c_str(),
+    HANDLE out=CreateFile(utow(filename.c_str(), true).c_str(),
                           FILE_WRITE_ATTRIBUTES, 0, NULL, OPEN_EXISTING,
                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
     if (out!=INVALID_HANDLE_VALUE) {
@@ -4998,7 +5062,7 @@ void makepath(string& path, int64_t date=0, int64_t attr=0) {
     else winError(filename.c_str());
   }
   if ((attr&255)=='w') {
-    SetFileAttributes(utow(filename.c_str()).c_str(), attr>>8);
+    SetFileAttributes(utow(filename.c_str(), true).c_str(), attr>>8);
   }
 #endif
 }
@@ -6494,7 +6558,7 @@ void Jidac::encrypt() {
 
   // Encrypt to new file if different
   if (archive!=new_archive) {
-    if (remove(new_archive.c_str())==0)
+    if (delete_file(new_archive.c_str()))
       fprintf(con, "Deleting %s\n", new_archive.c_str());
     OutputFile out;
     if (!out.open(new_archive.c_str(), new_password))
@@ -6591,7 +6655,7 @@ void Jidac::encrypt() {
   out.close();
 }
 
-/////////////////////////////// snip //////////////////////////////////
+/////////////////////////////// split /////////////////////////////////
 
 // In s substitute wildcards * with n and ? with a digit of n
 string subn(const string& s, int n) {
@@ -6609,7 +6673,8 @@ string subn(const string& s, int n) {
 // wildcards * with version number or ? with single digits.
 // -force overwrites, else appends.
 
-void Jidac::snip() {
+void Jidac::split() {
+  if (size(files)>0 && size(tofiles)==0) tofiles.push_back(files[0]);
   if (size(tofiles)<1) tofiles.push_back(archive+".part?????");
   const int64_t csize=read_archive();
   if (since==0) since=-1;
@@ -6621,7 +6686,7 @@ void Jidac::snip() {
   if (force) {
     for (int i=since; i<size(ver); ++i) {
       string fn=subn(tofiles[0], i);
-      remove(fn.c_str());
+      delete_file(fn.c_str());
     }
   }
 
@@ -6631,10 +6696,15 @@ void Jidac::snip() {
   for (int i=since; i<size(ver); ++i) {
     int64_t versize=(i>=size(ver)-1 ? csize : ver[i+1].offset)-ver[i].offset;
     string fn=subn(tofiles[0], i);
+    makepath(fn);
     OutputFile out;
     if (!out.open(fn.c_str())) continue;
     int c;
-    int64_t j;
+    int64_t j, outpos=out.tell();
+    if (!force && outpos!=0 && outpos!=ver[i].offset) {
+      out.close();
+      error("output size is wrong");
+    }
     in.seek(ver[i].offset, SEEK_SET);
     for (j=ver[i].offset; j<ver[i].offset+versize && (c=in.get())!=EOF; ++j)
       out.put(c);
@@ -6642,11 +6712,159 @@ void Jidac::snip() {
       printUTF8(archive.c_str(), con);
       fprintf(con, " [%1.0f..%1.0f] ver %d -> ", ver[i].offset+0.0, j-1.0, i);
       printUTF8(fn.c_str(), con);
-      fprintf(con, "\n");
+      fprintf(con, " [%1.0f..%1.0f]\n",
+        outpos+0.0, outpos+j-ver[i].offset-1.0);
     }
     out.close();
   }
   in.close();
+}
+
+/////////////////////////////// join //////////////////////////////////
+
+void Jidac::join_split() {
+
+  // Read archive and names of files to join
+  const int64_t csize=(archive=="") ? 0 : read_archive();
+  read_args(true);
+
+  // Test that version dates are in order and that fragment IDs are contiguous
+  if (!force) {
+
+    // Get date, frag from archive
+    unsigned hpos=ht.size();  // next fragment ID expected
+    int64_t dpos=0;
+    if (ver.size()>0) dpos=ver.back().date;  // latest version date
+    if (quiet<MAX_QUIET)
+      fprintf(con,
+          "   File size   Previous end date   Fragment   File name\n"
+          "-------------- ------------------- ---------- ---------\n");
+    if (csize>=quiet) {
+      fprintf(con, "%14.0f %s %10d ",
+          csize+0.0, "                   ", 1);
+      printUTF8(archive.c_str(), con);
+      fprintf(con, "\n");
+    }
+
+    // Get salt from encrypted archive and set up key
+    libzpaq::AES_CTR* aes=0;
+    int64_t eoff=0;
+    if (password && csize>=32) {
+      InputFile in;
+      if (in.open(archive.c_str())) {
+        char salt[32];
+        if (in.read(salt, 32)==32) {
+          char key[32];
+          libzpaq::stretchKey(key, password, salt);
+          aes=new libzpaq::AES_CTR(key, 32, salt);
+          eoff=csize;
+        }
+        in.close();
+      }
+    }
+
+    // Scan files
+    for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+      if (p->second.written!=0 || p->second.edate==0
+          || p->first=="" || p->first[p->first.size()-1]=='/')
+        continue;  // skip directories
+      if (p->second.esize>=quiet) {
+        fprintf(con, "%14.0f %s %10d ",
+            p->second.esize+0.0, dateToString(dpos).c_str(), hpos);
+          printUTF8(p->first.c_str(), con);
+        fprintf(con, "\n");
+      }
+
+      // Get encryption salt from first file
+      InputFile in;
+      if (password && eoff<32 && !aes && in.open(p->first.c_str())) {
+        char salt[32], key[32];
+        in.read(salt, 32);
+        libzpaq::stretchKey(key, password, salt);
+        aes=new libzpaq::AES_CTR(key, 32, salt);
+        in.close();
+      }
+
+      // Input files must be in ZPAQ journaling format.
+      // Scan segment headers. Names must be of the form
+      // "jDCYYYYMMDDHHMMSSxNNNNNNNNNN" in ascending order.
+      // If x is h, then N must equal hpos and YYYYMMDDHHMMSS > dpos.
+      // Then update dpos=YYYYMMSSHHMMSS and add hsize to hpos.
+      // where hsize is from the uncompressed comment size (comment-4)/24
+
+      if (!in.open(p->first.c_str(), 0, aes, eoff))
+        error("cannot read file");
+      if (aes && eoff<32) in.seek(32, SEEK_SET);
+      ++dpos;
+      libzpaq::Decompresser d;
+      d.setInput(&in);
+      bool found=false;
+      while (d.findBlock()) {
+        StringWriter filename, comment;
+        while (d.findFilename(&filename)) {
+          found=true;
+          d.readComment(&comment);
+
+          // Test for journaling format
+          if (size(filename.s)!=28
+              || filename.s.substr(0, 3)!="jDC"
+              || size(comment.s)<5
+              || comment.s.substr(comment.s.size()-5)!=" jDC\x01")
+            error("not in ZPAQ journaling format");
+
+          // Test for dates in order
+          int64_t hdate=0;  // read date from filename
+          for (int i=3; i<17; ++i) {
+            if (!isdigit(filename.s[i])) error("non-digit in date");
+            hdate=hdate*10+filename.s[i]-'0';
+          }
+          if (hdate<dpos) error("dates out of order");
+          dpos=hdate;
+
+          // Test for contiguous fragments
+          if (filename.s[17]=='h') {
+            unsigned hfrag=0;
+            for (int i=18; i<28; ++i) {
+              if (!isdigit(filename.s[i])) error("non-digit in frag ID");
+              hfrag=hfrag*10+filename.s[i]-'0';
+            }
+            if (hfrag!=hpos) error("fragments out of order");
+            hpos+=(atoi(comment.s.c_str())-4)/24;
+          }
+
+          filename.s="";
+          comment.s="";
+          d.readSegmentEnd();
+        }
+      }
+      if (aes) eoff+=in.tell();
+      in.close();
+      if (!found) error("Not a ZPAQ file");
+    }
+    if (aes) delete aes;
+  }
+
+  // Concatenate
+  if (archive=="") return;
+  OutputFile out;
+  if (!out.open(archive.c_str())) error("cannot append archive");
+  out.truncate(csize);
+  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+    if (p->second.written!=0 || p->second.edate==0
+        || p->first=="" || p->first[p->first.size()-1]=='/')
+      continue;  // skip directories
+    InputFile in;
+    if (!in.open(p->first.c_str())) error("cannot read file");
+    int c;
+    while ((c=in.get())!=EOF) out.put(c);
+    in.close();
+  }
+  int64_t newsize=out.tell();
+  out.close();
+  if (newsize>=quiet) {
+    printUTF8(archive.c_str(), con);
+    fprintf(con, " %1.0f -> %1.0f\n", csize+0.0, newsize+0.0);
+  }
 }
 
 /////////////////////////////// main //////////////////////////////////
