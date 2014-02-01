@@ -1,2 +1,4 @@
 zpaq: zpaq.cpp libzpaq.cpp libzpaq.h divsufsort.c divsufsort.h
-	g++ -O3 -s -Dunix -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -fopenmp -o zpaq
+	gcc -O3 -c -DNDEBUG divsufsort.c
+	g++ -O3 -Dunix zpaq.cpp libzpaq.cpp divsufsort.o -pthread -o zpaq
+	rm divsufsort.o

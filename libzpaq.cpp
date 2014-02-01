@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.48 implementation - Jan. 23, 2014.
+/* libzpaq.cpp - LIBZPAQ Version 6.49 implementation - Jan. 27, 2014.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -1029,7 +1029,7 @@ int ZPAQL::execute() {
     case 59: a = (a+m(b)+512)*773; break; // HASH
     case 60: h(d) = (h(d)+a+512)*773; break; // HASHD
     case 63: pc+=((header[pc]+128)&255)-127; break; // JMP N
-    case 64: a = a; break; // A=A
+    case 64: break; // A=A
     case 65: a = b; break; // A=B
     case 66: a = c; break; // A=C
     case 67: a = d; break; // A=D
@@ -1038,7 +1038,7 @@ int ZPAQL::execute() {
     case 70: a = h(d); break; // A=*D
     case 71: a = header[pc++]; break; // A= N
     case 72: b = a; break; // B=A
-    case 73: b = b; break; // B=B
+    case 73: break; // B=B
     case 74: b = c; break; // B=C
     case 75: b = d; break; // B=D
     case 76: b = m(b); break; // B=*B
@@ -1047,7 +1047,7 @@ int ZPAQL::execute() {
     case 79: b = header[pc++]; break; // B= N
     case 80: c = a; break; // C=A
     case 81: c = b; break; // C=B
-    case 82: c = c; break; // C=C
+    case 82: break; // C=C
     case 83: c = d; break; // C=D
     case 84: c = m(b); break; // C=*B
     case 85: c = m(c); break; // C=*C
@@ -1056,7 +1056,7 @@ int ZPAQL::execute() {
     case 88: d = a; break; // D=A
     case 89: d = b; break; // D=B
     case 90: d = c; break; // D=C
-    case 91: d = d; break; // D=D
+    case 91: break; // D=D
     case 92: d = m(b); break; // D=*B
     case 93: d = m(c); break; // D=*C
     case 94: d = h(d); break; // D=*D
