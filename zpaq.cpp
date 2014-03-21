@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.49"
+#define ZPAQ_VERSION "6.50"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -30,6 +30,7 @@ Commands may be abbreviated to one letter (or x for extract):
 Archive is assumed to have a .zpaq extension if not specified.
 Files can be directories in which case the whole tree is included.
 Wildcards * and ? in file names match any string or character.
+Wildcards in archive match numbers or digits in multi-part archive.
 
 a  add          Compress and add files to archive (or to "" to test).
 x  extract      Decompress named files (default: entire contents).
@@ -37,9 +38,7 @@ l  list         List named files (default: entire contents).
 c  compare      Compare with external files (default: entire contents).
 d  delete       Mark as deleted in a new version of archive.
 t  test         Test decompression without writing any files.
-p  purge -to out[.zpaq]    Remove old versions. out can be self.
-e  encrypt -to out[.zpaq] [password]    Set password. out can be self.
-                password can be "" to decrypt (default: prompt).
+p  purge -to out[.zpaq]  Create new archive with old versions removed.
 
 Options (may be abbreviated if not ambiguous):
 -to files...    a,x,c: Rename external files or specify prefix, e.g.
@@ -47,20 +46,36 @@ Options (may be abbreviated if not ambiguous):
                 zpaq x backup -to tmp/  (extract all to tmp/all).
 -not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj
 -until N        Revert archive to the N'th update (default: last).
--until 2014-01-30 03:04:13
-                Set date (UT) and revert archive. (default time: 235959).
+-until YYYY-MM-DD HH:MM:SS
+                Set date (UT) and revert archive. (default time: 23:59:59).
 -since N        Start at version N or -N from end if N<0 (default: 1).
 -noattributes   Ignore/don't save file attributes or permissions.
+-nodelete       a: do not mark unmatched files as deleted.
 -key [password] Create or access encrypted archive (default: prompt).
 -quiet [N[k|m|g]]  Don't show files smaller than N (default none).
--force          a: Add even if dates unchanged. x: overwrite output files.
--method 0...6   a: Compress faster...better (default: 1).
+-force          a: Add even if dates unchanged. x,p: overwrite output files.
+-method 0...5   a: Compress faster...better (default: 1).
 -threads N      Use N threads (default: 2 detected).
--all            l,t: All versions. c: compare dates, attributes too.
+-all            l,t: All versions. c: compare metadata too. p: keep all.
 -summary [N]    l: List top N (20) files and types and a version table.
 -duplicates     l: List by size and label identical files with =
 
 The archive format is described in http://mattmahoney.net/dc/zpaq203.pdf
+
+Archive names are assumed to end with .zpaq if not specified.
+If the archive name contains wildcards then * matches the part numbers
+starting with "1" of a multi-part archive and ? matches single digits.
+The archive is taken as a concatenation in numerical order up to the
+first non-existing file. Output is to this new file rather than appended.
+For example:
+
+  zpaq a "backup???" files
+
+would treat the concatenation of backup001.zpaq and backup002.zpaq
+as a single archive if these two files existed, then add to
+the new file backup003.zpaq. This is useful for remote backups because
+only the new file needs to be moved. Archives may be cut anywhere with
+tools like head and tail as long as the numerical order is retained.
 
 Commands:
 
@@ -172,137 +187,28 @@ data including old versions, deleted files, and files not selected,
 and verify both the fragment checksums and block checksums. Exit
 with error status 1 if any errors are found, else 0.
 
-  p or -purge archive -to new_archive
+  p or -purge
 
-Permantely remove old versions and deleted files from the archive.
-If new_archive is different from archive, then create new_archive.zpaq and
-leave the archive unchanged. Otherwise, overwrite the archive in-place
-with a new, smaller one. The latter can avoid running out of disk space
-if the new archive would be larger than available disk space, but
-if the purge is interrupted then the archive is lost.
+Create a new archive containing only the files and directories in
+the current version. It may be smaller than the input archive because
+data blocks containing only deleted files and old versions are
+permanently removed. The -to option is required to specify the output.
+A .zpaq extension is assumed. The input but not the output can be a
+multi-part archive (containing the characters * or ?). Streaming
+archives cannot be purged. For example:
 
-It is not possible to restore files once they are purged.
-Archives containing streaming data (created with -method s...) cannot
-be purged. Archives created with -fragile can only be purged to a
-separate archive, not in-place.
+  zpaq p archive -to out
 
-Purging an archive removes all updates and replaces it with a single
-update with the current date. It removes data blocks if none of the
-fragments are referenced by any files in the current version, but it
-retains the entire block if any fragments are referenced. Thus, the
-purged archive might still be larger than if a new archive was created.
-It creates a new index with no references to older or deleted
-versions of files.
+will create out.zpaq containing files from the current version
+of archive.zpaq. It is an error if out.zpaq exists unless the
+-force option is used to overwrite it. Regardless of whether the
+input is encrypted, the output is not encrypted unless a password
+is specified with -newkey. The input and output passwords may be
+different.
 
-If the -to argument is an empty string (zpaq p archive -to "") then
-the program will test for errors and report the size of the new archive
-without writing to disk.
-
-  e or -encrypt archive [-key old_password] -to new_archive [""|new_password]
-
-Encrypt an archive with new_password. If the archive is already encrypted
-then the old password must be given with -key. If the new password is ""
-then the archive is decrypted. If the new password is omitted then zpaq
-will prompt for it twice without echoing to the screen. To decrypt,
-press Enter twice.
-
-The -to option is required to specify a new archive. A .zpaq extension
-is added if needed. If the output file exists then it it overwritten
-(non-securely). If the new archive is the same, then the archive is
-overwritten in-place. This may or may not securely delete the old contents.
-It will probably not on an SSD that uses write-leveling software internally.
-
-An archive of length n bytes is encrypted with AES-256 in CTR mode as follows:
-
-  salt[0..31] (archive[i=32..n-1] xor AES256(key, salt[0..7] (i/16)[7..0]))
-
-where
-
-  key = Scrypt(SHA256(password), salt, N=16384, r=8, p=1)
-
-The 32 byte salt prefixed to the encrypted output is generated in Windows
-using CryptGenRandom() or in Linux by reading /dev/urandom. Then the
-input is XORed with a keystream generated by encrypting IV+2, IV+3,
-IV+4... in 16 byte blocks with AES-256, where the 128 bit IV is the
-first 8 bytes of the salt followed by 8 zero bytes, and numbers are
-interpreted in big-endian format (most significant byte first).
-
-Scrypt with the parameters shown takes about 0.1 seconds (2^26
-32-bit operations each of: add, xor, rotate) to generate the
-AES key and uses 16 MB memory. It is intended to slow down brute
-force key searches. Nevertheless, short or easy to guess passwords
-should be avoided. A password that is strong enough for a website login
-is not strong enough for an archive because it is not possible to lock
-out attackers after too many incorrect guesses. A password should have
-about 64 bits of entropy (requiring 2^64 calls to Scrypt to guess), which
-could be achieved using 13 random letters and digits or 4 random words.
-
-There is no authentication or protection from tampering. If an attacker
-knows or can guess any bits of the plaintext, then he can set those
-bits without knowing the password. You can test for tampering using the
-sha1 or sha256 command to see if the hash has changed. However, this
-does not protect against attacks where the attacker can change the file
-after testing, such as when the attacker can inject packets on a
-network between the user and an encrypted archive on an NFS server.
-
-zpaq will check that the first password is correct by assumiing that
-the first 4 bytes of the archive are "7kSt", "zPQ\x01", "zPQ\x02", or
-"zPQ\x03". If not, an error will occur and the archive will remain
-unchanged. There is a probability of about 10^-9 that one of these values
-will be detected when the first password is incorrect and the archive
-will be overwritten with random bytes.
-
-Advanced commands (not shown in help screen):
-
-  s or -split archive[.zpaq] [[-to] out] [-since M] [-until N] [-force]
-
-Copies versions M..N of archive.zpaq to out, or N+M+1..N if M < 0.
-Each add or delete command appends a version to the archive, starting
-with 1. The defaults are M = -1, N = number of versions in archive.zpaq,
-which results in just the most recent version being copied to out.
-If out contains wildcards, then * is replaced with the version
-number (resulting in one file per version) and ? is
-replaced with a single digit of the version number. The default
-is archive.zpaq.part????? which produces files archive.zpaq.part00001,
-archive.zpaq.part00002, etc. When these files are concatenated together
-it will reproduce the original archive.  If any output files already
-exist and are exactly the same size as the current offset then they
-are appended. The -force option overwrites them instead.
-
-Split is used to synchronize a local and remote backup without uploading
-the entire backup after each update:
-
-  zpaq a backup files
-  zpaq s backup -to diff -force
-  rcp diff host:diff
-  rsh host 'cat diff >> backup.zpaq
-
-Or to maintain two copies of an archive:
-
-  zpaq a backup1 files
-  zpaq s backup1 -to backup2.zpaq  (fails if initial sizes differ)
-
-
-  j or -join archive files... -force
-
-Concatenate files to archive. Unless -force is given, test that the
-files are valid journaling version sequences produced by split and
-that the result will be a valid journaling archive with no duplicates,
-gaps, or out of order versions, or else else exit with an error.
-If archive is "" then do this test without writing to disk.
-Files are appended in lexicographical order regardless of their
-order on the command line. For example:
-
-  zpaq s archive -to "parts\?????.zpaq" -since 1 -force
-  zpaq j new_archive "parts\*.zpaq"
-
-This will split an archive into parts/00001.zpaq, parts/00002.zpaq
-etc. (one file per version) and then reassemble them to new_archive.zpaq
-equivalent to:
-
-  cat parts\*.zpaq >> new_archive.zpaq
-
-except that it succeeds only if the result will be a valid zpaq archive.
+If -all is specified, then all versions are kept unchanged. The archive
+is simply copied unless -key or -newkey is specified to change the
+password, or the input is a multi-part archive to be concatenated.
 
 
 Options:
@@ -357,19 +263,6 @@ Wildcard arguments are not renamed:
   zpaq x archive foo/b*           Creates foo/bar
   zpaq x archive foo/b* -to tmp/  Creates foo/bar
 
-With the purge command, -to names the output file:
-
-  zpaq p archive -to out          Create out.zpaq
-  zpaq p archive -to archive      Modify archive.zpaq
-
-With the encrypt command, -to names both the output and new password.
-If the password is "" then the output is decrypted.
-
-  zpaq e archive -to out foo      Encrypt out.zpaq with password foo
-  zpaq e archive -to archive foo  Encrypt archive.zpaq with password foo
-  zpaq e archive -to out          Prompt for new password
-  zpaq e archive -key foo -to out ""    Decrypt to out.zpaq
-
 
   -until N
   -until YYYYMMDD[HH[MM[SS]]]
@@ -409,9 +302,9 @@ The default is to detect the number of processor cores and use that value
 or the limit according to -method, whichever is less. The number of cores
 is detected from the environment variable %NUMBER_OF_PROCESSORS% in
 Windows or /proc/cpuinfo in Linux. If zpaq is compiled for 32 bit
-processors then the default is at most 4.
+processors then the default is at most 3.
 
-  -method 0..6
+  -method 0..5
 
 Compress faster..better. The default is -method 1. (See below for advanced
 compression options).
@@ -422,18 +315,67 @@ Ignore Windows file attributes (archive, read-only, system, hidden, index)
 and Linux permissions. The add commmand will not save them in the archive.
 The extract and restore commands will ignore any saved attributes and create
 files with default attributes and permissions. The list command will not
-show them. The compare and restore commands will treat files as identical
-if only the attributes differ. The purge command will remove any saved
-attributes.
+show them. The compare command will treat files as identical
+if only the attributes differ.
+
+  -nodelete
+
+When adding files, do not mark files as deleted if the external file
+does not exist.
 
   -key [password]
 
 Create an encrypted archive. Once created, all operations must supply
-the same password or else zpaq will exit with an error "archive contains
-no data". The encryption format is the same as given by the encrypt
-command. Passwords with spaces or special characters should be enclosed
+the same password or else zpaq will exit with an error.
+Passwords with spaces or special characters should be enclosed
 in "quotes". If the password is omitted, then zpaq will prompt for it
 without echoing to the screen (twice if the archive is new).
+
+An archive of length n bytes is encrypted with AES-256 in CTR mode as follows:
+
+  salt[0..31] (archive[i=32..n-1] xor AES256(key, salt[0..7] (i/16)[7..0]))
+
+where
+
+  key = Scrypt(SHA256(password), salt, N=16384, r=8, p=1)
+
+The 32 byte salt prefixed to the encrypted output is generated in Windows
+using CryptGenRandom() or in Linux by reading /dev/urandom. Then the
+input is XORed with a keystream generated by encrypting IV+2, IV+3,
+IV+4... in 16 byte blocks with AES-256, where the 128 bit IV is the
+first 8 bytes of the salt followed by 8 zero bytes, and numbers are
+interpreted in big-endian format (most significant byte first).
+
+Scrypt with the parameters shown takes about 0.1 seconds (2^26
+32-bit operations each of: add, xor, rotate) to generate the
+AES key and uses 16 MB memory. It is intended to slow down brute
+force key searches. Nevertheless, short or easy to guess passwords
+should be avoided. A password that is strong enough for a website login
+is not strong enough for an archive because it is not possible to lock
+out attackers after too many incorrect guesses. A password should have
+about 64 bits of entropy (requiring 2^64 calls to Scrypt to guess), which
+could be achieved using 13 random letters and digits or 4 random words.
+
+There is no authentication or protection from tampering. If an attacker
+knows or can guess any bits of the plaintext, then he can set those
+bits without knowing the password. You can test for tampering using the
+sha1 or sha256 command to see if the hash has changed. However, this
+does not protect against attacks where the attacker can change the file
+after testing, such as when the attacker can inject packets on a
+network between the user and an encrypted archive on an NFS server.
+
+zpaq will check that the first password is correct by assumiing that
+the first 4 bytes of the archive are "7kSt", "zPQ\x01", "zPQ\x02", or
+"zPQ\x03". If not, an error will occur and the archive will remain
+unchanged. There is a probability of about 10^-9 that one of these values
+will be detected when the first password is incorrect and the archive
+will be overwritten with random bytes.
+
+  -newkey [password]
+
+Specify the encryption key for the output of purge. If password is
+omitted, then prompt twice. The default is to output without encryption,
+even if the input is encrypted.
 
   -quiet [N[k|m|g]]
 
@@ -455,7 +397,6 @@ table of version dates.
 
 List, compare, or extract only versions N and later. If N is negative
 then list, compare, or extract only the last -N updates. Default is 0 (all).
-For snip, the default is -1 (last version only).
 
   -all
 
@@ -465,6 +406,7 @@ Also list a table of versions like -summary.
 When comparing files, compare dates and attributes in addition to contents.
 With test, test all fragments, not just the latest versions of the
 selected files, and test block checksums in addition to fragment checksums.
+With purge, keep all of the original archive contents.
 
   -duplicates
 
@@ -495,14 +437,14 @@ created will not deduplicate against existing files. Small values
 may improve deduplication up to a point but require more memory and
 disk space for the larger fragment list.
 
-  -method {0..6|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
+  -method {0..9|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
 
 With a single digit, select compression speed, where low values are
 faster and higher values compress smaller. The default is 1.
 N1, if present, selects a maximum block size of 2^(N1+20) - 4096 bytes.
 The default for methods 0, 1, x, s is 4 (16 MB, e.g. -method 14).
-The default for method 2 is 5 (32 MB e.g. -method 25).
-The default for methods 3..6 is 6 (64 MB, e.g. -method 36).
+The default for methods 2..5 is 6 (64 MB, e.g. -method 26).
+6..9 are the same as 5.
 
 When the first character is x, select experimental compression methods.
 These are for advanced uses only. The method is described
@@ -577,8 +519,17 @@ choosing the closer one.
 N6 = use a hash table of 2^N6 elements to store the location of context
 hashes. It requires 4 x 2^N6 bytes of memory for compression only.
 
+If N6 - N1 >= 21 then use a suffix array instead of a hash table to search
+for matches. It adds 4.5 x 2^N1 MB memory for compression only
+(4 for the suffix array and 0.5 for the partial inverse suffix array
+rebuilt 8 times). Matches are found by scanning the suffix array
+forward and backward up to 2^N5 positions each way to find the longest
+match of at least N3. N4 has no effect.
+
 N7 = lookahead for secondary context. LZ77 will compare the next N5+N7
 bytes, allowing the first N7 not to match and code them as literals.
+If N6 selects a suffix array (N6-N1>=21, N5 not used), then lookahead
+is applied to N4. (Usually does not improve compression).
 
 For example, -method x4,5,4,0,3,24 specifies a 2^4 =  16 MB block size,
 E8E9 + LZ77 (4+1) with variable length codes, minimum match length 4, no
@@ -990,6 +941,13 @@ private:
 #endif
 #endif
 
+// Global variables
+FILE* con=stdout;    // log output, can be stderr
+bool fragile=false;  // -fragile option
+int64_t quiet=-1;    // -quiet option
+static const int64_t MAX_QUIET=0x7FFFFFFFFFFFFFFFLL;  // no output but errors
+int64_t global_start=0;  // set to mtime() at start of main()
+
 // signed size of a string or vector
 template <typename T> int size(const T& x) {
   return x.size();
@@ -1053,7 +1011,6 @@ void printUTF8(const char* s, FILE* f) {
 }
 
 // Return relative time in milliseconds
-int64_t global_start=0;  // set at start of main()
 int64_t mtime() {
 #ifdef unix
   timeval tv;
@@ -1177,8 +1134,30 @@ void random(char* buf, int n) {
 
 /////////////////////////////// File //////////////////////////////////
 
-// Return true if a file or directory (UTF-8 without trailing /) exists
-bool exists(string filename) {
+// Convert non-negative decimal number x to string of at least n digits
+string itos(int64_t x, int n=1) {
+  assert(x>=0);
+  assert(n>=0);
+  string r;
+  for (; x || n>0; x/=10, --n) r=char('0'+x%10)+r;
+  return r;
+}
+
+// Replace * and ? in fn with part or digits of part
+string subpart(string fn, int part) {
+  for (int j=fn.size()-1; j>=0; --j) {
+    if (fn[j]=='?')
+      fn[j]='0'+part%10, part/=10;
+    else if (fn[j]=='*')
+      fn=fn.substr(0, j)+itos(part)+fn.substr(j+1), part=0;
+  }
+  return fn;
+}
+
+// Return true if a file or directory (UTF-8 without trailing /) exists.
+// If part>0 then replace * and ? in filename with part or its digits.
+bool exists(string filename, int part=0) {
+  if (part>0) filename=subpart(filename, part);
   int len=filename.size();
   if (len<1) return false;
   if (filename[len-1]=='/') filename=filename.substr(0, len-1);
@@ -1200,6 +1179,101 @@ bool delete_file(const char* filename) {
 #endif
 }
 
+#ifndef unix
+
+// Print error message
+void winError(const char* filename) {
+  int err=GetLastError();
+  printUTF8(filename, stderr);
+  if (err==ERROR_FILE_NOT_FOUND)
+    fprintf(stderr, ": file not found\n");
+  else if (err==ERROR_PATH_NOT_FOUND)
+    fprintf(stderr, ": path not found\n");
+  else if (err==ERROR_ACCESS_DENIED)
+    fprintf(stderr, ": access denied\n");
+  else if (err==ERROR_SHARING_VIOLATION)
+    fprintf(stderr, ": sharing violation\n");
+  else if (err==ERROR_BAD_PATHNAME)
+    fprintf(stderr, ": bad pathname\n");
+  else if (err==ERROR_INVALID_NAME)
+    fprintf(stderr, ": invalid name\n");
+  else
+    fprintf(stderr, ": Windows error %d\n", err);
+}
+
+// Set the last-modified date of an open file handle
+void setDate(HANDLE out, int64_t date) {
+  if (date>0) {
+    SYSTEMTIME st;
+    FILETIME ft;
+    st.wYear=date/10000000000LL%10000;
+    st.wMonth=date/100000000%100;
+    st.wDayOfWeek=0;  // ignored
+    st.wDay=date/1000000%100;
+    st.wHour=date/10000%100;
+    st.wMinute=date/100%100;
+    st.wSecond=date%100;
+    st.wMilliseconds=0;
+    SystemTimeToFileTime(&st, &ft);
+    if (!SetFileTime(out, NULL, NULL, &ft))
+      fprintf(stderr, "SetFileTime error %d\n", int(GetLastError()));
+  }
+}
+#endif
+
+// Create directories as needed. For example if path="/tmp/foo/bar"
+// then create directories /, /tmp, and /tmp/foo unless they exist.
+// Set date and attributes if not 0.
+void makepath(string path, int64_t date=0, int64_t attr=0) {
+  for (int i=0; i<size(path); ++i) {
+    if (path[i]=='\\' || path[i]=='/') {
+      path[i]=0;
+#ifdef unix
+      int ok=!mkdir(path.c_str(), 0777);
+#else
+      int ok=CreateDirectory(utow(path.c_str(), true).c_str(), 0);
+#endif
+      if (ok && quiet<=0) {
+        fprintf(con, "Created directory ");
+        printUTF8(path.c_str(), con);
+        fprintf(con, "\n");
+      }
+      path[i]='/';
+    }
+  }
+
+  // Set date and attributes
+  string filename=path;
+  if (filename!="" && filename[filename.size()-1]=='/')
+    filename=filename.substr(0, filename.size()-1);  // remove trailing slash
+#ifdef unix
+  if (date>0) {
+    struct utimbuf ub;
+    ub.actime=time(NULL);
+    ub.modtime=unix_time(date);
+    utime(filename.c_str(), &ub);
+  }
+  if ((attr&255)=='u')
+    chmod(filename.c_str(), attr>>8);
+#else
+  for (int i=0; i<size(filename); ++i)  // change to backslashes
+    if (filename[i]=='/') filename[i]='\\';
+  if (date>0) {
+    HANDLE out=CreateFile(utow(filename.c_str(), true).c_str(),
+                          FILE_WRITE_ATTRIBUTES, 0, NULL, OPEN_EXISTING,
+                          FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (out!=INVALID_HANDLE_VALUE) {
+      setDate(out, date);
+      CloseHandle(out);
+    }
+    else winError(filename.c_str());
+  }
+  if ((attr&255)=='w') {
+    SetFileAttributes(utow(filename.c_str(), true).c_str(), attr>>8);
+  }
+#endif
+}
+
 // Base class of InputFile and OutputFile (OS independent)
 class File {
 protected:
@@ -1208,20 +1282,8 @@ protected:
   libzpaq::Array<char> buf;  // I/O buffer
   libzpaq::AES_CTR *aes;  // if not NULL then encrypt
   int64_t eoff;  // extra offset for multi-file encryption
-  int ref;  // 1 if aes is allocated locally
-  void setup_key(const char* filename, const char* password);
-  File(): ptr(0), buf(BUFSIZE), aes(0), eoff(0), ref(0) {}
-  ~File() {if (aes && ref) delete aes;}
+  File(): ptr(0), buf(BUFSIZE), aes(0), eoff(0) {}
 };
-
-// If password then set aes and initialize encryption
-void File::setup_key(const char* password, const char* salt) {
-  if (!password) return;
-  char key[32];
-  libzpaq::stretchKey(key, password, salt);
-  aes=new libzpaq::AES_CTR(key, 32, salt);
-  ref=1;
-}
 
 // File types accepting UTF-8 filenames
 #ifdef unix
@@ -1233,22 +1295,12 @@ public:
   InputFile(): in(0), n(0) {}
 
   // Open file for reading. Return true if successful.
-  // If aes then encrypt with aes+eoff else with password.
-  bool open(const char* filename, const char* password=0,
-            libzpaq::AES_CTR* a=0, int64_t e=0) {
+  // If aes then encrypt with aes+eoff.
+  bool open(const char* filename, libzpaq::AES_CTR* a=0, int64_t e=0) {
     in=fopen(filename, "rb");
     if (!in) perror(filename);
-    else {
-      if (a) {
-        aes=a;
-        eoff=e;
-      }
-      else if (password) {
-        char salt[32];
-        if (fread(salt, 1, 32, in)!=32) error("missing salt");
-        setup_key(password, salt);
-      }
-    }
+    aes=a;
+    eoff=e;
     n=ptr=0;
     return in!=0;
   }
@@ -1304,31 +1356,16 @@ public:
   bool isopen() {return out!=0;}
 
   // Open for append/update or create if needed.
-  // If aes then encrypt with aes+eoff else password.
-  bool open(const char* filename, const char* password=0,
-            libzpaq::AES_CTR* a=0, int64_t e=0) {
+  // If aes then encrypt with aes+eoff.
+  bool open(const char* filename, libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(!isopen());
     ptr=0;
     this->filename=filename;
     out=fopen(filename, "rb+");
     if (!out) out=fopen(filename, "wb+");
     if (!out) perror(filename);
-    else {
-      if (a) {
-        aes=a;
-        eoff=e;
-      }
-      else if (password) {
-        char salt[32]={0};
-        fseeko(out, 0, SEEK_SET);
-        if (fread(salt, 1, 32, out)!=32) {
-          random(salt, 32);
-          fseeko(out, 0, SEEK_SET);
-          if (fwrite(salt, 1, 32, out)!=32) error("failed to write salt");
-        }
-        setup_key(password, salt);
-      }
-    }
+    aes=a;
+    eoff=e;
     if (out) fseeko(out, 0, SEEK_END);
     return isopen();
   }
@@ -1428,43 +1465,6 @@ public:
 
 #else  // Windows
 
-// Print error message
-void winError(const char* filename) {
-  int err=GetLastError();
-  printUTF8(filename, stderr);
-  if (err==ERROR_FILE_NOT_FOUND)
-    fprintf(stderr, ": file not found\n");
-  else if (err==ERROR_PATH_NOT_FOUND)
-    fprintf(stderr, ": path not found\n");
-  else if (err==ERROR_ACCESS_DENIED)
-    fprintf(stderr, ": access denied\n");
-  else if (err==ERROR_SHARING_VIOLATION)
-    fprintf(stderr, ": sharing violation\n");
-  else if (err==ERROR_BAD_PATHNAME)
-    fprintf(stderr, ": bad pathname\n");
-  else
-    fprintf(stderr, ": Windows error %d\n", err);
-}
-
-// Set the last-modified date of an open file handle
-void setDate(HANDLE out, int64_t date) {
-  if (date>0) {
-    SYSTEMTIME st;
-    FILETIME ft;
-    st.wYear=date/10000000000LL%10000;
-    st.wMonth=date/100000000%100;
-    st.wDayOfWeek=0;  // ignored
-    st.wDay=date/1000000%100;
-    st.wHour=date/10000%100;
-    st.wMinute=date/100%100;
-    st.wSecond=date%100;
-    st.wMilliseconds=0;
-    SystemTimeToFileTime(&st, &ft);
-    if (!SetFileTime(out, NULL, NULL, &ft))
-      fprintf(stderr, "SetFileTime error %d\n", int(GetLastError()));
-  }
-}
-
 class InputFile: public File, public libzpaq::Reader {
   HANDLE in;  // input file handle
   DWORD n;    // buffer size
@@ -1473,28 +1473,16 @@ public:
     in(INVALID_HANDLE_VALUE), n(0) {}
 
   // Open for reading. Return true if successful.
-  // Encrypt with aes+e if aes else with password.
-  bool open(const char* filename, const char* password=0,
-            libzpaq::AES_CTR* a=0, int64_t e=0) {
+  // Encrypt with aes+e if aes.
+  bool open(const char* filename, libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(in==INVALID_HANDLE_VALUE);
     n=ptr=0;
     std::wstring w=utow(filename, true);
     in=CreateFile(w.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (in==INVALID_HANDLE_VALUE) winError(filename);
-    else  {
-      if (a) {
-        aes=a;
-        eoff=e;
-      }
-      else if (password) {
-        char salt[32];
-        ReadFile(in, salt, 32, &n, NULL);
-        if (n!=32) error("missing salt");
-        n=0;
-        setup_key(password, salt);
-      }
-    }
+    aes=a;
+    eoff=e;
     return in!=INVALID_HANDLE_VALUE;
   }
 
@@ -1559,9 +1547,8 @@ public:
   }
 
   // Open file ready to update or append, create if needed.
-  // If aes then encrypt with aes+e else password.
-  bool open(const char* filename_, const char* password=0,
-            libzpaq::AES_CTR* a=0, int64_t e=0) {
+  // If aes then encrypt with aes+e.
+  bool open(const char* filename_, libzpaq::AES_CTR* a=0, int64_t e=0) {
     assert(!isopen());
     ptr=0;
     filename=utow(filename_, true);
@@ -1570,26 +1557,8 @@ public:
     if (out==INVALID_HANDLE_VALUE) winError(filename_);
     else {
       LONG hi=0;
-      if (a) {
-        aes=a;
-        eoff=e;
-      }
-      else if (password) {
-        SetFilePointer(out, 0, &hi, FILE_BEGIN);
-        char salt[32]={0};
-        DWORD n=0;
-        ReadFile(out, salt, 32, &n, NULL);
-        if (n!=32) {
-          hi=0;
-          SetFilePointer(out, 0, &hi, FILE_BEGIN);
-          random(salt, 32);
-          n=0;
-          WriteFile(out, salt, 32, &n, NULL);
-          if (n!=32) error("failed to write salt");
-        }
-        setup_key(password, salt);
-      }
-      hi=0;
+      aes=a;
+      eoff=e;
       SetFilePointer(out, 0, &hi, FILE_END);
     }
     return isopen();
@@ -1713,9 +1682,247 @@ struct Counter: public libzpaq::Writer {
   void write(const char* bufp, int size) {pos+=size;}
 };
 
+/////////////////////////////// Archive ///////////////////////////////
+
+// An Archive is a multi-part file that supports encrypted input
+class Archive: public libzpaq::Reader, public libzpaq::Writer {
+  libzpaq::AES_CTR* aes;  // NULL if not encrypted
+  struct FE {  // File element for multi-part archives
+    string fn;    // file name
+    int64_t end;  // size of previous and current files
+    FE(): end(0) {}
+    FE(const string& s, int64_t e): fn(s), end(e) {}
+  };
+  vector<FE> files;  // list of parts. only last part is writable.
+  int fi;  // current file in files
+  int64_t off;  // total offset over all files
+  int mode;     // 'r' or 'w' for reading or writing or 0 if closed
+  InputFile in; // currently open input file
+  OutputFile out;  // currently open output file
+public:
+
+  // Constructor
+  Archive(): aes(0), fi(0), off(0), mode(0) {}
+
+  // Destructor
+  ~Archive() {close();}
+
+  // Open filename for read and write. If filename contains wildards * or ?
+  // then replace * with part number 1, 2, 3... or ? with single digits
+  // up to the last existing file. Return true if at least one file is found.
+  // If password is not NULL then assume the concatenation of the files
+  // is in encrypted format. mode_ is 'r' for reading or 'w' for writing.
+  // If the filename contains wildcards then output is to the first
+  // non-existing file, else to filename. If newsize>=0 then truncate
+  // the output to newsize bytes.
+  bool open(const char* filename, const char* password, int mode_='r',
+            int64_t newsize=-1);
+
+  // Position the next read or write offset to p.
+  void seek(int64_t p, int whence);
+
+  // Return current file offset.
+  int64_t tell() const {return off;}
+
+  // Read up to n bytes into buf at current offset. Return 0..n bytes
+  // actually read. 0 indicates EOF.
+  int read(char* buf, int n) {
+    assert(mode=='r');
+    if (fi>=size(files)) return -1;
+    if (!in.isopen()) return -1;
+    n=in.read(buf, n);
+    seek(n, SEEK_CUR);
+    return n;
+  }
+
+  // Read and return 1 byte or -1 (EOF)
+  int get() {
+    assert(mode=='r');
+    if (fi>=size(files)) return -1;
+    while (off==files[fi].end) {
+      in.close();
+      if (++fi>=size(files)) return -1;
+      if (!in.open(files[fi].fn.c_str(), aes, fi>0 ? files[fi-1].end : 0))
+        error("cannot read next archive part");
+    }
+    ++off;
+    return in.get();
+  }
+
+  // Write one byte
+  void put(int c) {
+    assert(fi==size(files)-1);
+    assert(fi>0 || out.tell()==off);
+    assert(fi==0 || out.tell()+files[fi-1].end==off);
+    assert(mode=='w');
+    out.put(c);
+    ++off;
+  }
+
+  // Write buf[0..n-1]
+  void write(const char* buf, int n) {
+    assert(fi==size(files)-1);
+    assert(fi>0 || out.tell()==off);
+    assert(fi==0 || out.tell()+files[fi-1].end==off);
+    assert(mode=='w');
+    out.write(buf, n);
+    off+=n;
+  }
+
+  // Close any open part
+  void close() {
+    if (out.isopen()) out.close();
+    if (in.isopen()) in.close();
+    if (aes) {
+      delete aes;
+      aes=0;
+    }
+    files.clear();
+    fi=0;
+    off=0;
+    mode=0;
+  }
+};
+
+bool Archive::open(const char* filename, const char* password, int mode_,
+                   int64_t newsize) {
+  assert(filename);
+  assert(mode_=='r' || mode_=='w');
+  mode=mode_;
+
+  // Read part files and get sizes
+  string next;
+  for (int i=1; ; ++i) {
+    next=subpart(filename, i);
+    if (!exists(next)) break;
+    if (files.size()>0 && files[0].fn==next) break; // part overflow
+
+    // set up key from salt in first file
+    if (!in.open(next.c_str())) error("cannot read archive");
+    if (i==1 && password && newsize!=0) {
+      char salt[32], key[32];
+      if (in.read(salt, 32)!=32) error("no salt");
+      libzpaq::stretchKey(key, password, salt);
+      aes=new libzpaq::AES_CTR(key, 32, salt);
+    }
+
+    // Get file size
+    in.seek(0, SEEK_END);
+    files.push_back(FE(next,
+        in.tell()+(files.size() ? files[files.size()-1].end : 0)));
+    in.close();
+    if (next==filename) break;  // no wildcards
+  }
+
+  // Open file for reading
+  fi=files.size();
+  if (mode=='r') {
+    seek(32*(password!=0), SEEK_SET);  // open first input file
+    return files.size()>0;
+  }
+
+  // Truncate, deleting extra parts
+  if (newsize>=0) {
+    while (files.size()>0 && files.back().end>newsize) {
+      if (newsize==0 || (files.size()>1 &&
+          files[files.size()-2].end>=newsize)) {
+        if (quiet<MAX_QUIET) {
+          printUTF8(files.back().fn.c_str(), con);
+          fprintf(con, " deleted.\n");
+        }
+        next=files.back().fn.c_str();
+        delete_file(files.back().fn.c_str());
+        files.pop_back();
+      }
+      else if (files.size()>0) {
+        if (!out.open(files.back().fn.c_str()))
+          error("cannot open archive part to truncate");
+        int64_t newlen=newsize;
+        if (files.size()>=2) newlen-=files[files.size()-2].end;
+        if (quiet<MAX_QUIET) {
+          printUTF8(files.back().fn.c_str(), con);
+          fprintf(con, " truncated from %1.0f to %1.0f bytes.\n",
+            out.tell()+0.0, newlen+0.0);
+        }
+        assert(newlen>=0);
+        out.truncate(newlen);
+        out.close();
+        files.back().end=newsize;
+      }
+    }
+  }
+         
+  // Get name of part to write. If filename has wildcards then use
+  // the next part number, else just filename.
+  if (files.size()==0 || (next!=filename && next!=files[0].fn))
+    files.push_back(FE(next, files.size() ? files.back().end : 0));
+
+  // Write salt for a new encrypted archive
+  fi=files.size()-1;
+  assert(fi>=0);
+  if (password && !aes) {
+    assert(fi==0);
+    assert(files.size()==1);
+    if (!out.open(files[fi].fn.c_str()))
+      error("cannot write salt to archive");
+    out.seek(0, SEEK_SET);
+    char salt[32]={0}, key[32]={0};
+    random(salt, 32);
+    libzpaq::stretchKey(key, password, salt);
+    aes=new libzpaq::AES_CTR(key, 32, salt);
+    out.write(salt, 32);
+    files[fi].end=out.tell();  // 32
+    out.close();
+  }
+
+  // Open for output
+  assert(fi+1==size(files));
+  assert(fi>=0);
+  makepath(files[fi].fn.c_str());
+  if (!out.open(files[fi].fn.c_str(), aes, fi>0 ? files[fi-1].end : 0))
+    error("cannot open archive for output");
+  off=files.back().end;
+  assert(fi>0 || files[fi].end==out.tell());
+  assert(fi==0 || files[fi].end==out.tell()+files[fi-1].end);
+  if (quiet<MAX_QUIET) {
+    fprintf(con, "Appending to ");
+    printUTF8(files[fi].fn.c_str(), con);
+    fprintf(con, " at offset %1.0f\n", out.tell()+0.0);
+  }
+  return true;
+}
+
+void Archive::seek(int64_t p, int whence) {
+  if (whence==SEEK_SET) off=p;
+  else if (whence==SEEK_CUR) off+=p;
+  else if (whence==SEEK_END) off=(files.size() ? files.back().end : 0)+p;
+  else assert(false);
+  if (mode=='r') {
+    int oldfi=fi;
+    for (fi=0; fi<size(files) && off>=files[fi].end; ++fi);
+    if (fi!=oldfi) {
+      in.close();
+      if (fi<size(files) && !in.open(files[fi].fn.c_str(), aes,
+          fi>0 ? files[fi-1].end : 0))
+        error("cannot reopen archive after seek");
+    }
+    if (fi<size(files)) in.seek(off-files[fi].end, SEEK_END);
+  }
+  else {
+    assert(mode=='w');
+    assert(files.size()>0);
+    assert(out.isopen());
+    assert(fi+1==size(files));
+    p=off;
+    if (files.size()>=2) p-=files[files.size()-2].end;
+    if (p<0) error("seek before start of output");
+    out.seek(p, SEEK_SET);
+  }
+}
+
 ///////////////////////// NumberOfProcessors ///////////////////////////
 
-// Guess number of cores. In 32 bit mode, max is 4.
+// Guess number of cores. In 32 bit mode, max is 3.
 int numberOfProcessors() {
   int rc=0;  // result
 #ifdef unix
@@ -1745,7 +1952,7 @@ int numberOfProcessors() {
   if (p) rc=atoi(p);
 #endif
   if (rc<1) rc=1;
-  if (sizeof(char*)==4 && rc>4) rc=4;
+  if (sizeof(char*)==4 && rc>3) rc=3;
   return rc;
 }
 
@@ -1759,22 +1966,83 @@ struct StringWriter: public libzpaq::Writer {
   void put(int c) {s+=char(c);}
 };
 
+// WriteBuffer for memory efficient output buffering
+class WriteBuffer: public libzpaq::Writer {
+  enum {BUFSIZE=(1<<19)-80};  // buffer size
+  int wptr;  // number of bytes in last buffer
+  vector<char*> v;  // array of buffers
+  WriteBuffer& operator=(const WriteBuffer&);  // no assignment
+  WriteBuffer(const WriteBuffer&);  // no copy
+public:
+  WriteBuffer(): wptr(BUFSIZE) {}
+
+  // Number of bytes put
+  size_t size() const {return v.size()*BUFSIZE+wptr-BUFSIZE;}
+
+  // store n bytes from buf[0..n-1]
+  void write(const char* buf, int n) {
+    while (n>0) {
+      assert(wptr>=0 && wptr<=BUFSIZE);
+      if (wptr==BUFSIZE) {
+        v.push_back((char*)malloc(BUFSIZE));
+        if (!v.back()) error("WriteBuffer: out of memory");
+        wptr=0;
+      }
+      int n1=n;
+      if (n1>BUFSIZE-wptr) n1=BUFSIZE-wptr;
+      assert(n1>0 && n1<=BUFSIZE);
+      memcpy(v.back()+wptr, buf, n1);
+      wptr+=n1;
+      n-=n1;
+      buf+=n1;
+    }
+  }
+
+  // store 1 byte
+  void put(int c) {
+    char b[1];
+    b[0]=c;
+    write(b, 1);
+  }
+
+  // write to out
+  void save(libzpaq::Writer* out) {
+    for (int i=0; i<int(v.size())-1; ++i)
+      out->write(v[i], BUFSIZE);
+    if (v.size())
+      out->write(v.back(), wptr);
+  }
+
+  // Free memory
+  void reset() {
+    while (v.size()>0) {
+      if (v.back()) free(v.back());
+      v.pop_back();
+    }
+    wptr=BUFSIZE;
+  }
+  ~WriteBuffer() {reset();}
+};
+
 // For (de)compressing to/from a string. Writing appends bytes
 // which can be later read.
 class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
-  unsigned char* p;  // allocated memory, not NUL terminated
-  size_t al;         // number of bytes allocated, al > 0
-  size_t wpos;       // index of next byte to write, wpos < al
+  unsigned char* p;  // allocated memory, not NUL terminated, may be NULL
+  size_t al;         // number of bytes allocated, 0 iff p is NULL
+  size_t wpos;       // index of next byte to write, wpos <= al
   size_t rpos;       // index of next byte to read, rpos < wpos or return EOF.
   size_t limit;      // max size, default = -1
+  const size_t init; // initial size on first use after reset
 
   // Increase capacity to a without changing size
   void reserve(size_t a) {
+    assert(!al==!p);
     if (a<=al) return;
     if (a>=(1u<<26)) lock(global_mutex);
-    unsigned char* q=(unsigned char*)realloc(p, a);
+    unsigned char* q=0;
+    if (a>0) q=(unsigned char*)(p ? realloc(p, a) : malloc(a));
     if (a>=(1u<<26)) release(global_mutex);
-    if (!q) {
+    if (a>0 && !q) {
       fprintf(stderr, "StringBuffer realloc %1.0f to %1.0f at %p failed\n",
           double(al), double(a), p);
       error("Out of memory");
@@ -1785,12 +2053,11 @@ class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
 
   // Enlarge al to make room to write at least n bytes.
   void lengthen(unsigned n) {
-    assert(p);
-    assert(wpos<al);
+    assert(wpos<=al);
     if (wpos+n>limit) error("StringBuffer overflow");
-    if (wpos+n<al) return;
+    if (wpos+n<=al) return;
     size_t a=al;
-    while (wpos+n>=a) a=a*2+128;
+    while (wpos+n>=a) a=a*2+init;
     reserve(a);
   }
 
@@ -1801,24 +2068,17 @@ class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
 public:
 
   // Direct access to data
-  unsigned char* data() {return p;}
+  unsigned char* data() {assert(p); return p;}
 
-  // Allocate n bytes initially and make the size 0. More memory will
-  // be allocated later if needed.
-  StringBuffer(size_t n=0): al(n), wpos(0), rpos(0), limit(size_t(-1)) {
-    if (al<128) al=128;
-    p=(unsigned char*)malloc(al);
-    if (!p) {
-      fprintf(stderr, "StringBuffer malloc(%1.0f) failed\n", double(al));
-      error("Out of memory");
-    }
-  }
+  // Allocate no memory initially
+  StringBuffer(size_t n=0):
+      p(0), al(0), wpos(0), rpos(0), limit(size_t(-1)), init(n>128?n:128) {}
 
   // Set output limit
   void setLimit(size_t n) {limit=n;}
 
   // Free memory
-  ~StringBuffer() {free(p);}
+  ~StringBuffer() {if (p) free(p);}
 
   // Return number of bytes written.
   size_t size() const {return wpos;}
@@ -1827,27 +2087,45 @@ public:
   size_t remaining() const {return wpos-rpos;}
 
   // Reset size to 0.
-  void reset() {rpos=wpos=0;}
+  void reset() {
+    if (p) free(p);
+    p=0;
+    al=rpos=wpos=0;
+  }
 
   // Write a single byte.
   void put(int c) {  // write 1 byte
     lengthen(1);
+    assert(p);
+    assert(wpos<al);
     p[wpos++]=c;
+    assert(wpos<=al);
   }
 
   // Write buf[0..n-1]
   void write(const char* buf, int n) {
+    assert(buf);
+    if (n<1) return;
     lengthen(n);
+    assert(p);
+    assert(wpos+n<=al);
     memcpy(p+wpos, buf, n);
     wpos+=n;
   }
 
   // Read a single byte. Return EOF (-1) and reset at end of string.
-  int get() {return rpos<wpos ? p[rpos++] : (reset(),-1);}
+  int get() {
+    assert(rpos<=wpos);
+    assert(rpos==wpos || p);
+    return rpos<wpos ? p[rpos++] : (reset(),-1);
+  }
 
   // Read up to n bytes into buf[0..] or fewer if EOF is first.
   // Return the number of bytes actually read.
   int read(char* buf, int n) {
+    assert(rpos<=wpos);
+    assert(wpos<=al);
+    assert(!al==!p);
     if (rpos+n>wpos) n=wpos-rpos;
     if (n>0) memcpy(buf, p+rpos, n);
     rpos+=n;
@@ -1863,7 +2141,7 @@ public:
   // Write a string.
   void operator+=(const string& t) {write(t.data(), t.size());}
 
-  // Swap efficiently
+  // Swap efficiently (init is not swapped)
   void swap(StringBuffer& s) {
     std::swap(p, s.p);
     std::swap(al, s.al);
@@ -1872,6 +2150,8 @@ public:
     std::swap(limit, s.limit);
   }
 };
+
+////////////////////////////// misc ///////////////////////////////////
 
 // In Windows convert upper case to lower case.
 inline int tolowerW(int c) {
@@ -1956,15 +2236,6 @@ int ntoi(const char* s) {
     else break;
   }
   return n*sign;
-}
-
-// Convert non-negative decimal number x to string of at least n digits
-string itos(int64_t x, int n=1) {
-  assert(x>=0);
-  assert(n>=0);
-  string r;
-  for (; x || n>0; x/=10, --n) r=char('0'+x%10)+r;
-  return r;
 }
 
 /////////////////////////// read_password ////////////////////////////
@@ -2056,12 +2327,6 @@ int read_password(char* hash, int repeats,
 // files with date, attributes, and list of fragment pointers.
 // Methods add to, extract from, compare, and list the archive.
 
-// Global options
-FILE* con=stdout;    // log output, can be stderr
-bool fragile=false;  // -fragile option
-int64_t quiet=-1;    // -quiet option
-static const int64_t MAX_QUIET=0x7FFFFFFFFFFFFFFFLL;  // no output but errors
-
 // enum for HT::csize
 static const int64_t EXTRACTED= 0x7FFFFFFFFFFFFFFELL;  // decompressed?
 static const int64_t HT_BAD=   -0x7FFFFFFFFFFFFFFALL;  // no such frag
@@ -2141,6 +2406,7 @@ private:
   bool force;               // -force option
   bool all;                 // -all option
   bool noattributes;        // -noattributes option
+  bool nodelete;            // -nodelete option
   bool duplicates;          // -duplicates option
   char password_string[32]; // hash of -key argument
   char new_password_string[32];  // hash of encrypt -to arg
@@ -2157,10 +2423,7 @@ private:
   int extract();            // extract or test, return 1 if error else 0
   void list();              // list
   int compare();            // compare, return 1 if differences else 0
-  void purge();             // purge
-  void encrypt();           // encrypt to new_password
-  void split();             // split -to out -since -1
-  void join_split();        // join files to archive
+  void purge();             // copy archive current version
   void usage();             // help
 
   // Support functions
@@ -2186,16 +2449,14 @@ void Jidac::usage() {
 "zpaq is a journaling (append-only) archiver for incremental backups.\n"
 "Files are added only when the last-modified date has changed. Both the old\n"
 "and new versions are saved. You can extract from old versions of the\n"
-"archive by specifying a date or version number. zpaq supports 6\n"
-"compression levels, deduplication, AES-256 encryption, and multi-threading\n"
-"using an open, self-describing format for backward and forward\n"
-"compatibility in Windows and Linux.\n"
+"archive by specifying a date or version number.\n"
 "\n"
 "Usage: zpaq command archive files... -options...\n"
 "Commands may be abbreviated to one letter (or x for extract):\n"
 "Archive is assumed to have a .zpaq extension if not specified.\n"
 "Files can be directories in which case the whole tree is included.\n"
 "Wildcards * and ? in file names match any string or character.\n"
+"Wildcards in archive match numbers or digits in multi-part archive.\n"
 "\n"
 "a  add          Compress and add files to archive (or to \"\" to test).\n"
 "x  extract      Decompress named files (default: entire contents).\n"
@@ -2203,9 +2464,7 @@ void Jidac::usage() {
 "c  compare      Compare with external files (default: entire contents).\n"
 "d  delete       Mark as deleted in a new version of archive.\n"
 "t  test         Test decompression without writing any files.\n"
-"p  purge -to out[.zpaq]    Remove old versions. out can be self.\n"
-"e  encrypt -to out[.zpaq] [password]    Set password. out can be self.\n"
-"                password can be \"\" to decrypt (default: prompt).\n"
+"p  purge -to out[.zpaq]  Create new archive with old versions removed.\n"
 "\n"
 "Options (may be abbreviated if not ambiguous):\n"
 "-to files...    a,x,c: Rename external files or specify prefix, e.g.\n"
@@ -2216,12 +2475,14 @@ void Jidac::usage() {
 "-until %s\n"
 "                Set date (UT) and revert archive. (default time: 235959).\n"
 "-since N        Start at version N or -N from end if N<0 (default: 1).\n"
-"-noattributes   Ignore/don't save file attributes or permissions.\n"
 "-key [password] Create or access encrypted archive (default: prompt).\n"
+"-newkey [password]  p: Set out.zpaq password (default: none).\n"
+"-noattributes   Ignore/don't save file attributes or permissions.\n"
+"-nodelete       a: Do not mark unmatched files as deleted.\n"
 "-force          a: Add even if dates unchanged. x: overwrite output files.\n"
-"-method 0...6   a: Compress faster...better (default: 1).\n"
-"-threads N      a,x,t: Use N threads (default: %d detected).\n"
-"-all            l,t: All versions. c: compare dates, attributes too.\n"
+"-method 0...5   a: Compress faster...better (default: 1).\n"
+"-threads N      a,x,t: Use N threads (default: %d cores detected).\n"
+"-all            l,t: All versions. c: compare metadata too. p: keep all.\n"
 "-quiet [N[k|m|g]]  Don't show files smaller than N (default none).\n"
 "-summary [N]    l: List top N (20) files and types and a version table.\n"
 "-duplicates     l: List by size and label identical files with =\n"
@@ -2264,15 +2525,13 @@ string Jidac::unrename(const string& name) {
 // or report error if not exactly 1 match. Always expand commands.
 string expandOption(const char* opt) {
   const char* opts[]={
-    "list","add","extract","delete","test","purge","compare","encrypt",
-    "split","join",
+    "list","add","extract","delete","test","compare","purge",
     "method","force","quiet","summary","since","noattributes","key",
     "to","not","version","until","threads","all","fragile","duplicates",
-    "fragment",0};
+    "fragment","nodelete","newkey",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
-  if (n==1 && opt[0]=='e') return "-encrypt";
   if (n==1 && opt[0]=='x') return "-extract";
   string result;
   for (unsigned i=0; opts[i]; ++i) {
@@ -2280,7 +2539,7 @@ string expandOption(const char* opt) {
       if (result!="")
         fprintf(stderr, "Ambiguous: %s\n", opt), exit(1);
       result=string("-")+opts[i];
-      if (i<10 && result!="") return result;
+      if (i<7 && result!="") return result;
     }
   }
   if (result=="")
@@ -2293,7 +2552,7 @@ int Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
-  force=all=noattributes=duplicates=false;
+  force=all=noattributes=nodelete=duplicates=false;
   since=0;
   summary=0;
   version=9999999999999LL;
@@ -2302,7 +2561,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   fragment=6;
   password=0;  // no password
   new_password=0;  // no new password
-  method="1";  // 0..6
+  method="1";  // 0..5
   ht.resize(1);  // element 0 not used
   ver.resize(1); // version 0
 
@@ -2317,8 +2576,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     const string opt=expandOption(argv[i]);  // read command
     if ((opt=="-add" || opt=="-extract" || opt=="-list"
         || opt=="-delete" || opt=="-compare" || opt=="-test"
-        || opt=="-purge"  || opt=="-encrypt" || opt=="-split"
-        || opt=="-join")
+        || opt=="-purge")
         && i<argc-1 && argv[i+1][0]!='-' && command=="") {
       archive=argv[++i];
       if (archive!="" &&   // Add .zpaq extension
@@ -2347,11 +2605,10 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-all") all=true;
     else if (opt=="-fragile") fragile=true;
     else if (opt=="-noattributes") noattributes=true;
+    else if (opt=="-nodelete") nodelete=true;
     else if (opt=="-duplicates") duplicates=true;
-    else if (opt=="-since" && i<argc-1)
-      since=atoi(argv[++i]);
-    else if (opt=="-fragment" && i<argc-1)
-      fragment=atoi(argv[++i]);
+    else if (opt=="-since" && i<argc-1) since=atoi(argv[++i]);
+    else if (opt=="-fragment" && i<argc-1) fragment=atoi(argv[++i]);
     else if (opt=="-summary") {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
@@ -2361,16 +2618,9 @@ int Jidac::doCommand(int argc, const char** argv) {
       if (threads<1) threads=1;
     }
     else if (opt=="-to") {  // read tofiles. encrypt: read password
-      if (command=="-encrypt" && i<argc-1 && argv[i+1][0]!='-') {
-        tofiles.push_back(argv[++i]);
-        if (read_password(new_password_string, 2, argc, argv, i)>0)
-          new_password=new_password_string;
-      }
-      else {
-        while (++i<argc && argv[i][0]!='-')
-          tofiles.push_back(argv[i]);
-        --i;
-      }
+      while (++i<argc && argv[i][0]!='-')
+        tofiles.push_back(argv[i]);
+      --i;
     }
     else if (opt=="-not") {  // read notfiles
       while (++i<argc && argv[i][0]!='-')
@@ -2418,9 +2668,13 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-method" && i<argc-1)
       method=argv[++i];
     else if (opt=="-key") {
-      if (read_password(password_string, 2-exists(archive.c_str()),
+      if (read_password(password_string, 2-exists(archive),
           argc, argv, i))
         password=password_string;
+    }
+    else if (opt=="-newkey") {
+      if (read_password(new_password_string, 2, argc, argv, i))
+        new_password=new_password_string;
     }
     else
       usage();
@@ -2448,9 +2702,6 @@ int Jidac::doCommand(int argc, const char** argv) {
   else if (command=="-list") list();
   else if (command=="-compare") return compare();
   else if (command=="-purge") purge();
-  else if (command=="-encrypt") encrypt();
-  else if (command=="-split") split();
-  else if (command=="-join") join_split();
   else usage();
   return 0;
 }
@@ -2461,9 +2712,15 @@ int64_t Jidac::read_archive(int *errors) {
   if (errors) *errors=0;
 
   // Open archive or archive.zpaq
-  InputFile in;
-  if (!in.open(archive.c_str(), password))
+  Archive in;
+  if (!in.open(archive.c_str(), password)) {
+    if (command!="-add") {
+      printUTF8(archive.c_str(), stderr);
+      fprintf(stderr, " not found.\n");
+      if (errors) ++*errors;
+    }
     return 0;
+  }
   if (quiet<MAX_QUIET) {
     printUTF8(archive.c_str(), con);
     if (version==9999999999999LL)
@@ -2473,12 +2730,12 @@ int64_t Jidac::read_archive(int *errors) {
     fflush(con);
   }
 
-  // Test if decrypted
-  {
+  // Test password
+  if (password) {
     char s[4]={0};
     in.read(s, 4);
     if (memcmp(s, "7kSt", 4) && (memcmp(s, "zPQ", 3) || s[3]<1))
-      error("password incorrect or not ZPAQ");
+      error("password incorrect");
     in.seek(-4, SEEK_CUR);
   }
 
@@ -3036,31 +3293,7 @@ void e8e9(unsigned char* buf, int n) {
   }
 }
 
-// BWT Preprocessor preprocessed with e8e9 if doE8 is true.
-// Format is a Burrows-Wheeler transform with the terminal symbol -1
-// included and encoded as 255. The location of this symbol (idx) is
-// encoded by appending it as 4 bytes LSB first.
-
-class BWTBuffer: public libzpaq::Reader {
-  StringBuffer* inp;
-public:
-  int get() {return inp->get();}
-  BWTBuffer(StringBuffer& in, bool doE8);
-};
-
-BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8): inp(&in) {
-  const int n=in.size();
-  libzpaq::Array<int> w(n+1);
-  if (doE8) e8e9(in.data(), n);
-  int idx=divbwt(in.data(), in.data(), &w[0], n);
-  assert(idx>=0 && idx<=n);
-  in.put(0);
-  memmove(in.data()+idx+1, in.data()+idx, n-idx);
-  in.data()[idx]=255;
-  for (int i=0; i<4; ++i) in.put(idx>>(i*8));
-}
-
-// LZ preprocessor for level 1 or 2 compression and e8e9 filter.
+// LZ/BWT preprocessor for levels 1..3 compression and e8e9 filter.
 // Level 1 uses variable length LZ77 codes like in the lazy compressor:
 //
 //   00,n,L[n] = n literal bytes
@@ -3077,6 +3310,9 @@ BWTBuffer::BWTBuffer(StringBuffer& in, bool doE8): inp(&in) {
 // with m in 1..64. Lengths and offsets are MSB first:
 // 00xxxxxx   x+1 (1..64) literals follow
 // yyxxxxxx   y+1 (2..4) offset bytes follow, match length x+m (m..m+63)
+//
+// Level 3 is BWT with the end of string byte coded as 255 and the
+// last 4 bytes giving its position LSB first.
 
 // floor(log2(x)) + 1 = number of bits excluding leading zeros (0..32)
 int lg(unsigned x) {
@@ -3098,18 +3334,21 @@ int nbits(unsigned x) {
 
 // Encode inbuf to buf using LZ77. args are as follows:
 // args[0] is log2 buffer size in MB.
-// args[1] is level (1=variable length, 2=byte aligned lz77) + 4 if E8E9.
-// args[2] is the minimum match length and context order.
-// args[3] is the higher context order to search first, or else 0.
+// args[1] is level (1=var. length, 2=byte aligned lz77, 3=bwt) + 4 if E8E9.
+// args[2] is the lz77 minimum match length and context order.
+// args[3] is the lz77 higher context order to search first, or else 0.
 // args[4] is the log2 hash bucket size (number of searches).
-// args[5] is the log2 hash table size.
+// args[5] is the log2 hash table size. If 21+args[0] then use a suffix array.
 // args[6] is the secondary context look ahead
+// sap is pointer to external suffix array of inbuf or 0. If supplied and
+//   args[0]=5..7 then it is assumed that E8E9 was already applied to
+//   both the input an sap and the input buffer is not modified.
 
 class LZBuffer: public libzpaq::Reader {
-  libzpaq::Array<unsigned> ht;// hash table, confirmation in low bits
+  libzpaq::Array<unsigned> ht;// hash table, confirm in low bits, or SA+ISA
   const unsigned char* in;    // input pointer
-  const int checkbits;        // hash confirmation size
-  const int level;            // 1=var length LZ77, 2=byte aligned LZ77
+  const int checkbits;        // hash confirmation size or lg(ISA size)
+  const int level;            // 1=var length LZ77, 2=byte aligned LZ77, 3=BWT
   const unsigned htsize;      // size of hash table
   const unsigned n;           // input length
   unsigned i;                 // current location in in (0 <= i < n)
@@ -3126,6 +3365,9 @@ class LZBuffer: public libzpaq::Reader {
   unsigned bits;              // pending output bits (level 1)
   unsigned nbits;             // number of bits in bits
   unsigned rpos, wpos;        // read, write pointers
+  unsigned idx;               // BWT index
+  const unsigned* sa;         // suffix array for BWT or LZ77-SA
+  unsigned* isa;              // inverse suffix array for LZ77-SA
   enum {BUFSIZE=1<<14};       // output buffer size
   unsigned char buf[BUFSIZE]; // output buffer
 
@@ -3158,7 +3400,7 @@ class LZBuffer: public libzpaq::Reader {
   }
 
 public:
-  LZBuffer(StringBuffer& inbuf, int args[]); // input to compress
+  LZBuffer(StringBuffer& inbuf, int args[], const unsigned* sap=0);
 
   // return 1 byte of compressed output (overrides Reader)
   int get() {
@@ -3186,10 +3428,12 @@ int LZBuffer::read(char* p, int n) {
   return nr;
 }
 
-LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
-    ht(1<<args[5]),
+LZBuffer::LZBuffer(StringBuffer& inbuf, int args[], const unsigned* sap):
+    ht((args[1]&3)==3 ? (inbuf.size()+1)*!sap      // for BWT suffix array
+        : args[5]-args[0]<21 ? 1u<<args[5]         // for LZ77 hash table
+        : (inbuf.size()*!sap)+(1u<<17<<args[0])),  // for LZ77 SA and ISA
     in(inbuf.data()),
-    checkbits(12-args[0]),
+    checkbits(args[5]-args[0]<21 ? 12-args[0] : 17+args[0]),
     level(args[1]&3),
     htsize(ht.size()),
     n(inbuf.size()),
@@ -3205,36 +3449,91 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[]):
     shift2(minMatch2>0 ? (args[5]-1)/minMatch2+1 : 0),
     minMatchBoth(max(minMatch, minMatch2+lookahead)+4),
     rb(args[0]>4 ? args[0]-4 : 0),
-    bits(0),
-    nbits(0),
-    rpos(0),
-    wpos(0) {
+    bits(0), nbits(0), rpos(0), wpos(0),
+    idx(0), sa(0), isa(0) {
   assert(args[0]>=0);
-  assert(args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6);
-  assert(level==1 || level==2);
+  assert(n<=(1u<<20<<args[0]));
+  assert(args[1]>=1 && args[1]<=7 && args[1]!=4);
+  assert(level>=1 && level<=3);
   if ((minMatch<4 && level==1) || minMatch<1)
     error("match length $3 too small");
 
   // e8e9 transform
-  if (args[1]>4) e8e9(inbuf.data(), n);
+  if (args[1]>4 && !sap) e8e9(inbuf.data(), n);
+
+  // build suffix array if not supplied
+  if (args[5]-args[0]>=21 || level==3) {  // LZ77-SA or BWT
+    if (sap)
+      sa=sap;
+    else {
+      assert(ht.size()>=n);
+      assert(ht.size()>0);
+      sa=&ht[0];
+      divsufsort((const unsigned char*)in, (int*)sa, n);
+    }
+    if (level<3) {
+      assert(ht.size()>=(n*(sap==0))+(1u<<17<<args[0]));
+      isa=&ht[n*(sap==0)];
+    }
+  }
 }
 
 // Encode from in to buf until end of input or buf is not empty
 void LZBuffer::fill() {
 
-  // Scan the input
+  // BWT
+  if (level==3) {
+    assert(in);
+    assert(sa);
+    for (; wpos<BUFSIZE && i<n+5; ++i) {
+      if (i==0) put(n>0 ? in[n-1] : 255);
+      else if (i>n) put(idx&255), idx>>=8;
+      else if (sa[i-1]==0) idx=i, put(255);
+      else put(in[sa[i-1]-1]);
+    }
+    return;
+  }
+
+  // LZ77: scan the input
   unsigned lit=0;  // number of output literals pending
   const unsigned mask=(1<<checkbits)-1;
   while (i<n && wpos*2<BUFSIZE) {
 
     // Search for longest match, or pick closest in case of tie
-    // Try the longest context orders first. If a match is found, then
-    // skip the lower order as a speed optimization.
     unsigned blen=minMatch-1;  // best match length
     unsigned bp=0;  // pointer to best match
     unsigned blit=0;  // literals before best match
     int bscore=0;  // best cost
-    if (level==1 || minMatch<=64) {
+
+    // Look up contexts in suffix array
+    if (isa) {
+      if (sa[isa[i&mask]]!=i)  // rebuild ISA
+        for (unsigned j=0; j<n; ++j)
+          if ((sa[j]&~mask)==(i&~mask))
+            isa[sa[j]&mask]=j;
+      for (unsigned h=0; h<=lookahead; ++h) {
+        unsigned q=isa[(h+i)&mask];  // location of i in SA
+        for (int j=-1; j<=1; j+=2) {  // search backward and forward
+          for (unsigned k=1; k<=bucket; ++k) {
+            unsigned p;  // match to be tested
+            if (q+j*k<n && (p=sa[q+j*k])<i) {
+              assert(p<n);
+              unsigned l, l1;  // length of match, leading literals
+              for (l=h; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
+              for (l1=h; l1>0 && in[p+l1-1]==in[i+l1-1]; --l1);
+              int score=int(l-l1)*8-lg(i-p)-2*(lit==0 && l1>0)-11;
+              if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
+              if (l<blen || l<minMatch || l>255) break;
+            }
+          }
+        }
+      }
+    }
+
+    // Look up contexts in a hash table.
+    // Try the longest context orders first. If a match is found, then
+    // skip the lower order as a speed optimization.
+    else if (level==1 || minMatch<=64) {
       if (minMatch2>0) {
         for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h2^k];
@@ -3247,7 +3546,7 @@ void LZBuffer::fill() {
                 int l1;  // length back from lookahead
                 for (l1=lookahead; l1>0 && in[p+l1-1]==in[i+l1-1]; --l1);
                 assert(l1>=0 && l1<=int(lookahead));
-                int score=int(l-l1)*8-lg(i-p)-2*(lit>0)-11;
+                int score=int(l-l1)*8-lg(i-p)-2*(lit==0 && l1>0)-11;
                 if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
               }
             }
@@ -3292,20 +3591,24 @@ void LZBuffer::fill() {
     }
 
     // Update index, advance blen bytes
-    while (blen--) {
-      if (i+minMatchBoth<n) {
-        unsigned ih=((i*1234547)>>19)&bucket;
-        const unsigned p=(i<<checkbits)|(in[i+3]&mask);
-        assert(ih<=bucket);
-        if (minMatch2) {
-          ht[h2^ih]=p;
-          h2=(((h2*9)<<shift2)
-              +(in[i+minMatch2+lookahead]+1)*23456789)&(htsize-1);
+    if (isa)
+      i+=blen;
+    else {
+      while (blen--) {
+        if (i+minMatchBoth<n) {
+          unsigned ih=((i*1234547)>>19)&bucket;
+          const unsigned p=(i<<checkbits)|(in[i+3]&mask);
+          assert(ih<=bucket);
+          if (minMatch2) {
+            ht[h2^ih]=p;
+            h2=(((h2*9)<<shift2)
+                +(in[i+minMatch2+lookahead]+1)*23456789)&(htsize-1);
+          }
+          ht[h1^ih]=p;
+          h1=(((h1*5)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
         }
-        ht[h1^ih]=p;
-        h1=(((h1*5)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
+        ++i;
       }
-      ++i;
     }
 
     // Write long literals to keep buf from filling up
@@ -4099,6 +4402,15 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       ? atoi(method.c_str()+1) : max(lg(n+4095)-20, 0);  // block size
   assert((1u<<(arg0+20))>=n+4096);
 
+  // Get hash of input
+  libzpaq::SHA1 sha1;
+  const char* sha1ptr=0;
+  if (!fragile) {
+    for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
+      sha1.put(*p);
+    sha1ptr=sha1.result();
+  }
+
   // Expand default methods
   if (isdigit(method[0])) {
     const int level=method[0]-'0';
@@ -4107,7 +4419,8 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     // build models
     const int doe8=(type&2)*2;
     method="x"+itos(arg0);
-    string htsz=","+itos(19+arg0+(arg0<=6));  // lz77 hash table size param
+    string htsz=","+itos(19+arg0+(arg0<=6));  // lz77 hash table size
+    string sasz=","+itos(21+arg0);            // lz77 suffix array size
 
     // store uncompressed
     if (level==0)
@@ -4121,7 +4434,8 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
         if      (type<80)  method+="4,0,1,15";
         else if (type<128) method+="4,0,2,16";
         else if (type<256) method+="4,0,2"+htsz;
-        else               method+="5,0,3"+htsz;
+        else if (type<960) method+="5,0,3"+htsz;
+        else               method+="6,0,3"+htsz;
       }
     }
 
@@ -4129,64 +4443,34 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     else if (level==2) {
       if (type<32) method+=",0";
       else {
-        method+=","+itos(1+doe8)+",4";
-        if      (type<64)  method+=",0,1,16";
-        else if (type<96)  method+=",0,2"+htsz;
-        else if (type<128) method+=",0,3"+htsz;
-        else if (type<256) method+=",8,3"+htsz;
-        else               method+=",8,4"+htsz;
-        if (doe8 && type>=128) method+=",1";
+        method+=","+itos(1+doe8)+",";
+        if (type<64) method+="4,0,3"+htsz;
+        else method+="4,0,8"+sasz;
       }
     }
 
     // LZ77 with CM depending on redundancy
     else if (level==3) {
-      if (type<16)
+      if (type<20)  // store if not compressible
         method+=",0";
-      else if (type<48)
+      else if (type<48)  // fast LZ77 if barely compressible
         method+=","+itos(1+doe8)+",4,0,3"+htsz;
-      else
-        method+=","+itos(2+doe8)+",8,0,4"+htsz+",c0,0,511";
-    }
-
-    // Try LZ77+CM and BWT and pick the smallest
-    else if (level==4) {
-      string s=","+itos(20+arg0);
-      if (type<12)
-        method+=",0";
-      else if (type<24)
-        method+=","+itos(1+doe8)+",4,0,3"+htsz;
-      else if (type<48)
-        method+=","+itos(2+doe8)+",8,0,4"+htsz+"c0,0,511";
-      else {  // try LZ77, BWT and pick the smallest
-        StringBuffer in2, out1, out2;
-        string method1=method+","+itos(2+doe8)+",8,0,4"+htsz+"c0,0,511";
-        string method2=method+","+itos(3+doe8)+"ci1";
-        string result=method1;
-        in2.write(in->c_str(), in->size());
-        compressBlock(&in2, &out1, method1, filename, comment, type);
-        in2.write(in->c_str(), in->size());
-        compressBlock(&in2, &out2, method2, filename, comment, type);
-        if (out2.size()<out1.size()) {
-          out1.swap(out2);
-          result=method2;
-        }
-        out->write(out1.c_str(), out1.size());
-        return result;
-      }
+      else if (type>=640 || (type&1))  // BWT if text or highly compressible
+        method+=","+itos(3+doe8)+"ci1";
+      else  // LZ77 with O0-1 compression of up to 12 literals
+        method+=","+itos(2+doe8)+",12,0,8"+sasz+",c0,0,511i2";
     }
 
     // LZ77+CM, fast CM, or BWT depending on type
-    else if (level==5) {
-      string s=","+itos(20+arg0);
+    else if (level==4) {
       if (type<12)
         method+=",0";
       else if (type<24)
         method+=","+itos(1+doe8)+",4,0,3"+htsz;
       else if (type<48)
-        method+=","+itos(2+doe8)+",8,0,4"+htsz+"c0,0,511";
+        method+=","+itos(2+doe8)+",5,0,8"+sasz+"c0,0,511";
       else if (type<900) {
-        method+=","+itos(doe8)+"ci1,1,1,1,2a"; // level 5
+        method+=","+itos(doe8)+"ci1,1,1,1,2a";
         if (type&1) method+="w";
         method+="m";
       }
@@ -4195,7 +4479,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     }
 
     // Slow CM with lots of models
-    else if (level==6) {
+    else {  // 5..9
 
       // Model text files
       method+=","+itos(doe8);
@@ -4239,21 +4523,12 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       }
       method+="c0,2,0,255i1c0,3,0,0,255i1c0,4,0,0,0,255i1mm16ts19t0";
     }
-    else 
-      error("method must be 0..6, x, or s");
   }
 
-  // Get hash of input
+  // Compress
   string config;
   int args[9]={0};
   try {
-    libzpaq::SHA1 sha1;
-    const char* sha1ptr=0;
-    if (!fragile) {
-      for (const char* p=in->c_str(), *end=p+n; p<end; ++p)
-        sha1.put(*p);
-      sha1ptr=sha1.result();
-    }
 
     // Get config
     config=makeConfig(method.c_str(), args);
@@ -4272,14 +4547,9 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
     if (method[0]!='s') cs+=" jDC\x01";
     if (comment) cs=comment;
     co.startSegment(filename, cs.c_str());
-    if (args[1]==1 || args[1]==2 || args[1]==5 || args[1]==6) {  // LZ77
+    if (args[1]>=1 && args[1]<=7 && args[1]!=4) {  // LZ77 or BWT
       LZBuffer lz(*in, args);
       co.setInput(&lz);
-      co.compress();
-    }
-    else if (args[1]==3 || args[1]==7) {  // BWT
-      BWTBuffer bwt(*in, args[1]==7);
-      co.setInput(&bwt);
       co.compress();
     }
     else {  // compress with e8e9 or no preprocessing
@@ -4296,6 +4566,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       int64_t outsize;
       const char* sha1result=co.endSegmentChecksum(&outsize);
       assert(sha1result);
+      assert(sha1ptr);
       if (memcmp(sha1result, sha1ptr, 20)!=0) {
         fprintf(stderr, "pre size=%d post size=%1.0f method=%s\n",
                 n, double(outsize), method.c_str());
@@ -4328,7 +4599,8 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
 // Buffer queue element
 struct CJ {
   enum {EMPTY, FULL, COMPRESSING, COMPRESSED, WRITING} state;
-  StringBuffer in, out;  // uncompressed and compressed data
+  StringBuffer in;       // uncompressed input
+  WriteBuffer out;       // compressed output
   string filename;       // to write in filename field
   string method;         // compression level or "" to mark end of data
   int type;              // redundancy*4 + exe*2 + text
@@ -4350,14 +4622,14 @@ class CompressJob {
 public:
   friend ThreadReturn compressThread(void* arg);
   friend ThreadReturn writeThread(void* arg);
-  CompressJob(int t, libzpaq::Writer* f):
-      job(0), q(0), qsize(t), front(0), out(f) {
-    q=new CJ[t];
+  CompressJob(int threads, int buffers, libzpaq::Writer* f):
+      job(0), q(0), qsize(buffers), front(0), out(f) {
+    q=new CJ[buffers];
     if (!q) throw std::bad_alloc();
     init_mutex(mutex);
-    empty.init(t);
-    compressors.init(t/2);
-    for (int i=0; i<t; ++i) {
+    empty.init(buffers);
+    compressors.init(threads);
+    for (int i=0; i<buffers; ++i) {
       q[i].full.init(0);
       q[i].compressed.init(0);
     }
@@ -4377,7 +4649,7 @@ public:
   vector<int> csize;  // compressed block sizes
 };
 
-// Write s at the back of the queue. Signal end of input with method=-1
+// Write s at the back of the queue. Signal end of input with method=""
 void CompressJob::write(StringBuffer& s, const char* fn, string method,
                         int type) {
   for (unsigned k=(method=="")?qsize:1; k>0; --k) {
@@ -4402,8 +4674,9 @@ void CompressJob::write(StringBuffer& s, const char* fn, string method,
 }
 
 // Global progress indicator
-volatile int64_t total_size=0;  // number of bytes to process
+volatile int64_t total_size=0;  // number of input bytes to process
 volatile int64_t bytes_processed=0;  // bytes compressed or decompressed
+volatile int64_t bytes_output=0;  // output bytes compressed
 
 // Compress data in the background, one per buffer
 ThreadReturn compressThread(void* arg) {
@@ -4450,19 +4723,21 @@ ThreadReturn compressThread(void* arg) {
       job.compressors.signal();
       lock(job.mutex);
       bytes_processed+=insize-8-4*frags;
+      bytes_output+=cj.out.size();
       if (quiet<MAX_QUIET) {
         int eta=(mtime()-global_start)
              *(total_size-bytes_processed)/(bytes_processed+0.5)/1000;
         if (bytes_processed>0)
-          fprintf(con, "%d:%02d to go: ", eta/60, eta%60);
+          fprintf(con, "%d:%02d", eta/60, eta%60);
         if (quiet==MAX_QUIET-1) {
-          fprintf(con, "%1.3f MB        \r", bytes_processed/1000000.0);
+          fprintf(con, " to go: %1.3f -> %1.3f MB        \r",
+              bytes_processed/1000000.0, bytes_output/1000000.0);
           fflush(con);
         }
         else {
           fprintf(con,
-              " Job %d [%d-%d] %d -> %d (%1.3f s), %d%c -m %s\n",
-              jobNumber+1, start, start+frags-1,
+              " [%d-%d] %d -> %d (%1.2fs), %d%c %s\n",
+              start, start+frags-1,
               insize, int(cj.out.size()), (mtime()-now)*0.001,
               cj.type/4, " teb"[cj.type&3], m.c_str());
         }
@@ -4506,11 +4781,11 @@ ThreadReturn writeThread(void* arg) {
       int outsize=cj.out.size();
       if (outsize>0) {
         release(job.mutex);
-        job.out->write(cj.out.c_str(), outsize);
+        cj.out.save(job.out);
+        cj.out.reset();
         lock(job.mutex);
       }
       cj.state=CJ::EMPTY;
-      cj.out.reset();
       job.front=(job.front+1)%job.qsize;
       job.empty.signal();
       release(job.mutex);
@@ -4585,8 +4860,6 @@ int Jidac::add() {
   unsigned blocksize=(1<<24)-4096;
   if (isdigit(method[0]) && method[0]>'1')
     blocksize=(1<<26)-4096;
-  if (method[0]=='2')
-    blocksize=(1<<25)-4096;
   if (method.size()>1)
     blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
   if (fragment<0 || fragment>19 || (1u<<(12+fragment))>blocksize)
@@ -4594,9 +4867,7 @@ int Jidac::add() {
 
   // Read archive index list into ht, dt, ver.
   int errors=0;
-  const int64_t header_pos=
-      archive!="" && exists(archive)
-      ? read_archive(&errors) : 32*(password!=0);
+  int64_t header_pos=read_archive(&errors);
 
   // Make list of files to add or delete
   read_args(command!="-delete");
@@ -4627,7 +4898,7 @@ int Jidac::add() {
 
       vf.push_back(p);
     }
-    if (p->second.written==0 && p->second.edate==0)
+    if (!nodelete && p->second.written==0 && p->second.edate==0)
       ++deletions;
   }
   std::sort(vf.begin(), vf.end(), compareFilename);
@@ -4641,25 +4912,20 @@ int Jidac::add() {
   }
 
   // Open archive to append
-  OutputFile out;
+  Archive out;
   Counter counter;
   libzpaq::Writer* outp=0;  // pointer to output
   if (archive=="")
     outp=&counter;
   else {
-    if (!out.open(archive.c_str(), password)) error("Archive open failed");
+    if (!out.open(archive.c_str(), password, 'w', header_pos))
+      error("Archive open failed");
+    if (password && header_pos==0) header_pos=32;
     if (quiet<MAX_QUIET) {
       fprintf(con, "%s ", (header_pos>32 ? "Updating" : "Creating"));
       printUTF8(archive.c_str(), con);
       fprintf(con, " version %d at %s\n",
         size(ver), dateToString(date).c_str());
-    }
-    int64_t archive_size=out.tell();
-    if (archive_size!=header_pos) {
-      if (quiet<MAX_QUIET)
-        fprintf(con, "Archive truncated from %1.0f to %1.0f bytes\n",
-               double(archive_size), double(header_pos));
-      out.truncate(header_pos);
     }
     outp=&out;
   }
@@ -4741,9 +5007,9 @@ int Jidac::add() {
   const int64_t header_end=archive=="" ? counter.pos : out.tell();
 
   // Start compress and write jobs
-  vector<ThreadID> tid(threads*2);
+  vector<ThreadID> tid(threads*2-1);
   ThreadID wid;
-  CompressJob job(tid.size(), outp);
+  CompressJob job(threads, tid.size(), outp);
   if (quiet<MAX_QUIET && deletions>0)
     fprintf(con, "Deleting %d files.\n", deletions);
   if (quiet<MAX_QUIET && size(vf)>0)
@@ -4757,10 +5023,7 @@ int Jidac::add() {
   assert(method!="");
   const unsigned MIN_FRAGMENT=64<<fragment;   // fragment size limits
   const unsigned MAX_FRAGMENT=8128<<fragment;
-  unsigned fi=0;       // file number in vf
-  unsigned fj=0;       // fragment number in file
-  InputFile in;        // currently open input file
-  StringBuffer sb;     // block to compress
+  StringBuffer sb(blocksize+4096-128);  // block to compress
   unsigned frags=0;    // number of fragments in sb
   unsigned redundancy=0;  // estimated bytes that can be compressed out of sb
   unsigned text=0;     // number of fragents containing text
@@ -4768,200 +5031,211 @@ int Jidac::add() {
   const int ON=4;      // number of order-1 tables to save
   unsigned char o1prev[ON*256]={0};  // last ON order 1 predictions
   libzpaq::Array<char> fragbuf(MAX_FRAGMENT);
-  while (fi<vf.size() || frags>0) {
 
-    // Compress a block if (1) end of input, (2) block is full,
-    // (3) EOF, block is almost full, and next file won't fit, or
-    // (4) EOF, block is partly full and not compressible.
-    // In that case, store it uncompressed.
-    if (fi==vf.size()
-        || sb.size()>blocksize-MAX_FRAGMENT-80-frags*4
-        || (fj==0 && sb.size()>blocksize/4*3
-            && sb.size()+vf[fi]->second.esize>blocksize-MAX_FRAGMENT-2048) 
-        || (fj==0 && sb.size()>blocksize/8 && redundancy<sb.size()/32)
-        || (fj==0 && sb.size()>blocksize/4 && redundancy<sb.size()/16)
-        || (fj==0 && sb.size()>blocksize/2 && redundancy<sb.size()/8)) {
+  // For each file to be added
+  for (unsigned fi=0; fi<vf.size(); ++fi) {
+    assert(vf[fi]->second.eptr.size()==0);
+    DTMap::iterator p=vf[fi];
+    string filename=rename(p->first);
 
-      // Pad sb with redundant fragment size list and compress
-      if (frags>0) {
-        assert(frags<ht.size());
-        if (fragile) {
-          sb+=itob(0);  // omit first frag ID
-          sb+=itob(0);  // omit number of fragments
-        }
-        else {
-          for (unsigned i=ht.size()-frags; i<ht.size(); ++i)
-            sb+=itob(ht[i].usize);  // list of frag sizes
-          sb+=itob(0);      // omit first frag ID to make block movable
-          sb+=itob(frags);  // number of frags
-        }
-        job.write(sb,
-            ("jDC"+itos(date, 14)+"d"+itos(ht.size()-frags, 10)).c_str(),
-            method,
-            redundancy/(sb.size()/256+1)*4+(exe>frags/8)*2+(text>frags/4));
-        assert(sb.size()==0);
-        ht[ht.size()-frags].csize=-1;  // compressed size to fill in later
-        frags=redundancy=text=exe=0;
+    // Skip directory
+    if (filename!="" && filename[filename.size()-1]=='/') {
+      if (quiet<=0) {
+        fprintf(con, "Adding directory ");
+        printUTF8(p->first.c_str(), con);
+        fprintf(con, "\n");
       }
       continue;
     }
 
-    // If no file is open then open the next one
-    assert(fi<vf.size());
-    if (!in.isopen()) {
-      assert(fj==0);
-
-      // Skip directory
-      DTMap::iterator p=vf[fi];
-      string filename=rename(p->first);
-      if (filename!="" && filename[filename.size()-1]=='/') {
-        if (quiet<=0) {
-          fprintf(con, "Adding directory ");
-          printUTF8(p->first.c_str(), con);
-          fprintf(con, "\n");
-        }
-        ++fi;
-        continue;
+    // Open input file
+    InputFile in;
+    if (!in.open(filename.c_str())) {  // skip if not found
+      p->second.edate=0;
+      total_size-=p->second.esize;
+      ++errors;
+      continue;
+    }
+    else if (quiet<=p->second.esize) {
+      fprintf(con, "%6u ", (unsigned)ht.size());
+      if (p->second.dtv.size()==0 || p->second.dtv.back().date==0) {
+        fprintf(con, "Adding %12.0f ", double(p->second.esize));
+        printUTF8(p->first.c_str(), con);
       }
-
-      // Open input file
-      if (!in.open(filename.c_str())) {  // skip if not found
-        p->second.edate=0;
-        total_size-=p->second.esize;
-        ++fi;
-        ++errors;
-        continue;
+      else {
+        fprintf(con, "Updating %12.0f ", double(p->second.esize));
+        printUTF8(p->first.c_str(), con);
       }
-      else if (quiet<=p->second.esize) {
-        fprintf(con, "%6u ", (unsigned)ht.size());
-        if (p->second.dtv.size()==0 || p->second.dtv.back().date==0) {
-          fprintf(con, "Adding %12.0f ", double(p->second.esize));
-          printUTF8(p->first.c_str(), con);
-        }
-        else {
-          fprintf(con, "Updating %12.0f ", double(p->second.esize));
-          printUTF8(p->first.c_str(), con);
-        }
-        if (p->first!=filename) {
-          fprintf(con, " from ");
-          printUTF8(filename.c_str(), con);
-        }
-        fprintf(con, "\n");
+      if (p->first!=filename) {
+        fprintf(con, " from ");
+        printUTF8(filename.c_str(), con);
       }
+      fprintf(con, "\n");
     }
 
-    // Read a fragment
+    // Read fragments
     assert(in.isopen());
-    int c=0;  // current byte
-    int c1=0;  // previous byte
-    unsigned h=0;  // rolling hash for finding fragment boundaries
-    unsigned sz=0;  // fragment size;
-    libzpaq::SHA1 sha1;
-    unsigned char o1[256]={0};
-    unsigned hits=0;
-    while (true) {
-      c=in.get();
-      if (c!=EOF) {
-        if (c==o1[c1]) h=(h+c+1)*314159265u, ++hits;
-        else h=(h+c+1)*271828182u;
-        o1[c1]=c;
-        c1=c;
-        sha1.put(c);
-        fragbuf[sz++]=c;
+    for (unsigned fj=0; true; ++fj) {
+      int c=0;  // current byte
+      int c1=0;  // previous byte
+      unsigned h=0;  // rolling hash for finding fragment boundaries
+      int64_t sz=0;  // fragment size;
+      libzpaq::SHA1 sha1;
+      unsigned char o1[256]={0};
+      unsigned hits=0;
+      while (true) {
+        c=in.get();
+        if (c!=EOF) {
+          if (c==o1[c1]) h=(h+c+1)*314159265u, ++hits;
+          else h=(h+c+1)*271828182u;
+          o1[c1]=c;
+          c1=c;
+          sha1.put(c);
+          fragbuf[sz++]=c;
+        }
+        if (c==EOF || (h<(1u<<22>>fragment) && sz>=MIN_FRAGMENT)
+           || sz>=MAX_FRAGMENT)
+          break;
       }
-      if (c==EOF || (h<(1u<<22>>fragment) && sz>=MIN_FRAGMENT)
-         || sz>=MAX_FRAGMENT)
+      assert(sz<=MAX_FRAGMENT);
+      inputsize+=sz;
+
+      // Look for matching fragment
+      char sh[20];
+      assert(uint64_t(sz)==sha1.usize());
+      memcpy(sh, sha1.result(), 20);
+      unsigned htptr=htinv.find(sh);
+      if (htptr==0) {  // not matched
+
+        // Analyze fragment for redundancy, x86, text.
+        // Test for text: letters, digits, '.' and ',' followed by spaces
+        //   and no invalid UTF-8.
+        // Text for exe: 139 (mov reg, r/m) in lots of contexts.
+        // 4 tests for redundancy, measured as hits/sz. Take the highest of:
+        //   1. Successful prediction count in o1.
+        //   2. Non-uniform distribution in o1 (counted in o2).
+        //   3. Fraction of zeros in o1 (bytes never seen).
+        //   4. Fraction of matches between o1 and previous o1 (o1prev).
+        int text1=0, exe1=0;
+        int64_t h1=sz;
+        unsigned char o1ct[256]={0};  // counts of bytes in o1
+        static const unsigned char dt[256]={  // 32768/((i+1)*204)
+          160,80,53,40,32,26,22,20,17,16,14,13,12,11,10,10,
+            9, 8, 8, 8, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5,
+            4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3,
+            3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+        for (int i=0; i<256; ++i) {
+          if (o1ct[o1[i]]<255) h1-=(sz*dt[o1ct[o1[i]]++])>>15;
+          if (o1[i]==' ' && (isalnum(i) || i=='.' || i==',')) ++text1;
+          if (o1[i] && (i<9 || i==11 || i==12 || (i>=14 && i<=31) || i>=240))
+            --text1;
+          if (i>=192 && i<240 && o1[i] && (o1[i]<128 || o1[i]>=192))
+            --text1;
+          if (o1[i]==139) ++exe1;
+        }
+        text1=(text1>=3);
+        exe1=(exe1>=5);
+        if (sz>0) h1=h1*h1/sz; // Test 2: near 0 if random.
+        unsigned h2=h1;
+        if (h2>hits) hits=h2;
+        h2=o1ct[0]*sz/256;  // Test 3: bytes never seen or that predict 0.
+        if (h2>hits) hits=h2;
+        h2=0;
+        for (int i=0; i<256*ON; ++i)  // Test 4: compare to previous o1.
+          h2+=o1prev[i]==o1[i&255];
+        h2=h2*sz/(256*ON);
+        if (h2>hits) hits=h2;
+        if (hits>sz) hits=sz;
+
+        // Start a new block if the current block is almost full, or at
+        // the start of a file that won't fit or doesn't share mutual
+        // information with the current block.
+        bool newblock=false;
+        if (frags>0 && fj==0) {
+          const unsigned newsize=sb.size()+p->second.esize
+               +(p->second.esize>>(8+fragment))+4096+frags*4; // size if added
+          if (newsize>blocksize/4 && redundancy<sb.size()/128) newblock=true;
+          if (newblock) {  // test for mutual information
+            unsigned ct=0;
+            for (unsigned i=0; i<256*ON; ++i)
+              if (o1prev[i] && o1prev[i]==o1[i&255]) ++ct;
+            if (ct>ON*2) newblock=false;
+          }
+          if (newsize>=blocksize) newblock=true;  // won't fit?
+        }
+        if (sb.size()+sz+80+frags*4>=blocksize) newblock=true; // full?
+        if (frags<1) newblock=false;  // block is empty?
+
+        // Pad sb with fragment size list unless fragile, then compress
+        if (newblock) {
+          assert(sb.size()>0);
+          assert(frags>0);
+          assert(frags<ht.size());
+          for (unsigned i=ht.size()-frags; !fragile && i<ht.size(); ++i)
+            sb+=itob(ht[i].usize);  // list of frag sizes
+          sb+=itob(0); // omit first frag ID to make block movable
+          sb+=itob(frags*!fragile);  // number of frags
+          job.write(sb,
+              ("jDC"+itos(date, 14)+"d"+itos(ht.size()-frags, 10)).c_str(),
+              method,
+              redundancy/(sb.size()/256+1)*4+(exe>frags)*2+(text>frags));
+          assert(sb.size()==0);
+          ht[ht.size()-frags].csize=-1;  // mark block start
+          frags=redundancy=text=exe=0;
+          memset(o1prev, 0, sizeof(o1prev));
+        }
+
+        // Append fragbuf to sb and update block statistics
+        sb.write(&fragbuf[0], sz);
+        ++frags;
+        redundancy+=hits;
+        exe+=exe1*4;
+        text+=text1*2;
+        if (sz>=MIN_FRAGMENT) {
+          memmove(o1prev, o1prev+256, 256*(ON-1));
+          memcpy(o1prev+256*(ON-1), o1, 256);
+        }
+      }  // end if not matched
+
+      // Point file to this fragment
+      if (htptr==0) {  // not matched in ht
+        htptr=ht.size();
+        ht.push_back(HT(sh, sz, 0));
+        htinv.update();
+      }
+      else
+        total_size-=sz;
+      p->second.eptr.push_back(htptr);
+
+      if (c==EOF)
         break;
-    }
-    assert(sz<=MAX_FRAGMENT);
-    sb.write(&fragbuf[0], sz);
-    inputsize+=sz;
+    }  // end for each fragment
+    in.close();
+  }  // end for each file
 
-    // Look for matching fragment
-    char sh[20];
-    assert(sz==sha1.usize());
-    memcpy(sh, sha1.result(), 20);
-    unsigned j=htinv.find(sh);
-    if (j==0) {  // not matched, add 
-      j=ht.size();
-      ht.push_back(HT(sh, sz, 0));
-      ++frags;
-      htinv.update();
-
-      // Analyze fragment for redundancy, x86, text.
-      // Test for text: letters, digits, '.' and ',' followed by spaces
-      //   and no unprintable control chars.
-      // Text for exe: 139 (mov reg, r/m) in lots of contexts.
-      // 4 tests for redundancy, measured as hits/sz. Take the highest of:
-      //   1. Successful prediction count in o1.
-      //   2. Non-uniform distribution in o1 (counted in o2).
-      //   3. Fraction of zeros in o1 (bytes never seen).
-      //   4. Fraction of matches between o1 and previous o1 (o1prev).
-      int text1=0, exe1=0;
-      int64_t h1=sz;
-      unsigned char o1ct[256]={0};  // counts of bytes in o1
-      static const unsigned char dt[256]={  // 32768/((i+1)*204)
-        160,80,53,40,32,26,22,20,17,16,14,13,12,11,10,10,
-          9, 8, 8, 8, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5,
-          4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3,
-          3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-          2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-      for (int i=0; i<256; ++i) {
-        if (o1ct[o1[i]]<255) h1-=(sz*dt[o1ct[o1[i]]++])>>15;
-        if (o1[i]==' ' && (isalnum(i) || i=='.' || i==',')) ++text1;
-        if (o1[i]>=1 && o1[i]<32 && o1[i]!=9 && o1[i]!=10 && o1[i]!=13)
-          --text1;
-        if (o1[i]==139) ++exe1;
-      }
-      exe+=exe1>=5;
-      text+=text1>=5;
-      if (sz>0) h1=h1*h1/sz; // Test 2: near 0 if random.
-      unsigned h2=h1;
-      if (h2>hits) hits=h2;
-      h2=o1ct[0]*sz/256;  // Test 3: bytes never seen or that predict 0.
-      if (h2>hits) hits=h2;
-      h2=0;
-      for (int i=0; i<256*ON; ++i)  // Test 4: compare to previous o1.
-        h2+=o1prev[i]==o1[i&255];
-      h2=h2*sz/(256*ON);
-      if (sz>=MIN_FRAGMENT) {
-        memmove(o1prev, o1prev+256, 256*(ON-1));
-        memcpy(o1prev+256*(ON-1), o1, 256);
-      }
-      if (h2>hits) hits=h2;
-      if (hits>sz) hits=sz;
-      redundancy+=hits;
-    }
-    else { // matched, discard
-      total_size-=sz;
-      assert(sz<=sb.size());
-      sb.resize(sb.size()-sz);
-    }
-
-    // Point file to this fragment
-    vector<unsigned>& eptr=vf[fi]->second.eptr;
-    while (eptr.size()<=fj) eptr.push_back(0);
-    eptr[fj++]=j;
-
-    // Close file at EOF
-    if (c==EOF) {
-      in.close();
-      ++fi;
-      fj=0;
-    }
+  // Compress any remaining data
+  if (frags>0) {
+    assert(frags<ht.size());
+    for (unsigned i=ht.size()-frags; !fragile && i<ht.size(); ++i)
+      sb+=itob(ht[i].usize);
+    sb+=itob(0);
+    sb+=itob(frags*!fragile);
+    job.write(sb,
+        ("jDC"+itos(date, 14)+"d"+itos(ht.size()-frags, 10)).c_str(),
+        method,
+        redundancy/(sb.size()/256+1)*4+(exe>frags)*2+(text>frags));
+    assert(sb.size()==0);
+    ht[ht.size()-frags].csize=-1;
   }
 
   // Wait for jobs to finish
-  assert(frags==0);
-  assert(fi==vf.size());
-  assert(fj==0);
   assert(sb.size()==0);
-  assert(!in.isopen());
   job.write(sb, 0, "");  // signal end of input
   for (int i=0; i<size(tid); ++i)
     join(tid[i]);
@@ -5002,7 +5276,7 @@ int Jidac::add() {
     const DT& dtr=p->second;
 
     // Remove file if external does not exist and is currently in archive
-    if (dtr.written==0 && !dtr.edate && dtr.dtv.size()
+    if (!nodelete && dtr.written==0 && !dtr.edate && dtr.dtv.size()
         && dtr.dtv.back().date) {
       is+=ltob(0)+p->first+'\0';
       if (quiet<=dtr.dtv.back().size) {
@@ -5100,59 +5374,6 @@ bool Jidac::equal(DTMap::const_iterator p) {
   return true;
 }
 
-// Create directories as needed. For example if path="/tmp/foo/bar"
-// then create directories /, /tmp, and /tmp/foo unless they exist.
-// Set date and attributes if not 0.
-void makepath(string path, int64_t date=0, int64_t attr=0) {
-  for (int i=0; i<size(path); ++i) {
-    if (path[i]=='\\' || path[i]=='/') {
-      path[i]=0;
-#ifdef unix
-      int ok=!mkdir(path.c_str(), 0777);
-#else
-      int ok=CreateDirectory(utow(path.c_str(), true).c_str(), 0);
-#endif
-      if (ok && quiet<=0) {
-        fprintf(con, "Created directory ");
-        printUTF8(path.c_str(), con);
-        fprintf(con, "\n");
-      }
-      path[i]='/';
-    }
-  }
-
-  // Set date and attributes
-  string filename=path;
-  if (filename!="" && filename[filename.size()-1]=='/')
-    filename=filename.substr(0, filename.size()-1);  // remove trailing slash
-#ifdef unix
-  if (date>0) {
-    struct utimbuf ub;
-    ub.actime=time(NULL);
-    ub.modtime=unix_time(date);
-    utime(filename.c_str(), &ub);
-  }
-  if ((attr&255)=='u')
-    chmod(filename.c_str(), attr>>8);
-#else
-  for (int i=0; i<size(filename); ++i)  // change to backslashes
-    if (filename[i]=='/') filename[i]='\\';
-  if (date>0) {
-    HANDLE out=CreateFile(utow(filename.c_str(), true).c_str(),
-                          FILE_WRITE_ATTRIBUTES, 0, NULL, OPEN_EXISTING,
-                          FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    if (out!=INVALID_HANDLE_VALUE) {
-      setDate(out, date);
-      CloseHandle(out);
-    }
-    else winError(filename.c_str());
-  }
-  if ((attr&255)=='w') {
-    SetFileAttributes(utow(filename.c_str(), true).c_str(), attr>>8);
-  }
-#endif
-}
-
 // An extract job is a set of blocks with at least one file pointing to them.
 // Blocks are extracted in separate threads, set READY -> WORKING.
 // A block is extracted to memory up to the last fragment that has a file
@@ -5194,7 +5415,7 @@ struct ExtractJob {         // list of jobs
 ThreadReturn decompressThread(void* arg) {
   ExtractJob& job=*(ExtractJob*)arg;
   int jobNumber=0;
-  InputFile in;
+  Archive in;
   const bool istest=job.jd.command=="-test";  // do not open or write files?
 
   // Get job number
@@ -5567,7 +5788,7 @@ int Jidac::extract() {
   for (int i=0; i<size(tid); ++i) run(tid[i], decompressThread, &job);
 
   // Decompress streaming files in a single thread
-  InputFile in;
+  Archive in;
   if (!in.open(archive.c_str(), password)) return 1;
   OutputFile out;
   DTMap::iterator p=dt.end();  // currently open output file (initially none)
@@ -6022,9 +6243,45 @@ int setFilename(char* s, int n, int64_t date, unsigned num) {
 void Jidac::purge() {
 
   // Check -to option
-  if (size(tofiles)!=1) error("Missing: -to archive (may be same)");
+  Archive in, out;
+  Counter counter;
+  libzpaq::Writer* outp=&out;
+  if (size(tofiles)!=1) error("Missing: -to new_archive");
+  string output=tofiles[0];
+  if (output=="")
+    outp=&counter;
+  else if (size(output)<5 || output.substr(output.size()-5)!=".zpaq")
+    output+=".zpaq";
+  for (int i=0; i<size(output); ++i)
+    if (output[i]=='?' || output[i]=='*')
+      error("Output archive cannot be multi-part");
+  if (output==archive)
+    error("Cannot purge to self");
+  else if (!force && exists(output, 1))
+    error("Output archive already exists");
 
-  // Read archive
+  // Copy only, possibly with concatenation or a different key
+  if (all) {
+    if (!in.open(archive.c_str(), password, 'r'))
+      error("archive not found");
+    if (!out.open(output.c_str(), new_password, 'w', 0))
+      error("cannot create output archive");
+    int n;
+    char buf[1<<14];
+    while ((n=in.read(buf, 1<<14))>0)
+      out.write(buf, n);
+    if (quiet<MAX_QUIET) {
+      printUTF8(archive.c_str(), con);
+      fprintf(con, " %1.0f -> ", in.tell()+0.0);
+      printUTF8(output.c_str(), con);
+      fprintf(con, " %1.0f\n", out.tell()+0.0);
+    }
+    out.close();
+    in.close();
+    return;
+  }
+
+  // Read archive to purge
   int errors=0;
   const int64_t archive_size=read_archive(&errors);
   if (archive_size==0) return;
@@ -6125,9 +6382,7 @@ void Jidac::purge() {
         double(deleted_bytes), deleted_blocks);
 
   // Open input
-  InputFile in;
-  in.open(archive.c_str(), password);
-  if (!in.isopen()) return;
+  if (!in.open(archive.c_str(), password, 'r')) return;
 
   // Test blocks. They should start with "7kS" or "zPQ" and end with 0xff.
   for (unsigned i=1; i<blist.size(); ++i) {
@@ -6144,25 +6399,11 @@ void Jidac::purge() {
   if (quiet<MAX_QUIET)
     fprintf(con, "%d block locations test OK\n", size(blist)-1);
 
-  // Open output.zpaq or self for output
-  OutputFile out;
-  Counter counter;
-  libzpaq::Writer* outp=&out;
+  // Open output.zpaq for output
   assert(size(tofiles)==1);
-  string output=tofiles[0];
-  if (output=="")
-    outp=&counter;
-  else if (size(output)<5 || output.substr(output.size()-5)!=".zpaq")
-    output+=".zpaq";
-  if (output==archive) {
-    in.close();
-    out.open(archive.c_str(), password);
-    if (!out.isopen()) error("file open failed");
-    out.seek(32*(password!=0), SEEK_SET);
-  }
-  else if (output!="") {
-    if (!out.open(output.c_str(), password)) error("Archive open failed");
-    out.truncate(32*(password!=0));
+  if (output!="") {
+    if (!out.open(output.c_str(), new_password, 'w', 0))
+      error("Archive open failed");
   }
 
   // Write temporary header
@@ -6171,73 +6412,38 @@ void Jidac::purge() {
   // Copy referenced data blocks
   const int N=1<<17;
   libzpaq::Array<char> buf(N);
-  if (output==archive) {  // copy to self
-    int64_t wpos=out.tell();
-    for (unsigned i=1; i<blist.size(); ++i) {
-      if (blist[i].used) {
-        int64_t rpos=blist[i].start;
-        if (wpos>rpos)
-          error("attempt to move block forward (archive destroyed, sorry)");
-        while (rpos<blist[i].end) {
-          out.seek(rpos, SEEK_SET);
-          int64_t sz=blist[i].end-rpos;
-          if (sz>N) sz=N;
-          int n=out.read(&buf[0], int(sz));
-          if (n<=0) error("unexpected EOF (archive destroyed, sorry)");
-          assert(n>0 && n<=N);
-          if (rpos==blist[i].start) {
-            assert(blist[i].firstFragment<fmap.size());
-            assert(fmap[blist[i].firstFragment]>0);
-            int e=setFilename(&buf[0], n, date, fmap[blist[i].firstFragment]);
-            if (e) {
-              fprintf(stderr, "Warning %d updating d block %d -> %d\n",
-                  e, blist[i].firstFragment, fmap[blist[i].firstFragment]);
-            }
+  const int64_t cdatastart=out.tell();
+  for (unsigned i=1; i<blist.size(); ++i) {
+    if (blist[i].used) {
+      in.seek(blist[i].start, SEEK_SET);
+      int n=0;
+      bool first=true;
+      for (int64_t j=blist[i].start; j<=blist[i].end; ++j) {
+        if (n==N || (n>0 && j==blist[i].end)) {
+          if (first) {
+            unsigned f=blist[i].firstFragment;
+            if (f<1 || f>=fmap.size())
+              error("blist[i].firstFragment out of range");
+            f=fmap[f];
+            if (f<1) error("unmapped firstFragment");
+            if (setFilename(&buf[0],n, date, f))
+              error("d block filename update failed");
+            first=false;
           }
-          out.seek(wpos, SEEK_SET);
-          out.write(&buf[0], n);
-          rpos+=n;
-          wpos+=n;
+          outp->write(&buf[0], n);
+          n=0;
+        }
+        assert(n<N);
+        if (j<blist[i].end) {
+          int c=in.get();
+          if (c==EOF) error("unexpected EOF");
+          buf[n++]=c;
         }
       }
     }
   }
-
-  // Purge in to out
-  else {
-    for (unsigned i=1; i<blist.size(); ++i) {
-      if (blist[i].used) {
-        in.seek(blist[i].start, SEEK_SET);
-        int n=0;
-        bool first=true;
-        for (int64_t j=blist[i].start; j<=blist[i].end; ++j) {
-          if (n==N || (n>0 && j==blist[i].end)) {
-            if (first) {
-              unsigned f=blist[i].firstFragment;
-              if (f<1 || f>=fmap.size())
-                error("blist[i].firstFragment out of range");
-              f=fmap[f];
-              if (f<1) error("unmapped firstFragment");
-              if (setFilename(&buf[0],n, date, f))
-                error("d block filename update failed");
-              first=false;
-            }
-            outp->write(&buf[0], n);
-            n=0;
-          }
-          assert(n<N);
-          if (j<blist[i].end) {
-            int c=in.get();
-            if (c==EOF) error("unexpected EOF");
-            buf[n++]=c;
-          }
-        }
-      }
-    }
-    in.close();
-  }
-  const int64_t cdatasize=(outp==&out ? out.tell() : counter.pos)-hdr.size()
-    -32*(password!=0);
+  in.close();
+  const int64_t cdatasize=out.tell()-cdatastart;
 
   // Write fragment tables
   StringBuffer is;
@@ -6296,10 +6502,9 @@ void Jidac::purge() {
   int64_t new_archive_size=0;
   if (outp==&out) {
     new_archive_size=out.tell();
-    out.truncate(new_archive_size);
-    out.seek(32*(password!=0), SEEK_SET);
+    out.seek(32*(new_password!=0), SEEK_SET);
     writeJidacHeader(&out, date, cdatasize, 1);
-    if (out.tell()!=size(hdr)+32*(password!=0))
+    if (out.tell()!=size(hdr)+32*(new_password!=0))
       error("output header wrong size");
     out.close();
   }
@@ -6308,349 +6513,6 @@ void Jidac::purge() {
   if (quiet<MAX_QUIET)
     fprintf(con, "%1.0f -> %1.0f\n",
         double(archive_size), double(new_archive_size));
-}
-
-/////////////////////////////// encrypt ///////////////////////////////
-
-// Encrypt archive to tofiles[0].zpaq with new_password.
-void Jidac::encrypt() {
-
-  // Test args
-  if (size(tofiles)<1)
-    error("Missing: -to output.zpaq new password");
-
-  // Open input
-  InputFile in;
-  if (!in.open(archive.c_str(), password))
-    error("archive not found");
-
-  // Test password
-  string s;
-  for (int i=0; i<4; ++i) s+=in.get();
-  if (s!="zPQ\x01" && s!="zPQ\x02" && s!="zPQ\x03" && s!="7kSt")
-    error("password incorrect");
-  in.seek(32*(password!=0), SEEK_SET);
-
-  // Get output file name
-  string new_archive=tofiles[0];
-  if (size(new_archive)<5
-     || new_archive.substr(size(new_archive)-5)!=".zpaq")
-    new_archive+=".zpaq";
-
-  // Encrypt to new file if different
-  if (archive!=new_archive) {
-    if (delete_file(new_archive.c_str()) && quiet<MAX_QUIET)
-      fprintf(con, "Deleting %s\n", new_archive.c_str());
-    OutputFile out;
-    if (!out.open(new_archive.c_str(), new_password))
-      error("cannot create new archive");
-
-    // Copy
-    int c;
-    while ((c=in.get())!=EOF) out.put(c);
-    out.close();
-    in.close();
-    if (quiet<MAX_QUIET)
-      fprintf(con, "Created %s\n", new_archive.c_str());
-    return;
-  }
-
-  // Nothing to encrypt
-  in.close();
-  if (!password && !new_password) {
-    if (quiet<MAX_QUIET)
-      fprintf(con, "%s unchanged\n", archive.c_str());
-    return;
-  }
-
-  // Encrypt in place
-  OutputFile out;
-  if (!out.open(archive.c_str()))
-    error("archive not found");
-
-  // Read and create salt and stretch keys
-  char salt[2][32]={{0}};  // input and output salt
-  char key[2][32]={{0}};   // input and output key
-  out.seek(0, SEEK_SET);
-  if (password) {
-    if (out.read(salt[0], 32)!=32) error("missing salt");
-    libzpaq::stretchKey(key[0], password, salt[0]);
-  }
-  if (new_password) {
-    random(salt[1], 32);
-    libzpaq::stretchKey(key[1], new_password, salt[1]);
-  }
-
-  // Encrypt
-  int64_t off=0;  // position in file
-  libzpaq::AES_CTR aes0(key[0], 32, salt[0]);  // read key
-  libzpaq::AES_CTR aes1(key[1], 32, salt[1]);  // write key
-  const int BUFSIZE=1<<14;
-  char buf[BUFSIZE];
-  if (password && new_password) {  // change key and salt
-    while (true) {
-      out.seek(off, SEEK_SET);
-      int r=out.read(buf, BUFSIZE);
-      if (r<1) break;
-      aes0.encrypt(buf, r, off);
-      aes1.encrypt(buf, r, off);
-      out.seek(off, SEEK_SET);
-      if (off==0) memcpy(buf, salt[1], 32);
-      out.write(buf, r);
-      off+=r;
-    }
-    if (quiet<MAX_QUIET)
-      fprintf(con, "Password changed for %s\n", archive.c_str());
-  }
-  else if (password) {  // remove key and decrypt
-    off=32;
-    while (true) {
-      out.seek(off, SEEK_SET);
-      int r=out.read(buf, BUFSIZE);
-      if (r<1) break;
-      aes0.encrypt(buf, r, off);
-      off-=32;
-      out.seek(off, SEEK_SET);
-      out.write(buf, r);
-      off+=r+32;
-    }
-    out.truncate(off-32);
-    if (quiet<MAX_QUIET)
-      fprintf(con, "Password removed from %s\n", archive.c_str());
-  }
-  else {  // insert salt and encrypt
-    memcpy(buf, salt[1], 32);
-    while (true) {
-      out.seek(off, SEEK_SET);
-      int r=out.read(buf+32, BUFSIZE-32);
-      out.seek(off, SEEK_SET);
-      if (r>0) {
-        aes1.encrypt(buf+32, r, off+32);
-        out.write(buf, r);
-        off+=r;
-        memmove(buf, buf+r, 32);
-      }
-      else {
-        out.write(buf, 32);
-        break;
-      }
-    }
-    if (quiet<MAX_QUIET)
-      fprintf(con, "Password added to %s\n", archive.c_str());
-  }
-  out.close();
-}
-
-/////////////////////////////// split /////////////////////////////////
-
-// In s substitute wildcards * with n and ? with a digit of n
-string subn(const string& s, int n) {
-  string r="";
-  for (int i=size(s)-1; i>=0; --i) {
-    if (s[i]=='*') r=itos(n)+r, n=0;
-    else if (s[i]=='?') r=char(n%10+'0')+r, n/=10;
-    else r=s[i]+r;
-  }
-  return r;
-}
-
-// Append versions in since..until or until-since+1..until (if since < 0
-// default -1) to tofiles[0] or archive+".part?????" and replace
-// wildcards * with version number or ? with single digits.
-// -force overwrites, else appends.
-
-void Jidac::split() {
-  if (size(files)>0 && size(tofiles)==0) tofiles.push_back(files[0]);
-  if (size(tofiles)<1) tofiles.push_back(archive+".part?????");
-  const int64_t csize=read_archive();
-  if (since==0) since=-1;
-  if (since<0) since+=ver.size();
-  if (since<1) since=1;
-  if (size(ver)>1) ver[1].offset=0;
-
-  // If force then delete output files
-  if (force) {
-    for (int i=since; i<size(ver); ++i) {
-      string fn=subn(tofiles[0], i);
-      delete_file(fn.c_str());
-    }
-  }
-
-  // Copy versions
-  InputFile in;
-  if (!in.open(archive.c_str())) return;
-  for (int i=since; i<size(ver); ++i) {
-    int64_t versize=(i>=size(ver)-1 ? csize : ver[i+1].offset)-ver[i].offset;
-    string fn=subn(tofiles[0], i);
-    makepath(fn);
-    OutputFile out;
-    if (!out.open(fn.c_str())) continue;
-    int c;
-    int64_t j, outpos=out.tell();
-    if (!force && outpos!=0 && outpos!=ver[i].offset) {
-      out.close();
-      error("output size is wrong");
-    }
-    in.seek(ver[i].offset, SEEK_SET);
-    for (j=ver[i].offset; j<ver[i].offset+versize && (c=in.get())!=EOF; ++j)
-      out.put(c);
-    if (versize>=quiet) {
-      printUTF8(archive.c_str(), con);
-      fprintf(con, " [%1.0f..%1.0f] ver %d -> ", ver[i].offset+0.0, j-1.0, i);
-      printUTF8(fn.c_str(), con);
-      fprintf(con, " [%1.0f..%1.0f]\n",
-        outpos+0.0, outpos+j-ver[i].offset-1.0);
-    }
-    out.close();
-  }
-  in.close();
-}
-
-/////////////////////////////// join //////////////////////////////////
-
-void Jidac::join_split() {
-
-  // Read archive and names of files to join
-  const int64_t csize=(archive=="") ? 0 : read_archive();
-  read_args(true);
-
-  // Test that version dates are in order and that fragment IDs are contiguous
-  if (!force) {
-
-    // Get date, frag from archive
-    unsigned hpos=ht.size();  // next fragment ID expected
-    int64_t dpos=0;
-    if (ver.size()>0) dpos=ver.back().date;  // latest version date
-    if (quiet<MAX_QUIET)
-      fprintf(con,
-          "   File size   Previous end date   Fragment   File name\n"
-          "-------------- ------------------- ---------- ---------\n");
-    if (csize>=quiet) {
-      fprintf(con, "%14.0f %s %10d ",
-          csize+0.0, "                   ", 1);
-      printUTF8(archive.c_str(), con);
-      fprintf(con, "\n");
-    }
-
-    // Get salt from encrypted archive and set up key
-    libzpaq::AES_CTR* aes=0;
-    int64_t eoff=0;
-    if (password && csize>=32) {
-      InputFile in;
-      if (in.open(archive.c_str())) {
-        char salt[32];
-        if (in.read(salt, 32)==32) {
-          char key[32];
-          libzpaq::stretchKey(key, password, salt);
-          aes=new libzpaq::AES_CTR(key, 32, salt);
-          eoff=csize;
-        }
-        in.close();
-      }
-    }
-
-    // Scan files
-    for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
-      if (p->second.written!=0 || p->second.edate==0
-          || p->first=="" || p->first[p->first.size()-1]=='/')
-        continue;  // skip directories
-      if (p->second.esize>=quiet) {
-        fprintf(con, "%14.0f %s %10d ",
-            p->second.esize+0.0, dateToString(dpos).c_str(), hpos);
-          printUTF8(p->first.c_str(), con);
-        fprintf(con, "\n");
-      }
-
-      // Get encryption salt from first file
-      InputFile in;
-      if (password && eoff<32 && !aes && in.open(p->first.c_str())) {
-        char salt[32], key[32];
-        in.read(salt, 32);
-        libzpaq::stretchKey(key, password, salt);
-        aes=new libzpaq::AES_CTR(key, 32, salt);
-        in.close();
-      }
-
-      // Input files must be in ZPAQ journaling format.
-      // Scan segment headers. Names must be of the form
-      // "jDCYYYYMMDDHHMMSSxNNNNNNNNNN" in ascending order.
-      // If x is h, then N must equal hpos and YYYYMMDDHHMMSS > dpos.
-      // Then update dpos=YYYYMMSSHHMMSS and add hsize to hpos.
-      // where hsize is from the uncompressed comment size (comment-4)/24
-
-      if (!in.open(p->first.c_str(), 0, aes, eoff))
-        error("cannot read file");
-      if (aes && eoff<32) in.seek(32, SEEK_SET);
-      ++dpos;
-      libzpaq::Decompresser d;
-      d.setInput(&in);
-      bool found=false;
-      while (d.findBlock()) {
-        StringWriter filename, comment;
-        while (d.findFilename(&filename)) {
-          found=true;
-          d.readComment(&comment);
-
-          // Test for journaling format
-          if (size(filename.s)!=28
-              || filename.s.substr(0, 3)!="jDC"
-              || size(comment.s)<5
-              || comment.s.substr(comment.s.size()-5)!=" jDC\x01")
-            error("not in ZPAQ journaling format");
-
-          // Test for dates in order
-          int64_t hdate=0;  // read date from filename
-          for (int i=3; i<17; ++i) {
-            if (!isdigit(filename.s[i])) error("non-digit in date");
-            hdate=hdate*10+filename.s[i]-'0';
-          }
-          if (hdate<dpos) error("dates out of order");
-          dpos=hdate;
-
-          // Test for contiguous fragments
-          if (filename.s[17]=='h') {
-            unsigned hfrag=0;
-            for (int i=18; i<28; ++i) {
-              if (!isdigit(filename.s[i])) error("non-digit in frag ID");
-              hfrag=hfrag*10+filename.s[i]-'0';
-            }
-            if (hfrag!=hpos) error("fragments out of order");
-            hpos+=(atoi(comment.s.c_str())-4)/24;
-          }
-
-          filename.s="";
-          comment.s="";
-          d.readSegmentEnd();
-        }
-      }
-      if (aes) eoff+=in.tell();
-      in.close();
-      if (!found) error("Not a ZPAQ file");
-    }
-    if (aes) delete aes;
-  }
-
-  // Concatenate
-  if (archive=="") return;
-  OutputFile out;
-  if (!out.open(archive.c_str())) error("cannot append archive");
-  out.truncate(csize);
-  for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
-    if (p->second.written!=0 || p->second.edate==0
-        || p->first=="" || p->first[p->first.size()-1]=='/')
-      continue;  // skip directories
-    InputFile in;
-    if (!in.open(p->first.c_str())) error("cannot read file");
-    int c;
-    while ((c=in.get())!=EOF) out.put(c);
-    in.close();
-  }
-  int64_t newsize=out.tell();
-  out.close();
-  if (newsize>=quiet) {
-    printUTF8(archive.c_str(), con);
-    fprintf(con, " %1.0f -> %1.0f\n", csize+0.0, newsize+0.0);
-  }
 }
 
 /////////////////////////////// main //////////////////////////////////
