@@ -1,0 +1,18 @@
+OBJECTS=zpaq.o libzpaq.o divsufsort.o
+
+BINARY=zpaq
+
+CXXFLAGS=-Wall -O1 -DNDEBUG -Dunix -m64 -fopenmp
+CXX=g++
+
+all: $(BINARY)
+
+$(BINARY): $(OBJECTS)
+	g++ -o $@ $^
+
+clean:
+	rm -f $(BINARY) $(OBJECTS)
+help:
+	@echo Targets are: all, clean
+
+.PHONY: all clean help
