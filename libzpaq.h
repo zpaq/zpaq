@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.43 header - Dec. 20, 2013.
+/* libzpaq.h - LIBZPAQ Version 6.51 header - Apr. 3, 2014.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -599,7 +599,7 @@ void Array<T>::resize(size_t sz, int ex) {
   const size_t nb=128+n*sizeof(T);  // test for overflow
   if (nb<=128 || (nb-128)/sizeof(T)!=n) error("Array too big");
   data=(T*)::calloc(nb, 1);
-  if (!data) error("Out of memory");
+  if (!data) n=0, error("Out of memory");
   offset=64-(((char*)data-(char*)0)&63);
   assert(offset>0 && offset<=64);
   data=(T*)((char*)data+offset);

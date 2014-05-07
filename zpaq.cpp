@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.50"
+#define ZPAQ_VERSION "6.51"
 
 /*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
 
@@ -222,6 +222,21 @@ allowed as with extract (/ is matched). For example:
   zpaq a archive foo -not foo/bar    Add directory foo except foo/bar
   zpaq a archive foo -not *bar*      Add foo except any file containing "bar"
 
+If the argument starts with : any string starting with + or - followed by
+d,a,A,s,h,r,i mean to exclude files where all of the corresponding Windows
+attributes (directory, archive, system, hidden, read-only, index) are
+set (+) or not set (-) respectively. For example:
+
+  -not :+hs :+d-a
+
+means to exclude files with both the hidden and system attributes are set
+and to exclude directories where the archive bit is not set. If the first
+attribte is A (like -not :-Ad) then it means to also clear the archive
+bit both internally and externally when adding, thus implementing the
+intended meaning of this bit.
+
+In Linux, the possible attributes are d for directory and rwx for user
+read, write, and execute permission (regardless of owner).
 
   -to
 
@@ -809,6 +824,7 @@ using std::max;
 // Handle errors in libzpaq and elsewhere
 void libzpaq::error(const char* msg) {
   fprintf(stderr, "zpaq error: %s\n", msg);
+  if (strstr(msg, "ut of memory")) throw std::bad_alloc();
   throw std::runtime_error(msg);
 }
 using libzpaq::error;
@@ -2068,7 +2084,7 @@ class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
 public:
 
   // Direct access to data
-  unsigned char* data() {assert(p); return p;}
+  unsigned char* data() {assert(p || wpos==0); return p;}
 
   // Allocate no memory initially
   StringBuffer(size_t n=0):
@@ -2186,6 +2202,56 @@ bool ispath(const char* a, const char* b) {
       return false;
   }
   return *b==0 || *b=='/';
+}
+
+// Return true if Windows attributes encoded in attr (as in DT)
+// matches the specification in s (as in -not option). s is a string
+// like ":+da-shr+i" which means return true if the directory, archive
+// and index attributes are set and system, hidden, and readonly are clear.
+// To match, attr must be 'w' in the LSB followed by Windows attribute
+// bits d,a,s,h,r,i in 4,5,2,1,0,13 in the next higher 16 bits.
+// In Linux the attributes are 'u' in the LSB followed by d,r,w,x
+// (bits 14,8,7,6) for directory and user read, write, and execute
+// permission (regardless of owner).
+bool isattr(const char* s, int64_t attr) {
+  if (!s || *s!=':') return false;
+  int mode=0;
+  for (++s; *s; ++s) {
+    int bit=-1;
+    if ((attr&255)=='w') {  // Windows attributes
+      switch(*s) {
+        case '+':
+        case '-':
+          mode=*s; break;
+        case 'd': bit=4; break;
+        case 'A':
+        case 'a': bit=5; break;
+        case 's': bit=2; break;
+        case 'h': bit=1; break;
+        case 'r': bit=0; break;
+        case 'i': bit=13; break;
+      }
+    }
+    else if ((attr&255)=='u') {  // Unix attributes
+      switch(*s) {
+        case '+':
+        case '-':
+          mode=*s; break;
+        case 'd': bit=14; break;
+        case 'r': bit=8; break;
+        case 'w': bit=7; break;
+        case 'x': bit=6; break;
+      }
+    }
+    else
+      return false;
+    if (bit>=0) {
+      bit=(attr>>(bit+8))&1;
+      if (mode=='+' && !bit) return false;
+      if (mode=='-' && bit) return false;
+    }
+  }
+  return true;
 }
 
 // Convert string to lower case
@@ -2408,6 +2474,7 @@ private:
   bool noattributes;        // -noattributes option
   bool nodelete;            // -nodelete option
   bool duplicates;          // -duplicates option
+  bool resetArchive;        // -not :-A option
   char password_string[32]; // hash of -key argument
   char new_password_string[32];  // hash of encrypt -to arg
   const char* password;     // points to password_string or NULL
@@ -2471,6 +2538,12 @@ void Jidac::usage() {
 "                zpaq x backup file1 dir1 -to file2 dir2  (rename output).\n"
 "                zpaq x backup -to tmp/  (extract all to tmp/all).\n"
 "-not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj\n"
+#ifdef unix
+"-not :+-drwx    Exclude if user permissions are +set or -unset.\n"
+#else
+"-not :+-dashri  Exclude if Windows attributes are +set or -unset.\n"
+"-not :-Ad       If archive attribute is set then clear it before adding.\n"
+#endif
 "-until N        Revert archive to the N'th update (default: last).\n"
 "-until %s\n"
 "                Set date (UT) and revert archive. (default time: 235959).\n"
@@ -2552,7 +2625,7 @@ int Jidac::doCommand(int argc, const char** argv) {
 
   // initialize to default values
   command="";
-  force=all=noattributes=nodelete=duplicates=false;
+  force=all=noattributes=nodelete=duplicates=resetArchive=false;
   since=0;
   summary=0;
   version=9999999999999LL;
@@ -2623,8 +2696,11 @@ int Jidac::doCommand(int argc, const char** argv) {
       --i;
     }
     else if (opt=="-not") {  // read notfiles
-      while (++i<argc && argv[i][0]!='-')
+      while (++i<argc && argv[i][0]!='-') {
         notfiles.push_back(argv[i]);
+        if (argv[i][0]==':' && argv[i][1]=='-' && argv[i][2]=='A')
+          resetArchive=true;
+      }
       --i;
     }
     else if ((opt=="-version" || opt=="-until")  // read date
@@ -3133,9 +3209,12 @@ void Jidac::read_args(bool scan, bool mark_all) {
     for (int i=0; !matched && i<size(files); ++i)
       if (ispath(files[i].c_str(), p->first.c_str()))
         matched=true;
-    for (int i=0; matched && i<size(notfiles); ++i)
+    for (int i=0; matched && i<size(notfiles); ++i) {
       if (ispath(notfiles[i].c_str(), p->first.c_str()))
         matched=false;
+      if (isattr(notfiles[i].c_str(), p->second.dtv.back().attr))
+        matched=false;
+    }
     if (matched &&
         (mark_all || (p->second.dtv.size() && p->second.dtv.back().date
         && p->second.dtv.back().version>=since)))
@@ -3182,6 +3261,9 @@ void Jidac::scandir(string filename, bool recurse) {
   if (filename!="" && filename[filename.size()-1]=='/')
     filename=filename.substr(0, filename.size()-1);
   if (!lstat(filename.c_str(), &sb)) {
+    for (int i=0; i<size(notfiles); ++i)  // Omit if in not attributes
+      if (isattr(notfiles[i].c_str(), 'u'+(sb.st_mode<<8)))
+        return;
     if (S_ISREG(sb.st_mode))
       addfile(filename, decimal_time(sb.st_mtime), sb.st_size,
               'u'+(sb.st_mode<<8));
@@ -3242,9 +3324,10 @@ void Jidac::scandir(string filename, bool recurse) {
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
         || t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
-    for (int i=0; edate && i<size(notfiles); ++i)
-      if (ispath(notfiles[i].c_str(), unrename(fn).c_str()))
-        edate=0;
+    for (int i=0; edate && i<size(notfiles); ++i) {
+      if (ispath(notfiles[i].c_str(), unrename(fn).c_str())) edate=0;
+      if (isattr(notfiles[i].c_str(), eattr)) edate=0;
+    }
 
     // Save directory names with a trailing / and scan their contents
     // Otherwise, save plain files
@@ -3342,7 +3425,7 @@ int nbits(unsigned x) {
 // args[6] is the secondary context look ahead
 // sap is pointer to external suffix array of inbuf or 0. If supplied and
 //   args[0]=5..7 then it is assumed that E8E9 was already applied to
-//   both the input an sap and the input buffer is not modified.
+//   both the input and sap and the input buffer is not modified.
 
 class LZBuffer: public libzpaq::Reader {
   libzpaq::Array<unsigned> ht;// hash table, confirm in low bits, or SA+ISA
@@ -3469,7 +3552,7 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[], const unsigned* sap):
       assert(ht.size()>=n);
       assert(ht.size()>0);
       sa=&ht[0];
-      divsufsort((const unsigned char*)in, (int*)sa, n);
+      if (n>0) divsufsort((const unsigned char*)in, (int*)sa, n);
     }
     if (level<3) {
       assert(ht.size()>=(n*(sap==0))+(1u<<17<<args[0]));
@@ -3483,7 +3566,7 @@ void LZBuffer::fill() {
 
   // BWT
   if (level==3) {
-    assert(in);
+    assert(in || n==0);
     assert(sa);
     for (; wpos<BUFSIZE && i<n+5; ++i) {
       if (i==0) put(n>0 ? in[n-1] : 255);
@@ -3507,26 +3590,30 @@ void LZBuffer::fill() {
 
     // Look up contexts in suffix array
     if (isa) {
-      if (sa[isa[i&mask]]!=i)  // rebuild ISA
+      if (sa[isa[i&mask]]!=i) // rebuild ISA
         for (unsigned j=0; j<n; ++j)
           if ((sa[j]&~mask)==(i&~mask))
             isa[sa[j]&mask]=j;
       for (unsigned h=0; h<=lookahead; ++h) {
-        unsigned q=isa[(h+i)&mask];  // location of i in SA
+        unsigned q=isa[(h+i)&mask];  // location of h+i in SA
+        assert(q<n);
+        if (sa[q]!=h+i) continue;
         for (int j=-1; j<=1; j+=2) {  // search backward and forward
           for (unsigned k=1; k<=bucket; ++k) {
             unsigned p;  // match to be tested
-            if (q+j*k<n && (p=sa[q+j*k])<i) {
+            if (q+j*k<n && (p=sa[q+j*k]-h)<i) {
               assert(p<n);
               unsigned l, l1;  // length of match, leading literals
               for (l=h; i+l<n && l<maxMatch && in[p+l]==in[i+l]; ++l);
               for (l1=h; l1>0 && in[p+l1-1]==in[i+l1-1]; --l1);
-              int score=int(l-l1)*8-lg(i-p)-2*(lit==0 && l1>0)-11;
+              int score=int(l-l1)*8-lg(i-p)-4*(lit==0 && l1>0)-11;
+              for (unsigned a=0; a<h; ++a) score=score*5/8;
               if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
               if (l<blen || l<minMatch || l>255) break;
             }
           }
         }
+        if (bscore<=0 || blen<minMatch) break;
       }
     }
 
@@ -3546,7 +3633,7 @@ void LZBuffer::fill() {
                 int l1;  // length back from lookahead
                 for (l1=lookahead; l1>0 && in[p+l1-1]==in[i+l1-1]; --l1);
                 assert(l1>=0 && l1<=int(lookahead));
-                int score=int(l-l1)*8-lg(i-p)-2*(lit==0 && l1>0)-11;
+                int score=int(l-l1)*8-lg(i-p)-8*(lit==0 && l1>0)-11;
                 if (score>bscore) blen=l, bp=p, blit=l1, bscore=score;
               }
             }
@@ -4445,7 +4532,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       else {
         method+=","+itos(1+doe8)+",";
         if (type<64) method+="4,0,3"+htsz;
-        else method+="4,0,8"+sasz;
+        else method+="4,0,7"+sasz+",1";
       }
     }
 
@@ -4458,7 +4545,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       else if (type>=640 || (type&1))  // BWT if text or highly compressible
         method+=","+itos(3+doe8)+"ci1";
       else  // LZ77 with O0-1 compression of up to 12 literals
-        method+=","+itos(2+doe8)+",12,0,8"+sasz+",c0,0,511i2";
+        method+=","+itos(2+doe8)+",12,0,7"+sasz+",1c0,0,511i2";
     }
 
     // LZ77+CM, fast CM, or BWT depending on type
@@ -4468,7 +4555,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
       else if (type<24)
         method+=","+itos(1+doe8)+",4,0,3"+htsz;
       else if (type<48)
-        method+=","+itos(2+doe8)+",5,0,8"+sasz+"c0,0,511";
+        method+=","+itos(2+doe8)+",5,0,7"+sasz+"1c0,0,511";
       else if (type<900) {
         method+=","+itos(doe8)+"ci1,1,1,1,2a";
         if (type&1) method+="w";
@@ -4725,10 +4812,11 @@ ThreadReturn compressThread(void* arg) {
       bytes_processed+=insize-8-4*frags;
       bytes_output+=cj.out.size();
       if (quiet<MAX_QUIET) {
-        int eta=(mtime()-global_start)
-             *(total_size-bytes_processed)/(bytes_processed+0.5)/1000;
+        int64_t eta=(mtime()-global_start)
+             *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
         if (bytes_processed>0)
-          fprintf(con, "%d:%02d", eta/60, eta%60);
+          fprintf(con, "%d:%02d:%02d",
+              int(eta/3600), int(eta/60%60), int(eta%60));
         if (quiet==MAX_QUIET-1) {
           fprintf(con, " to go: %1.3f -> %1.3f MB        \r",
               bytes_processed/1000000.0, bytes_output/1000000.0);
@@ -4878,7 +4966,8 @@ int Jidac::add() {
   total_size=0;
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.edate && (force || p->second.dtv.size()==0
-       || p->second.edate!=p->second.dtv.back().date)) {
+       || p->second.edate!=p->second.dtv.back().date
+       || p->second.esize!=p->second.dtv.back().size)) {
       total_size+=p->second.esize;
 
       // Key by first 5 bytes of filename extension, case insensitive
@@ -5272,7 +5361,8 @@ int Jidac::add() {
 
   // Append compressed index to archive
   int dtcount=0;
-  for (DTMap::const_iterator p=dt.begin(); p!=dt.end();) {
+  int archiveResets=0;
+  for (DTMap::iterator p=dt.begin(); p!=dt.end();) {
     const DT& dtr=p->second;
 
     // Remove file if external does not exist and is currently in archive
@@ -5287,12 +5377,27 @@ int Jidac::add() {
     }
 
     // Update file if compressed and anything differs
-    if (p->second.edate && (force || p->second.dtv.size()==0
-       || p->second.edate!=p->second.dtv.back().date)) {
+    if (dtr.edate && (force || dtr.dtv.size()==0
+       || dtr.edate!=dtr.dtv.back().date
+       || dtr.esize!=dtr.dtv.back().size)) {
+
+      // Reset archive bit
+#ifndef unix
+      if (resetArchive && (dtr.eattr&255)=='w'
+          && ((dtr.eattr>>8)&FILE_ATTRIBUTE_ARCHIVE)) {
+        p->second.eattr&=~(int64_t(FILE_ATTRIBUTE_ARCHIVE)<<8);
+        SetFileAttributes(utow(rename(p->first).c_str()).c_str(),
+                          dtr.eattr>>8);
+        ++archiveResets;
+      }
+#endif
+
+      // Append to index if anything changed
       if (dtr.dtv.size()==0 // new file
          || dtr.edate!=dtr.dtv.back().date  // date change
          || (dtr.eattr && dtr.dtv.back().attr
              && dtr.eattr!=dtr.dtv.back().attr)  // attr change
+         || dtr.esize!=dtr.dtv.back().size  // size change
          || dtr.eptr!=dtr.dtv.back().ptr) { // content change
         is+=ltob(dtr.edate)+p->first+'\0';
         if ((dtr.eattr&255)=='u') {  // unix attributes
@@ -5331,14 +5436,13 @@ int Jidac::add() {
     writeJidacHeader(&out, date, cdatasize, htsize);
   }
   if (quiet<MAX_QUIET)
-    fprintf(con, "%1.0f + (%1.0f -> %1.0f + %1.0f + %1.0f = %1.0f) = %1.0f\n",
+    fprintf(con, "%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
            double(header_pos),
            double(inputsize),
-           double(header_end-header_pos),
-           double(cdatasize),
-           double(archive_end-header_end-cdatasize),
            double(archive_end-header_pos),
            double(archive_end));
+    if (archiveResets)
+      fprintf(con, "%d file archive bits reset.\n", archiveResets);
   if (archive!="") {
     assert(header_end==out.tell());
     out.close();
@@ -5396,12 +5500,14 @@ struct ExtractJob {         // list of jobs
   Mutex mutex;              // protects state
   Mutex write_mutex;        // protects writing to disk
   int job;                  // number of jobs started
+  int next;                 // next block to extract (usually)
   vector<Block> block;      // list of blocks to extract
   Jidac& jd;                // what to extract
   OutputFile outf;          // currently open output file
   DTMap::iterator lastdt;   // currently open output file name
   double maxMemory;         // largest memory used by any block (test mode)
-  ExtractJob(Jidac& j): job(0), jd(j), lastdt(j.dt.end()), maxMemory(0) {
+  ExtractJob(Jidac& j):
+      job(0), next(0), jd(j), lastdt(j.dt.end()), maxMemory(0) {
     init_mutex(mutex);
     init_mutex(write_mutex);
   }
@@ -5428,23 +5534,29 @@ ThreadReturn decompressThread(void* arg) {
   StringBuffer out;
 
   // Look for next READY job
-  for (unsigned i=0; i<job.block.size(); ++i) {
-    Block& b=job.block[i];
+  while (true) {
     lock(job.mutex);
-    if (b.state==Block::READY && b.size>0 && !b.streaming) {
-      b.state=Block::WORKING;
-      release(job.mutex);
+    unsigned i, k=0;
+    for (i=0; i<job.block.size(); ++i) {
+      k=i+job.next;
+      if (k>=job.block.size()) k-=job.block.size();
+      assert(k<job.block.size());
+      Block& b=job.block[k];
+      if (b.state==Block::READY && b.size>0 && !b.streaming) {
+        b.state=Block::WORKING;
+        break;
+      }
     }
-    else {
-      release(job.mutex);
-      continue;
-    }
+    if (i<job.block.size()) job.next=k;
+    release(job.mutex);
+    if (i>=job.block.size()) break;
+    Block& b=job.block[k];
 
     // Get uncompressed size of block
     unsigned output_size=0;  // minimum size to decompress
     unsigned max_size=0;     // uncompressed full block size
-    int j;
     assert(b.start>0);
+    int j;
     for (j=0; j<b.size; ++j) {
       assert(b.start+j<job.jd.ht.size());
       assert(job.jd.ht[b.start+j].usize>=0);
@@ -5495,10 +5607,11 @@ ThreadReturn decompressThread(void* arg) {
       if (quiet<MAX_QUIET) {
         lock(job.mutex);
         if (bytes_processed>0) {
-          int eta=(mtime()-global_start)*(total_size-bytes_processed)
-                  /(bytes_processed+0.5)/1000;
-          fprintf(con, "%d:%02d to go: ", eta/60, eta%60);
-        }
+          int64_t eta=(mtime()-global_start)
+               *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
+          if (bytes_processed>0)
+            fprintf(con, "%d:%02d:%02d to go: ",
+                int(eta/3600), int(eta/60%60), int(eta%60));        }
         if (quiet==MAX_QUIET-1) {
           fprintf(con, "%1.6f MB        \r", bytes_processed/1000000.0);
           fflush(con);
@@ -5537,6 +5650,18 @@ ThreadReturn decompressThread(void* arg) {
         release(job.mutex);
       }
     }
+
+    // If out of memory, let another thread try
+    catch (std::bad_alloc& e) {
+      lock(job.mutex);
+      fprintf(stderr, "Job %d killed to save memory\n", jobNumber);
+      b.state=Block::READY;
+      release(job.mutex);
+      in.close();
+      return 0;
+    }
+
+    // Other errors: assume bad input
     catch (std::exception& e) {
       lock(job.mutex);
       fprintf(stderr, "Job %d: skipping frags %u-%u at offset %1.0f: %s\n",
@@ -6238,7 +6363,7 @@ int setFilename(char* s, int n, int64_t date, unsigned num) {
   return 0;
 }
 
-// Copy current version only to first tofiles.zpaq or self.
+// Copy current version only to first tofiles.zpaq.
 //  If tofiles[0] is "" then check for errors but discard output.
 void Jidac::purge() {
 
@@ -6366,12 +6491,10 @@ void Jidac::purge() {
   StringBuffer hdr;
   writeJidacHeader(&hdr, date, -1, 1);
 
-  // Report space saved. Test if there is room for a version header.
+  // Report space saved
   int64_t deleted_bytes=0;
   unsigned deleted_blocks=0;
   for (unsigned i=1; i<blist.size(); ++i) {
-    if (size(files)==0 && blist[i].used && blist[i].start<size(hdr))
-      error("cannot purge fragile archive in place");
     if (!blist[i].used) {
       deleted_bytes+=blist[i].end-blist[i].start;
       ++deleted_blocks;
