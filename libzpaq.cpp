@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 6.49 implementation - Jan. 27, 2014.
+/* libzpaq.cpp - LIBZPAQ Version 6.52 implementation - May 9, 2014.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -1173,7 +1173,7 @@ int ZPAQL::execute() {
     case 213: a >>= (m(c)&31); break; // A>>=*C
     case 214: a >>= (h(d)&31); break; // A>>=*D
     case 215: a >>= (header[pc++]&31); break; // A>>= N
-    case 216: f = (a == a); break; // A==A
+    case 216: f = 1; break; // A==A
     case 217: f = (a == b); break; // A==B
     case 218: f = (a == c); break; // A==C
     case 219: f = (a == d); break; // A==D
@@ -1181,7 +1181,7 @@ int ZPAQL::execute() {
     case 221: f = (a == U32(m(c))); break; // A==*C
     case 222: f = (a == h(d)); break; // A==*D
     case 223: f = (a == U32(header[pc++])); break; // A== N
-    case 224: f = (a < a); break; // A<A
+    case 224: f = 0; break; // A<A
     case 225: f = (a < b); break; // A<B
     case 226: f = (a < c); break; // A<C
     case 227: f = (a < d); break; // A<D
@@ -1189,7 +1189,7 @@ int ZPAQL::execute() {
     case 229: f = (a < U32(m(c))); break; // A<*C
     case 230: f = (a < h(d)); break; // A<*D
     case 231: f = (a < U32(header[pc++])); break; // A< N
-    case 232: f = (a > a); break; // A>A
+    case 232: f = 0; break; // A>A
     case 233: f = (a > b); break; // A>B
     case 234: f = (a > c); break; // A>C
     case 235: f = (a > d); break; // A>D

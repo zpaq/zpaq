@@ -1,8 +1,8 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.51"
+#define ZPAQ_VERSION "6.52"
 
-/*  Copyright (C) 2013, Dell Inc. Written by Matt Mahoney.
+/*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
     LICENSE
 
@@ -1405,18 +1405,6 @@ public:
     }
   }
 
-  // Read into bufp[0..size-1] and return number of bytes read
-  int read(char* bufp, int size) {
-    flush();
-    int nr=fread(bufp, 1, size, out);
-    if (aes) {
-      int64_t off=tell()-nr+eoff;
-      if (off<32) error("attempt to read salt");
-      aes->encrypt(bufp, nr, off);
-    }
-    return nr;
-  }
-
   // Write 1 byte
   void put(int c) {
     assert(isopen());
@@ -1611,19 +1599,6 @@ public:
     buf[ptr++]=c;
   }
 
-  // Read into bufp[0..size-1] and return number of bytes read
-  int read(char* bufp, int size) {
-    flush();
-    DWORD result=0;
-    ReadFile(out, bufp, DWORD(size), &result, NULL);
-    if (aes) {
-      int64_t off=tell()-result+eoff;
-      if (off<32) error("attempt to read salt");
-      aes->encrypt(bufp, result, tell()-result);
-    }
-    return result;
-  }
-
   // Write bufp[0..size-1]
   void write(const char* bufp, int size);
 
@@ -1744,8 +1719,8 @@ public:
   // actually read. 0 indicates EOF.
   int read(char* buf, int n) {
     assert(mode=='r');
-    if (fi>=size(files)) return -1;
-    if (!in.isopen()) return -1;
+    if (fi>=size(files)) return 0;
+    if (!in.isopen()) return 0;
     n=in.read(buf, n);
     seek(n, SEEK_CUR);
     return n;
@@ -1986,59 +1961,132 @@ struct StringWriter: public libzpaq::Writer {
 class WriteBuffer: public libzpaq::Writer {
   enum {BUFSIZE=(1<<19)-80};  // buffer size
   int wptr;  // number of bytes in last buffer
+  int limit;  // max buffers
   vector<char*> v;  // array of buffers
   WriteBuffer& operator=(const WriteBuffer&);  // no assignment
   WriteBuffer(const WriteBuffer&);  // no copy
+  void grow();  // append a buffer
+
 public:
-  WriteBuffer(): wptr(BUFSIZE) {}
+  WriteBuffer(): wptr(BUFSIZE), limit(0x7fffffff) {}
 
   // Number of bytes put
-  size_t size() const {return v.size()*BUFSIZE+wptr-BUFSIZE;}
+  int64_t size() const {return int64_t(v.size())*BUFSIZE+wptr-BUFSIZE;}
+
+  // Set allocation limit
+  void setLimit(size_t lim) {limit=lim/BUFSIZE+1;}
 
   // store n bytes from buf[0..n-1]
-  void write(const char* buf, int n) {
-    while (n>0) {
-      assert(wptr>=0 && wptr<=BUFSIZE);
-      if (wptr==BUFSIZE) {
-        v.push_back((char*)malloc(BUFSIZE));
-        if (!v.back()) error("WriteBuffer: out of memory");
-        wptr=0;
-      }
-      int n1=n;
-      if (n1>BUFSIZE-wptr) n1=BUFSIZE-wptr;
-      assert(n1>0 && n1<=BUFSIZE);
-      memcpy(v.back()+wptr, buf, n1);
-      wptr+=n1;
-      n-=n1;
-      buf+=n1;
-    }
-  }
+  void write(const char* buf, int n);
 
   // store 1 byte
   void put(int c) {
-    char b[1];
-    b[0]=c;
-    write(b, 1);
+    if (wptr==BUFSIZE) grow();
+    assert(v.size()>0);
+    assert(wptr>=0 && wptr<BUFSIZE);
+    v.back()[wptr++]=c;
   }
 
   // write to out
-  void save(libzpaq::Writer* out) {
-    for (int i=0; i<int(v.size())-1; ++i)
-      out->write(v[i], BUFSIZE);
-    if (v.size())
-      out->write(v.back(), wptr);
-  }
+  void save(libzpaq::Writer* out);
+
+  // Write n bytes at begin..begin+n-1 to out at offset off
+  void save(OutputFile& out, int64_t off, int64_t begin, int64_t n);
+
+  // Return the SHA-1 of n bytes at begin..begin+n-1 to result[0..19]
+  void sha1(char* result, int64_t begin, int64_t n);
 
   // Free memory
-  void reset() {
-    while (v.size()>0) {
-      if (v.back()) free(v.back());
-      v.pop_back();
-    }
-    wptr=BUFSIZE;
-  }
+  void reset();
   ~WriteBuffer() {reset();}
 };
+
+// Append a buffer
+void WriteBuffer::grow() {
+  assert(wptr==BUFSIZE);
+  if (int(v.size())>=limit) error("WriteBuffer overflow");
+  v.push_back((char*)malloc(BUFSIZE));
+  if (!v.back()) error("WriteBuffer: out of memory");
+  wptr=0;
+}
+
+// store n bytes from buf[0..n-1]
+void WriteBuffer::write(const char* buf, int n) {
+  while (n>0) {
+    assert(wptr>=0 && wptr<=BUFSIZE);
+    if (wptr==BUFSIZE) grow();
+    int n1=n;
+    if (n1>BUFSIZE-wptr) n1=BUFSIZE-wptr;
+    assert(n1>0 && n1<=BUFSIZE);
+    memcpy(v.back()+wptr, buf, n1);
+    wptr+=n1;
+    n-=n1;
+    buf+=n1;
+  }
+}
+
+// write to out
+void WriteBuffer::save(libzpaq::Writer* out) {
+  for (int i=0; i<int(v.size())-1; ++i)
+    out->write(v[i], BUFSIZE);
+  if (v.size())
+    out->write(v.back(), wptr);
+}
+
+// Write n bytes at begin..begin+n-1 to out at offset off..off+n-1
+void WriteBuffer::save(OutputFile& out, int64_t off, int64_t begin,
+                       int64_t n) {
+  assert(out.isopen());
+  assert(off>=0);
+  assert(begin>=0);
+  assert(n>=0);
+  assert(begin+n<=size());
+
+  // Trim leading and trailing zeros before writing
+  for (int i=begin/BUFSIZE; i<int(v.size()); ++i) {
+    assert(i>=0 && i<int(v.size()));
+    int64_t b=begin-int64_t(i)*BUFSIZE;
+    int64_t e=b+n;
+    if (b<0) b=0;
+    if (e>BUFSIZE) e=BUFSIZE;
+    if (e<=0) break;
+    int b1=b, e1=e;
+    while (b1<e1 && v[i][b1]==0) ++b1;
+    while (e1>b1 && v[i][e1-1]==0) --e1;
+    if (b1-b<4096) b1=b;
+    if (e-e1<4096) e1=e;
+    if (e1>b1) out.write(v[i]+b1, off-begin+i*BUFSIZE+b1, e1-b1);
+  }
+}
+
+// Return the SHA-1 of n bytes at begin..begin+n-1 to result[0..19]
+void WriteBuffer::sha1(char* result, int64_t begin, int64_t n) {
+  if (!result) return;
+  assert(begin>=0);
+  assert(n>=0);
+  assert(begin+n<=size());
+  libzpaq::SHA1 s;
+  for (int i=begin/BUFSIZE; i<int(v.size()); ++i) {
+    assert(i>=0 && i<int(v.size()));
+    int64_t b=begin-int64_t(i)*BUFSIZE;
+    int64_t e=b+n;
+    if (b<0) b=0;
+    if (e>BUFSIZE) e=BUFSIZE;
+    if (e<=0) break;
+    while (b<e) s.put(v[i][b++]);
+  }
+  assert(uint64_t(n)==s.usize());
+  memcpy(result, s.result(), 20);
+}
+
+// Free memory
+void WriteBuffer::reset() {
+  while (v.size()>0) {
+    if (v.back()) free(v.back());
+    v.pop_back();
+  }
+  wptr=BUFSIZE;
+}
 
 // For (de)compressing to/from a string. Writing appends bytes
 // which can be later read.
@@ -2519,7 +2567,7 @@ void Jidac::usage() {
 "archive by specifying a date or version number.\n"
 "\n"
 "Usage: zpaq command archive files... -options...\n"
-"Commands may be abbreviated to one letter (or x for extract):\n"
+"Commands may be abbreviated to one letter (or x for extract).\n"
 "Archive is assumed to have a .zpaq extension if not specified.\n"
 "Files can be directories in which case the whole tree is included.\n"
 "Wildcards * and ? in file names match any string or character.\n"
@@ -2744,7 +2792,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-method" && i<argc-1)
       method=argv[++i];
     else if (opt=="-key") {
-      if (read_password(password_string, 2-exists(archive),
+      if (read_password(password_string, 2-exists(archive, 1),
           argc, argv, i))
         password=password_string;
     }
@@ -2809,10 +2857,10 @@ int64_t Jidac::read_archive(int *errors) {
   // Test password
   if (password) {
     char s[4]={0};
-    in.read(s, 4);
-    if (memcmp(s, "7kSt", 4) && (memcmp(s, "zPQ", 3) || s[3]<1))
+    const int nr=in.read(s, 4);
+    if (nr>0 && memcmp(s, "7kSt", 4) && (memcmp(s, "zPQ", 3) || s[3]<1))
       error("password incorrect");
-    in.seek(-4, SEEK_CUR);
+    in.seek(-nr, SEEK_CUR);
   }
 
   // Scan archive contents
@@ -3167,7 +3215,8 @@ int64_t Jidac::read_archive(int *errors) {
       if (errors) ++*errors;
     }
   }  // end while !done
-  if (in.tell()>0 && !found_data) error("archive contains no data");
+  if (in.tell()>32*(password!=0) && !found_data)
+    error("archive contains no data");
   in.close();
 
   // Recompute file sizes in recover mode
@@ -4698,7 +4747,9 @@ struct CJ {
 
 // Instructions to a compression job
 class CompressJob {
+public:
   Mutex mutex;           // protects state changes
+private:
   int job;               // number of jobs
   CJ* q;                 // buffer queue
   unsigned qsize;        // number of elements in q
@@ -4812,14 +4863,15 @@ ThreadReturn compressThread(void* arg) {
       bytes_processed+=insize-8-4*frags;
       bytes_output+=cj.out.size();
       if (quiet<MAX_QUIET) {
-        int64_t eta=(mtime()-global_start)
+        int64_t eta=(mtime()-global_start+0.0)
              *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
         if (bytes_processed>0)
           fprintf(con, "%d:%02d:%02d",
               int(eta/3600), int(eta/60%60), int(eta%60));
         if (quiet==MAX_QUIET-1) {
-          fprintf(con, " to go: %1.3f -> %1.3f MB        \r",
-              bytes_processed/1000000.0, bytes_output/1000000.0);
+          fprintf(con, " to go: %1.6f -> %1.6f MB (%5.2f%%)     \r",
+              bytes_processed/1000000.0, bytes_output/1000000.0,
+              (bytes_processed+0.5)*100.0/(total_size+0.5));
           fflush(con);
         }
         else {
@@ -5141,7 +5193,9 @@ int Jidac::add() {
     InputFile in;
     if (!in.open(filename.c_str())) {  // skip if not found
       p->second.edate=0;
+      lock(job.mutex);
       total_size-=p->second.esize;
+      release(job.mutex);
       ++errors;
       continue;
     }
@@ -5298,8 +5352,11 @@ int Jidac::add() {
         ht.push_back(HT(sh, sz, 0));
         htinv.update();
       }
-      else
-        total_size-=sz;
+      else {
+        lock(job.mutex);
+        bytes_processed+=sz;
+        release(job.mutex);
+      }
       p->second.eptr.push_back(htptr);
 
       if (c==EOF)
@@ -5436,7 +5493,7 @@ int Jidac::add() {
     writeJidacHeader(&out, date, cdatasize, htsize);
   }
   if (quiet<MAX_QUIET)
-    fprintf(con, "%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
+    fprintf(con, "\n%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
            double(header_pos),
            double(inputsize),
            double(archive_end-header_pos),
@@ -5531,7 +5588,7 @@ ThreadReturn decompressThread(void* arg) {
 
   // Open archive for reading
   if (!in.open(job.jd.archive.c_str(), job.jd.password)) return 0;
-  StringBuffer out;
+  WriteBuffer out;
 
   // Look for next READY job
   while (true) {
@@ -5571,6 +5628,7 @@ ThreadReturn decompressThread(void* arg) {
     }
 
     // Decompress
+    double mem=0;  // how much memory used to decompress
     try {
       assert(b.start>0);
       assert(b.start<job.jd.ht.size());
@@ -5584,10 +5642,8 @@ ThreadReturn decompressThread(void* arg) {
       d.setOutput(&out);
       libzpaq::SHA1 sha1;
       if (job.jd.all) d.setSHA1(&sha1);
-      double mem=0;
       if (!d.findBlock(&mem)) error("archive block not found");
       if (mem>job.maxMemory) job.maxMemory=mem;
-      const int64_t now=mtime();
       while (d.findFilename()) {
         StringWriter comment;
         d.readComment(&comment);
@@ -5604,35 +5660,17 @@ ThreadReturn decompressThread(void* arg) {
             error("checksum error");
         }
       }
-      if (quiet<MAX_QUIET) {
-        lock(job.mutex);
-        if (bytes_processed>0) {
-          int64_t eta=(mtime()-global_start)
-               *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
-          if (bytes_processed>0)
-            fprintf(con, "%d:%02d:%02d to go: ",
-                int(eta/3600), int(eta/60%60), int(eta%60));        }
-        if (quiet==MAX_QUIET-1) {
-          fprintf(con, "%1.6f MB        \r", bytes_processed/1000000.0);
-          fflush(con);
-        }
-        else
-          fprintf(con, "Job %d: [%d..%d] %1.0f -> %d (%1.3f s, %1.3f MB)\n",
-              jobNumber, b.start, b.start+b.size-1,
-              double(in.tell()-job.jd.ht[b.start].csize),
-              size(out), (mtime()-now)*0.001, mem/1000000);
-        release(job.mutex);
-      }
       if (out.size()<output_size)
         error("unexpected end of compressed data");
 
       // Verify fragment checksums if present
-      const char* q=out.c_str();
+      int64_t q=0;  // fragment start
       for (unsigned j=b.start; j<b.start+b.size; ++j) {
         if (!fragile) {
-          libzpaq::SHA1 sha1;
-          for (unsigned k=job.jd.ht[j].usize; k>0; --k) sha1.put(*q++);
-          if (memcmp(sha1.result(), job.jd.ht[j].sha1, 20)) {
+          char sha1result[20];
+          out.sha1(sha1result, q, job.jd.ht[j].usize);
+          q+=job.jd.ht[j].usize;
+          if (memcmp(sha1result, job.jd.ht[j].sha1, 20)) {
             for (int k=0; k<20; ++k) {
               if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
                 lock(job.mutex);
@@ -5681,7 +5719,7 @@ ThreadReturn decompressThread(void* arg) {
         continue;  // don't write
 
       // Look for pointers to this block
-      vector<unsigned>& ptr=dtr.dtv.back().ptr;
+      const vector<unsigned>& ptr=dtr.dtv.back().ptr;
       string filename="";
       int64_t offset=0;  // write offset
       for (unsigned j=0; j<ptr.size(); ++j) {
@@ -5728,11 +5766,11 @@ ThreadReturn decompressThread(void* arg) {
         assert(job.lastdt==p);
 
         // Find block offset of fragment
-        const char* q=out.c_str();
+        int64_t q=0;  // fragment offset from start of block
         for (unsigned k=b.start; k<ptr[j]; ++k)
           q+=job.jd.ht[k].usize;
-        assert(q>=out.c_str());
-        assert(q<=out.c_str()+out.size()-job.jd.ht[ptr[j]].usize);
+        assert(q>=0);
+        assert(q<=out.size()-job.jd.ht[ptr[j]].usize);
 
         // Write the fragment and any consecutive fragments that follow
         assert(offset>=0);
@@ -5744,13 +5782,8 @@ ThreadReturn decompressThread(void* arg) {
           assert(dtr.written<=size(ptr));
           usize+=job.jd.ht[ptr[++j]].usize;
         }
-        assert(q+usize<=out.c_str()+out.size());
-        int k=0;  // number of leading zeros to skip writing (optimization)
-        while (k<usize && q[k]==0) ++k;
-        if (k>0 && k==usize && j+1==ptr.size()) --k; // always write last byte
-        if (k<4096) k=0;  // don't skip small zero blocks
-        if (k<usize && !istest)
-          job.outf.write(q+k, offset+k, usize-k);
+        assert(q+usize<=out.size());
+        if (!istest) out.save(job.outf, offset, q, usize);
         offset+=usize;
         bytes_processed+=usize;
         if (dtr.written==size(ptr)) {  // close file
@@ -5758,16 +5791,41 @@ ThreadReturn decompressThread(void* arg) {
           assert(dtr.dtv.back().date);
           assert(job.lastdt!=job.jd.dt.end());
           assert(istest || job.outf.isopen());
-          if (!istest)
+          if (!istest) {
+            job.outf.truncate(dtr.dtv.back().size);
             job.outf.close(dtr.dtv.back().date, dtr.dtv.back().attr);
+          }
           job.lastdt=job.jd.dt.end();
         }
-      }
-    }
+      } // end for j
+    } // end for ip
 
     // Last file
     release(job.write_mutex);
-  }
+
+    // Update display
+    if (quiet<MAX_QUIET) {
+      lock(job.mutex);
+      const int64_t now=mtime();
+      if (bytes_processed>0) {
+        int64_t eta=(mtime()-global_start+0.0)
+             *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
+        if (bytes_processed>0)
+          fprintf(con, "%d:%02d:%02d to go: ",
+              int(eta/3600), int(eta/60%60), int(eta%60));        }
+      if (quiet==MAX_QUIET-1) {
+        fprintf(con, "%1.6f MB (%5.2f%%)    \r", bytes_processed/1000000.0,
+            (bytes_processed+0.5)*100.0/(total_size+0.5));
+        fflush(con);
+      }
+      else
+        fprintf(con, "Job %d: [%d..%d] %1.0f -> %d (%1.3f s, %1.3f MB)\n",
+            jobNumber, b.start, b.start+b.size-1,
+            double(in.tell()-job.jd.ht[b.start].csize),
+            size(out), (mtime()-now)*0.001, mem/1000000);
+      release(job.mutex);
+    }
+  } // end while true
 
   // Last block
   in.close();
@@ -6042,7 +6100,7 @@ int Jidac::extract() {
   }
   if (quiet<MAX_QUIET || errors>0) {
     fprintf((errors>0 ? stderr : con),
-        "%s %u of %u files OK (%u errors) using %1.3f MB x %d threads\n",
+        "\n%s %u of %u files OK (%u errors) using %1.3f MB x %d threads\n",
         (istest ? "Tested" : "Extracted"), 
         extracted-errors, extracted, errors, job.maxMemory/1000000,
         size(tid));
