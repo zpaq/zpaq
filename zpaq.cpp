@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.53"
+#define ZPAQ_VERSION "6.54"
 
 /*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
