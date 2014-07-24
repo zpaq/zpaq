@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.54"
+#define ZPAQ_VERSION "6.55"
 
 /*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
@@ -1962,8 +1962,6 @@ int numberOfProcessors() {
 
 ////////////////////////////// StringBuffer //////////////////////////
 
-Mutex global_mutex;  // lock for large realloc()
-
 // For libzpaq output to a string
 struct StringWriter: public libzpaq::Writer {
   string s;
@@ -2115,10 +2113,8 @@ class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
   void reserve(size_t a) {
     assert(!al==!p);
     if (a<=al) return;
-    if (a>=(1u<<26)) lock(global_mutex);
     unsigned char* q=0;
     if (a>0) q=(unsigned char*)(p ? realloc(p, a) : malloc(a));
-    if (a>=(1u<<26)) release(global_mutex);
     if (a>0 && !q) {
       fprintf(stderr, "StringBuffer realloc %1.0f to %1.0f at %p failed\n",
           double(al), double(a), p);
@@ -3312,11 +3308,11 @@ string path(const string& fn) {
 // In Windows, filename might have wildcards like "file.*" or "dir/*"
 void Jidac::scandir(string filename, bool recurse) {
 
-#ifdef unix
-
   // Omit if in notfiles
   for (int i=0; i<size(notfiles); ++i)
     if (ispath(notfiles[i].c_str(), unrename(filename).c_str())) return;
+
+#ifdef unix
 
   // Add regular files and directories
   struct stat sb;
@@ -5647,6 +5643,7 @@ ThreadReturn decompressThread(void* arg) {
       assert(b.start<job.jd.ht.size());
       assert(b.size>0);
       assert(b.start+b.size<=job.jd.ht.size());
+      const int64_t now=mtime();
       in.seek(job.jd.ht[b.start].csize, SEEK_SET);
       libzpaq::Decompresser d;
       d.setInput(&in);
@@ -5675,6 +5672,12 @@ ThreadReturn decompressThread(void* arg) {
       }
       if (out.size()<output_size)
         error("unexpected end of compressed data");
+      if (quiet<MAX_QUIET-1) {
+        fprintf(con, "Job %d: [%d..%d] %1.0f -> %d (%1.3f s, %1.3f MB)\n",
+            jobNumber, b.start, b.start+b.size-1,
+            double(in.tell()-job.jd.ht[b.start].csize),
+            size(out), (mtime()-now)*0.001, mem/1000000);
+      }
 
       // Verify fragment checksums if present
       int64_t q=0;  // fragment start
@@ -5819,23 +5822,18 @@ ThreadReturn decompressThread(void* arg) {
     // Update display
     if (quiet<MAX_QUIET) {
       lock(job.mutex);
-      const int64_t now=mtime();
       if (bytes_processed>0) {
         int64_t eta=(mtime()-global_start+0.0)
              *(total_size-bytes_processed)/(bytes_processed+0.5)/1000.0;
         if (bytes_processed>0)
           fprintf(con, "%d:%02d:%02d to go: ",
               int(eta/3600), int(eta/60%60), int(eta%60));        }
-      if (quiet==MAX_QUIET-1) {
-        fprintf(con, "%1.6f MB (%5.2f%%)    \r", bytes_processed/1000000.0,
-            (bytes_processed+0.5)*100.0/(total_size+0.5));
+      if (quiet<=MAX_QUIET-1) {
+        fprintf(con, "%1.6f MB (%5.2f%%)    %c", bytes_processed/1000000.0,
+            (bytes_processed+0.5)*100.0/(total_size+0.5),
+            quiet==MAX_QUIET-1 ? '\r' : '\n');
         fflush(con);
       }
-      else
-        fprintf(con, "Job %d: [%d..%d] %1.0f -> %d (%1.3f s, %1.3f MB)\n",
-            jobNumber, b.start, b.start+b.size-1,
-            double(in.tell()-job.jd.ht[b.start].csize),
-            size(out), (mtime()-now)*0.001, mem/1000000);
       release(job.mutex);
     }
   } // end while true
@@ -6732,7 +6730,6 @@ int main() {
 #endif
 
   global_start=mtime();  // get start time
-  init_mutex(global_mutex);
   int errorcode=0;
   try {
     Jidac jidac;
@@ -6747,6 +6744,5 @@ int main() {
     if (errorcode) fprintf(con, " (with errors)\n");
     else fprintf(con, " (all OK)\n");
   }
-  destroy_mutex(global_mutex);
   return errorcode;
 }
