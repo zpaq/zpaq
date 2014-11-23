@@ -1,8 +1,8 @@
-zpaq655.zip, July 24, 2014.
+zpaq656.zip, Nov. 22, 2014.
 
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees in Windows and *nix. It supports AES-256
-encryption, 6 multi-threaded compression levels, and content-aware
+encryption, 5 multi-threaded compression levels, and content-aware
 file fragment level deduplication. For backups it adds only files
 whose date has changed, and keeps both old and new versions. You can roll
 back the archive date to restore from old versions of the archive.
@@ -13,13 +13,12 @@ versions of the program. Contents:
 
 File          Ver.  License          Description
 -----------   ----  -------          -----------
-zpaq.exe      6.55  GPL v3           Archiver, 32 bit Windows.
-zpaq64.exe    6.55  GPL v3           Archiver, 64 bit Windows.
-zpaq.cpp      6.55  GPL v3           zpaq user's guide and source code.
+zpaq.exe      6.56  GPL v3           Archiver, 32 bit Windows.
+zpaq64.exe    6.56  GPL v3           Archiver, 64 bit Windows.
+zpaq.cpp      6.56  GPL v3           zpaq source code.
+zpaq.pod      6.56  GPL v3           zpaq documentation and man source.
 libzpaq.h     6.51  Public Domain    libzpaq API documentation and header.
 libzpaq.cpp   6.52  Public Domain    libzpaq API source code.
-divsufsort.h  2.00  MIT              libdivsufsoft-lite header.
-divsufsort.c  2.00  MIT              libdivsufsort-lite source code.
 Makefile            Public Domain    To compile in Linux: make
 
 All versions of this software can be found at
@@ -35,14 +34,14 @@ It is an API in C++ providing streaming compression and decompression
 services in the ZPAQ format. It has some encryption functions (SHA1,
 SHA256, AES encryption, and Scrypt). See libzpaq.h for documentation.
 
-divsufsort is (C) 2003-2008 Yuta Mori, MIT license (see source code).
-It is mirrored from libdivsufsort-lite 2.0 from
+Code from divsufsort.c is embedded in zpaq.cpp.
+divsufsort.c is (C) 2003-2008 Yuta Mori, MIT license (see source code).
+It is also available from libdivsufsort-lite 2.0 from
 http://code.google.com/p/libdivsufsort/
 
 zpaq.exe can run under either 32 or 64 bit Windows. zpaq64.exe runs only
 under 64 bit Windows. The 32 bit version defaults to using at most
-4 cores (you can select more) and can only use 3 GB memory. In most
-cases this makes no difference.
+2 cores (you can select more) and can only use 2 GB memory.
 
 zpaq is a command line program. For a brief description of the commands,
 type "zpaq" with no arguments. Full documenation is in zpaq.cpp.
@@ -56,26 +55,29 @@ Normally you can use "make" to compile for Unix, Linux, or Mac OS/X.
 zpaq for Windows was compiled with MinGW g++ 4.8.1 (MinGW-W64 project,
 rev5, sjlj, Windows threads) and compressed with upx 3.08w as follows:
 
-  g++ -O3 -s -m64 -static -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq64
-  g++ -O3 -s -m32 -static -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq
+  g++ -O3 -s -m64 -static zpaq.cpp libzpaq.cpp -o zpaq64
+  g++ -O3 -s -m32 -static zpaq.cpp libzpaq.cpp -o zpaq
 
 To compile using Visual Studio:
 (tested with ver. 10.0 (2010), cl version 16.00.30319.01 for 80x86)
 
-  cl /O2 /EHsc /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c advapi32.lib
+  cl /O2 /EHsc zpaq.cpp libzpaq.cpp advapi32.lib
 
 For Linux or Mac OS/X:
 
   make
 or
-  g++ -O3 -Dunix -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c -pthread -o zpaq
+  g++ -O3 -Dunix zpaq.cpp libzpaq.cpp -pthread -o zpaq
+
+To generate a man page in Linux or Cygwin:
+
+  pod2man zpaq.pod > zpaq.man
 
 Options have the following meanings:
 
 -Dunix   = select Unix or Linux target in zpaq and libzpaq. The default is
            Windows. Some Linux compilers automatically define unix.
--DNDEBUG = turn off run time checks in divsufsort.
--DDEBUG  = turn on run time checks in zpaq and libzpaq.
+-DDEBUG  = turn on run time checks.
 -DNOJIT  = turn off run time optimization of ZPAQL to 32 or 64 bit x86
            in libzpaq. Use this for a non-x86 processor, or old
            processors not supporting SSE2 (mostly before 2001).

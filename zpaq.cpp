@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.55"
+#define ZPAQ_VERSION "6.56"
 
 /*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
@@ -17,726 +17,17 @@
     General Public License for more details at
     Visit <http://www.gnu.org/copyleft/gpl.html>.
 
+    divsufsort.c from libdivsufsort-lite is (C) 2003-2008, Yuta Mori
+    and is embedded in this file. It is licensed under the MIT license
+    described below.
+
 zpaq is a journaling (append-only) archiver for incremental backups.
 Files are added only when the last-modified date has changed. Both the old
 and new versions are saved. You can extract from old versions of the
-archive by specifying a date or version number. zpaq supports 6
+archive by specifying a date or version number. zpaq supports 5
 compression levels, deduplication, AES-256 encryption, and multi-threading
 using an open, self-describing format for backward and forward
-compatibility in Windows and Linux.
-
-Usage: zpaq command archive files... -options...
-Commands may be abbreviated to one letter (or x for extract):
-Archive is assumed to have a .zpaq extension if not specified.
-Files can be directories in which case the whole tree is included.
-Wildcards * and ? in file names match any string or character.
-Wildcards in archive match numbers or digits in multi-part archive.
-
-a  add          Compress and add files to archive (or to "" to test).
-x  extract      Decompress named files (default: entire contents).
-l  list         List named files (default: entire contents).
-c  compare      Compare with external files (default: entire contents).
-d  delete       Mark as deleted in a new version of archive.
-t  test         Test decompression without writing any files.
-p  purge -to out[.zpaq]  Create new archive with old versions removed.
-
-Options (may be abbreviated if not ambiguous):
--to files...    a,x,c: Rename external files or specify prefix, e.g.
-                zpaq x backup file1 dir1 -to file2 dir2  (rename output).
-                zpaq x backup -to tmp/  (extract all to tmp/all).
--not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj
--until N        Revert archive to the N'th update (default: last).
--until YYYY-MM-DD HH:MM:SS
-                Set date (UT) and revert archive. (default time: 23:59:59).
--since N        Start at version N or -N from end if N<0 (default: 1).
--noattributes   Ignore/don't save file attributes or permissions.
--nodelete       a: do not mark unmatched files as deleted.
--key [password] Create or access encrypted archive (default: prompt).
--quiet [N[k|m|g]]  Don't show files smaller than N (default none).
--force          a: Add even if dates unchanged. x,p: overwrite output files.
--method 0...5   a: Compress faster...better (default: 1).
--threads N      Use N threads (default: 2 detected).
--all            l,t: All versions. c: compare metadata too. p: keep all.
--summary [N]    l: List top N (20) files and types and a version table.
--duplicates     l: List by size and label identical files with =
-
-The archive format is described in http://mattmahoney.net/dc/zpaq203.pdf
-
-Archive names are assumed to end with .zpaq if not specified.
-If the archive name contains wildcards then * matches the part numbers
-starting with "1" of a multi-part archive and ? matches single digits.
-The archive is taken as a concatenation in numerical order up to the
-first non-existing file. Output is to this new file rather than appended.
-For example:
-
-  zpaq a "backup???" files
-
-would treat the concatenation of backup001.zpaq and backup002.zpaq
-as a single archive if these two files existed, then add to
-the new file backup003.zpaq. This is useful for remote backups because
-only the new file needs to be moved. Archives may be cut anywhere with
-tools like head and tail as long as the numerical order is retained.
-
-Commands:
-
-  a or -add
-
-Add files and directory trees to the archive. Directories are scanned
-recursively to add subdirectories and their contents. Only ordinary
-files and directories are added, not special types (devices, symbolic links,
-etc). Symbolic links and reparse points are not followed. File names and
-directories may be specified with absolute or relative paths or no paths,
-and will be saved that way. The last-modified date is saved, rounded to the
-nearest second. Windows attributes or Linux permissions are saved. However,
-additional metadata such as owner, group, extended attributes (xattrs,
-ACLs, alternate streams) are not saved.
-
-Before adding files, the last-modifed date is compared with the
-date stored in the archive. Files are added only if the dates
-differ or if the file is not already in the archive, or if -force
-is specified.
-
-When a file is changed, both the old and new versions are saved to
-the archive. When a directory is added, any files that existed in
-the old version of the directory but not the new version are marked
-as deleted in the current version but remain in the archive.
-
-If an argument has a trailing slash like "dir/" then it means to add
-the contents of dir but not dir itself (i.e. don't store its attributes
-or date). Without the trailing slash, dir is also stored. It is
-extracted in either case.
-
-In Windows, wildcards are interpreted in the usual way. A * matches
-any string and a ? matches any character. A backslash \ and a forward
-slash / are interpreted the same way as a directory path separator.
-In Linux, wildcards are interpreted by the shell, not by zpaq.
-
-If the archive is "" (an empty string), then zpaq will test compression
-(report size and time) without writing to disk.
-
-  x or -extract
-
-Extract files and directores (default: all) from the archive.
-Files will be extracted by creating filenames as saved in the archive.
-If any of the external files already exist then zpaq will exit with
-an error and not extract any files unless -force is given to allow
-files to be overwritten. Last-modified dates and attributes will be
-restored as saved. Attributes saved in Windows will not be restored
-in Linux and vice versa. If there are multiple versions of a file
-saved, then the latest version will be extracted unless an earlier
-version is specified with -until.
-
-Arguments may have wildcards. A ? matches any character including /,
-and * matches any string, including strings containing /. In Linux,
-arguments with wildcards have to be quoted to protect them from the shell.
-
-  l or -list
-
-List the archive contents. Each file or directory is shown with a
-version number, date, attributes, uncompressed size, approximate
-compression ratio, and file name. The compression ratio is estimated
-by assuming that all fragments in a data block have the same ratio. It
-does not account for deduplication or for the overhead of storing the
-version headers, index, or fragment sizes and hashes.
-
-There may be multiple versions of a single file with different version
-numbers. A second table lists for each version number the number of
-fragments, date, number of files added and deleted, and the number
-of MB added before and after compression. Attributes are shown as
-a string of characters like "DASHRI" in Windows (directory, archive,
-system, hidden, read-only, indexed), or an octal number like "100644"
-(as passed to chmod(), meaning rw-r--r--) in Linux. If any special
-Windows attributes are set, then the value is displayed in hex.
-
-If any arguments are passed, then only those files or directories are
-listed. Arguments may have wildcards as with the extract command.
-
-  c or -compare
-
-Show differences between the archive and external files. If no
-arguments are given, then compare all files in the archive. If
-file or directory arguments are given, then compare just those
-files or directories. Wildcards or -to may be used as with extract.
-
-Files are compared by size, or if the sizes are the same, then
-by computing SHA-1 hashes and comparing with the
-stored hashes. With -all, dates and attributes are compared too.
-With -all -noattributes, or if no attributes are stored or if
-they are stored for a diffrent operating system, then attributes
-are not compared. If differences are found, then return an exit
-status of 1, else 0.
-
-Differences are displayed with a leading ">" for internal files
-and "<" for external files. A final count of differences is printed.
--quiet N suppresses listing of files when both the internal and
-external size are less than N bytes.
-
-  d or -delete
-
-Mark files and directories in the archive as deleted. This actually
-makes the archive slightly larger. The files can still be extracted
-by rolling back to an earlier version using -until. Wildcards are
-allowed as with extract.
-
-  t or -test
-
-Test archive integrity by decompressing the selected files (default:
-all files) and verify their SHA-1 checksums, but do not write them
-to disk. The -all option will additionally test all of the compressed
-data including old versions, deleted files, and files not selected,
-and verify both the fragment checksums and block checksums. Exit
-with error status 1 if any errors are found, else 0.
-
-  p or -purge
-
-Create a new archive containing only the files and directories in
-the current version. It may be smaller than the input archive because
-data blocks containing only deleted files and old versions are
-permanently removed. The -to option is required to specify the output.
-A .zpaq extension is assumed. The input but not the output can be a
-multi-part archive (containing the characters * or ?). Streaming
-archives cannot be purged. For example:
-
-  zpaq p archive -to out
-
-will create out.zpaq containing files from the current version
-of archive.zpaq. It is an error if out.zpaq exists unless the
--force option is used to overwrite it. Regardless of whether the
-input is encrypted, the output is not encrypted unless a password
-is specified with -newkey. The input and output passwords may be
-different.
-
-If -all is specified, then all versions are kept unchanged. The archive
-is simply copied unless -key or -newkey is specified to change the
-password, or if the input is a multi-part archive to be concatenated.
-
-
-Options:
-
-  -not
-
-Exclude files and directories (before renaming with -to) from being added,
-extracted, listed, deleted, or compared. Wildcards are
-allowed as with extract (/ is matched). For example:
-
-  zpaq a archive foo -not foo/bar    Add directory foo except foo/bar
-  zpaq a archive foo -not *bar*      Add foo except any file containing "bar"
-
-If the argument starts with : any string starting with + or - followed by
-d,a,A,s,h,r,i mean to exclude files where all of the corresponding Windows
-attributes (directory, archive, system, hidden, read-only, index) are
-set (+) or not set (-) respectively. For example:
-
-  -not :+hs :+d-a
-
-means to exclude files with both the hidden and system attributes are set
-and to exclude directories where the archive bit is not set. If the first
-attribte is A (like -not :-Ad) then it means to also clear the archive
-bit both internally and externally when adding, thus implementing the
-intended meaning of this bit.
-
-In Linux, the possible attributes are d for directory and rwx for user
-read, write, and execute permission (regardless of owner).
-
-  -to
-
-For the add, extract, list, and compare commands, replace each
-filename argument after the archive name with the corresponding
-argument of -to. If there are no filename arguments, then prefix
-each filename with the argument of -to. For purge and encrypt,
--to is required to specify the output file, which may be the same
-as the input.
-
-For example, if archive.zpaq contains the file foo/bar, then:
-
-  zpaq x archive                  Creates foo/bar
-  zpaq x archive -to tmp/         Creates tmp/foo/bar
-  zpaq x archive foo -to tmp      Creates tmp/bar
-  zpaq x archive foo/bar to tmp   Creates tmp
-
-To compare differently named files or directories:
-
-  zpaq c archive -to tmp/         Compare internal foo/bar to tmp/foo/bar
-  zpaq c archive foo -to tmp      Compare internal foo/bar to tmp/bar
-
-To add files but save the names differently, -to renames the external files:
-
-  zpaq a archive tmp -to foo      Add foo/bar and save name as tmp/bar
-
-To list and show how files will be renamed when extracted:
-
-  zpaq l archive                  Show as "foo/bar"
-  zpaq l archive -to tmp/         Show as "foo/bar -> tmp/foo/bar"
-  zpaq l archive foo -to tmp      Show as "foo/bar -> tmp/bar"
-
-Multiple arguments are renamed in order:
-
-  zpaq x archive a b c -to d e    Extracts a -> d, b -> e, c -> c
-
-Wildcard arguments are not renamed:
-
-  zpaq x archive foo/b*           Creates foo/bar
-  zpaq x archive foo/b* -to tmp/  Creates foo/bar
-
-
-  -until N
-  -until YYYYMMDD[HH[MM[SS]]]
-  -until YYYY-MM-DD [HH[:MM[:SS]]]
-
-Roll back the archive to an earlier version. With all commands, versions
-later than N or after the specified date and time will be ignored.
-The add and delete commands will truncate the archive before appending.
-If specified as a date and time, then the appended version will store
-that date instead of the current date.
-
-Dates are specified in UT (universal time) zone. The hours, minutes,
-and seconds default to 23, 59, 59. Spaces and other characters
-are ignored except that a single digit is assumed to have a leading 0.
-If the result has at least 8 digits, then it is interpreted as a date
-and time, else a version number. Valid dates have years in the range
-1900 to 2999. For example, the following are equivalent:
-
-  -until 20140102030405
-  -until 2014-1-2 3:04:05
-  -until 2014 1 2 3 4 5
-
-The default is the latest version. For backward compatibility, -version
-is equivalent to -until.
-
-  -force
-
-Add files even if the dates match. If a file really is identical,
-then it will not be added. For extract and split, output files will be
-overwritten. For join, skip testing before concatenation.
-
-  -threads N
-
-Set the number of threads to N for parallel compression and decompression.
-(-add will show 2 jobs per thread but only N can compress at a time).
-The default is to detect the number of processor cores and use that value
-or the limit according to -method, whichever is less. The number of cores
-is detected from the environment variable %NUMBER_OF_PROCESSORS% in
-Windows or /proc/cpuinfo in Linux. If zpaq is compiled for 32 bit
-processors then the default is at most 3.
-
-  -method 0..5
-
-Compress faster..better. The default is -method 1. (See below for advanced
-compression options).
-
-  -noattributes
-
-Ignore Windows file attributes (archive, read-only, system, hidden, index)
-and Linux permissions. The add commmand will not save them in the archive.
-The extract and restore commands will ignore any saved attributes and create
-files with default attributes and permissions. The list command will not
-show them. The compare command will treat files as identical
-if only the attributes differ.
-
-  -nodelete
-
-When adding files, do not mark files as deleted if the external file
-does not exist.
-
-  -key [password]
-
-Create an encrypted archive. Once created, all operations must supply
-the same password or else zpaq will exit with an error.
-Passwords with spaces or special characters should be enclosed
-in "quotes". If the password is omitted, then zpaq will prompt for it
-without echoing to the screen (twice if the archive is new).
-
-An archive of length n bytes is encrypted with AES-256 in CTR mode as follows:
-
-  salt[0..31] (archive[i=32..n-1] xor AES256(key, salt[0..7] (i/16)[7..0]))
-
-where
-
-  key = Scrypt(SHA256(password), salt, N=16384, r=8, p=1)
-
-The 32 byte salt prefixed to the encrypted output is generated in Windows
-using CryptGenRandom() or in Linux by reading /dev/urandom. Then the
-input is XORed with a keystream generated by encrypting IV+2, IV+3,
-IV+4... in 16 byte blocks with AES-256, where the 128 bit IV is the
-first 8 bytes of the salt followed by 8 zero bytes, and numbers are
-interpreted in big-endian format (most significant byte first).
-
-Scrypt with the parameters shown takes about 0.1 seconds (2^26
-32-bit operations each of: add, xor, rotate) to generate the
-AES key and uses 16 MB memory. It is intended to slow down brute
-force key searches. Nevertheless, short or easy to guess passwords
-should be avoided. A password that is strong enough for a website login
-is not strong enough for an archive because it is not possible to lock
-out attackers after too many incorrect guesses. A password should have
-about 64 bits of entropy (requiring 2^64 calls to Scrypt to guess), which
-could be achieved using 13 random letters and digits or 4 random words.
-
-There is no authentication or protection from tampering. If an attacker
-knows or can guess any bits of the plaintext, then he can set those
-bits without knowing the password. You can test for tampering using the
-zpaqd sha1 command to see if the hash has changed. However, this
-does not protect against attacks where the attacker can change the file
-after testing, such as when the attacker can inject packets on a
-network between the user and an encrypted archive on an NFS server.
-
-zpaq will check that the first password is correct by assumiing that
-the first 4 bytes of the archive are "7kSt", "zPQ\x01", "zPQ\x02", or
-"zPQ\x03". If not, an error will occur and the archive will remain
-unchanged. There is a probability of about 10^-9 that one of these values
-will be detected when the first password is incorrect and the archive
-will be overwritten with random bytes.
-
-  -newkey [password]
-
-Specify the encryption key for the output of purge. If password is
-omitted, then prompt twice. The default is to output without encryption,
-even if the input is encrypted. A new, random salt is used.
-
-If an encrypted archive is truncated before update (using zpaq add -until,
-or by deleting the last part of a multi-part archive), then the truncated
-part, if it contains known plaintext and is not deleted securely, can
-reveal the keystream and therefore the plaintext of the newly added data.
-This attack does not require knowing the password, nor does it reveal the
-password. You can protect against this attack,as follows:
-
-  zpaq purge archive -key ... -to new_arcive -newkey ... -all
-
-where -all tells the purge command to do a simple copy with decryption
-and encryption with a new salt and keystream. The old and new passwords
-may be the same.
-
-  -quiet [N[k|m|g]]
-
-With no argument, suppress all output except error messages. With N,
-list and compare will show only files of size N bytes or larger. The effect
-on add, delete, extract, and test is to produce more output, showing
-operations on all files of size N bytes or larger (e.g. -quiet 0 for verbose
-output). N may be followed by k, m, or g to specify KB, MB, or GB.
-For example, -quiet 1m is the same as -quiet 1000000.
-
-  -summary N
-
-When listing contents, show only the top N files, directories, and
-filename extensions by total size and approximate compression ratio.
-The default is 20. Also show a table of deduplication statistics and a
-table of version dates.
-
-  -since N
-
-List, compare, or extract only versions N and later. If N is negative
-then list, compare, or extract only the last -N updates. Default is 0 (all).
-
-  -all
-
-List all versions of each file, including deletions. The default is to
-list only the latest version, or not list it if it is deleted.
-Also list a table of versions like -summary.
-When comparing files, compare dates and attributes in addition to contents.
-With test, test all fragments, not just the latest versions of the
-selected files, and test block checksums in addition to fragment checksums.
-With purge, keep all of the original archive contents.
-
-  -duplicates
-
-Sort by decreasing size and then list each file that is identical to
-the previous one with an initial character of "=" instead of ">".
-Comparison is by the list of fragment IDs.
-
-
-Advanced compression options:
-
-  -fragile
-
-With -add, don't add header locator tags, checksums, or a redundant
-list of fragment sizes to data blocks. This can produce slightly
-smaller archives and compress faster, but make it more difficult
-(usually impossible) to detect and recover from any damage to the archive.
-It is not possible to completely test fragile archives. With -extract,
-checksums (if present) are not verified during extraction, which can
-be faster. Recommended only for testing.
-
-  -fragment N
-
-Set the deduplication fragment range to (64..8128)*2^N with an average
-size of 1024*2^N bytes. The default is 6. Values other than 6 do not
-conform to the recommendations for the ZPAQ standard, but are still
-compliant. An archive updated with a different value than when first
-created will not deduplicate against existing files. Small values
-may improve deduplication up to a point but require more memory and
-disk space for the larger fragment list.
-
-  -method {0..9|x|s}[N1[,N2]...][[f<cfg>|c|i|a|m|s|t|w][N1][,N2]...]...
-
-With a single digit, select compression speed, where low values are
-faster and higher values compress smaller. The default is 1.
-N1, if present, selects a maximum block size of 2^(N1+20) - 4096 bytes.
-The default for methods 0, 1, x, s is 4 (16 MB, e.g. -method 14).
-The default for methods 2..5 is 6 (64 MB, e.g. -method 26).
-6..9 are the same as 5.
-
-When the first character is x, select experimental compression methods.
-These are for advanced uses only. The method is described
-by a group of commands beginning with a letter and followed by
-numbers separated by commas or periods without spaces. The first
-group starts with x and subsequent groups must start with f<cfg>, c, i,
-a, m, s, t, or w, where <cfg> is the name of a configuration file
-without the trailing .cfg extension, for example, "-method x4,0fmax".
-The numeric arguments in each group have the following meanings depending
-on the initial letter. The default values of all numeric arguments is 0
-unless specified otherwise.
-
-  x
-
-N1 selects a maximum block size of 2^(20+N1) - 4096 bytes. Fragments
-are grouped into blocks which are compressed or decompressed in
-parallel by separate threads. Each thread requires 2 times the block
-size in memory per thread to temporarily store the input and output for
-compression. For decompression, it requires storing only the block size.
-
-N2 selects the preprocessing step as follows:
-
-  0 = no preprocessing.
-  1 = LZ77 with variable length codes.
-  2 = LZ77 with byte-aligned codes.
-  3 = BWT.
-  4..7 = 0..3 with E8E9 transform applied first.
-
-The E8E9 transform scans the input block from back to front for
-5 byte sequences of the form (E8|E9 xx xx xx 00|FF) and adds
-the block offset of the sequence start (0..n-4) to the middle 3 bytes,
-interpreted LSB first. It improves the compression of x86 .exe and
-.dll files.
-
-LZ77 with variable length codes is designed for compression with no
-further context modeling. Bit codes are packed LSB first and are
-interpreted as follows:
-
-  00,n,L[n] = n literal bytes
-  mm,mmm,n,ll,r,q (mm > 00) = match of length 4n+ll, offset ((q-1)<<rb)+r-1
-
-where q is written in 8mm+mmm-8 (0..23) bits with an implied leading 1 bit
-and n is written using interleaved Elias Gamma coding, i.e. the leading
-1 bit is implied, remaining bits are preceded by a 1 and terminated by
-a 0. e.g. abc is written 1,b,1,c,0. Codes are packed LSB first and
-padded with leading 0 bits in the last byte. r is written in
-rb = max(0, N1-4) bits, where N1 is the block size parameter.
-
-Byte oriented LZ77 with minimum match length m = N3 with m in 1..64:
-
-  00xxxxxx   x+1 (1..64) literals follow
-  yyxxxxxx   match of length x+m (m..m+63), with y+1 (2..4) bytes of
-             offset-1 to follow, MSB first.
-
-BWT sorts the block by suffix with an implied terminator of -1 encoded
-as 255. The 4 byte offset of this terminator is appended to the end
-of the block LSB first, thus increasing the block size by 5. Memory
-required is 5x block size for both compression and decompression.
-
-N3 through N8 affect only LZ77 compression as follows:
-
-N3 = minimum match length. If the longest match found is less than N3,
-then literals are coded instead.
-
-N4 = context length to search first (normally N4 > N3), or 0 to skip
-this search.
-
-N5 = search for 2^N5 matches of length N4 (unless 0), then 2^N5 more
-matches of length N3. The longest match is chosen, breaking ties by
-choosing the closer one.
-
-N6 = use a hash table of 2^N6 elements to store the location of context
-hashes. It requires 4 x 2^N6 bytes of memory for compression only.
-
-If N6 - N1 >= 21 then use a suffix array instead of a hash table to search
-for matches. It adds 4.5 x 2^N1 MB memory for compression only
-(4 for the suffix array and 0.5 for the partial inverse suffix array
-rebuilt 8 times). Matches are found by scanning the suffix array
-forward and backward up to 2^N5 positions each way to find the longest
-match of at least N3. N4 has no effect.
-
-N7 = lookahead for secondary context. LZ77 will compare the next N5+N7
-bytes, allowing the first N7 not to match and code them as literals.
-If N6 selects a suffix array (N6-N1>=21, N5 not used), then lookahead
-is applied to N4. (Usually does not improve compression).
-
-For example, -method x4,5,4,0,3,24 specifies a 2^4 =  16 MB block size,
-E8E9 + LZ77 (4+1) with variable length codes, minimum match length 4, no
-secondary search (0), search length of 2^3 = 8, hash table size of 2^24
-elements. This gives fast and reasonable compression, requiring 96 MB per
-thread to compress and 16 MB per thread to decompress.
-
-The default is method -x4,1,4,0,3,24,0
-
-  s
-
-Store in streaming format rather than journaling. Each file is stored
-in a separate block. Files larger than the block size specified by
-N1 (2^(N1+20) - 4096) are split into blocks of this size. No deduplication
-is performed. Directories are not stored. Block sizes, dates, and attributes
-are stored in the first segment comment header of the first block
-as "size YYYYMMDDHHMMSS wN" (or "uN") all as decimal numbers. Subsequent
-blocks of the same file store only the size and leave the filename blank
-as well. Compression is single threaded. Options are the same as x.
-
-Subsequent groups beginning with a letter specify context models. zpaq
-compresses by predicting bits one at a time and arithmetic coding.
-Predictions are performed by a chain of context models, each taking
-a context (some set of past input bits or their hash) and possibly
-the predictions of other components as input. The final component
-in the chain is used to assign optimal length codes. The model, along
-with code to reverse any preprocessing steps, is saved in the archive
-as a program written in ZPAQL, as described in the ZPAQ specification
-and in libzpaq.h. Each letter describes a context model as follows:
-
-  c - Context model (CM or ICM).
-  i - ISSE chain.
-  a - MATCH.
-  m - MIX.
-  t - MIX2.
-  s - SSE
-  w - Word model ISSE chain.
-
-Memory usage per component is generally limited to the block size, but
-may be less for small contexts. The numeric arguments to each model
-are as follows:
-
-  c
-
-N1 is 0 for an ICM and 1..256 to specify a CM with limit argument N1-1.
-Higher values are better for stationary sources. A CM maps a context
-directly to a prediction and has an update rate that decreases with
-higher N1. An ICM maps a context to a bit history and then to a prediction.
-An ICM adapts rapidly to different data types or to sorted data.
-
-If N1 is 1000 or more, then memory usage is adjusted by a factor of
-2^-floor(N1/1000), and the component type is determined by N1%1000. Default
-memory usage depends on the number of bits of context, not to exceed the
-block size. The usage is otherwise 2^sb bytes, where sb is initially
-11 (2 KB) and increased by the contexts below.
-
-N2 in 1..255 includes (offset mod N2) in the context hash. It increases
-sb by floor(log2(N2))+1.  N2 in 1000..1255 includes the distance to the
-last occurrence of N2-1000 in the context hash. It increases sb by 6
-(memory usage by a factor of 64).
-
-N3,... in 0..255 specifies a list of byte context masks reading back from
-the most recently coded byte. Each mask is ANDed with the context byte
-before hashing. Each such context increases sb by floor(nbits(N)*3/4)
-where nbits(N) is the number of bits set in N. Thus, N=255 increases
-sb by 6 (memory usage by 64).
-
-A value of N = 1000 or more is equivalent to a sequence
-of N-1000 zeros. Only the last 65536 bytes of context are saved.
-For byte aligned LZ77 only, N in 256..511 specifies either the LZ77
-parse state if a match/literal code or match offset byte is expected,
-or else a literal byte ANDed with the low 8 bits as with 0..255. For example,
--method x4,6,8,0,4,24,12,16c0,0,511 specifies E8E9 + byte aligned LZ77 (6),
-and an order 1 ICM context model that includes the LZ77 parse state.
-
-  i
-
-ISSE chain. Each ISSE takes a prediction from the previous component
-as input and adjusts it according to the bit history of the specified
-context. There must be a previous component. The arguments N,...
-specify an increase of N in the context order from previous component's
-context, which is hashed together with the most recently coded bytes.
-For example, -method x4,3ci1,1,2 specifies a 16 MB block (4), BWT (3),
-followed by an order 0 ICM (c) and an ISSE chain of 3 components with
-context orders 1, 2, and 4.
-
-If N is 10 or higher, then the context order is increased by N%10 and
-memory usage is halved for each increment of floor(N/10). The default
-memory usage of each ISSE component in the chain is 64 times the
-previous component for each increment of the context order up to a maximum
-of the block size. For example, x4,3ci1,1,2 would specify 2 KiB (default
-memory usage for a ICM with no other context), 128 KB for the first ISSE,
-8 MiB for the second ISSE, and 1i6 MB (the block size) for the third ISSE.
-ci1,11,12 would reduce the second and third ISSE to 4 MiB and 8 MiB
-respectively.
-
-  a
-
-Specifies a MATCH. A MATCH maintains a history buffer and a hash table
-index to quickly find the most recent occurrence of the current context
-and predict whatever bit follows. If a prediction fails, then it makes
-no further predictions for the rest of the byte and then it looks up
-the context hash on the next boundary. The hash is computed as the
-xN1 + 18 - N3 low bits of hash := hash*N1+c+1 where c is the most recently
-coded byte and xN1 is the block size as specified by x. N2 and N3 specify
-how many times to halve the memory usage of the buffer and hash table,
-respectively. For example, -method x4,0a24,0,1 specifies a 16 MiB block
-for compression (x4) with no preprocessing (0). The match model uses
-a multiplier of 24, a history buffer the same size as the compression
-buffer (0), and a hash table using half as much memory (1). This means
-that the hash table index is 4 + 18 - 1 = 21 bits. The multiplier of 24
-when written in binary has 3 trailing 0 bits. Thus, it computes a hash
-of order 21/3 = 7. A high order match is most useful when mixed with
-other low-order context models. Default is a24,0,0
-
-  m
-
-Specifies a MIX. A MIX does weighted averaging of all previously specified
-components and adapts the weights in favor of the most accurate ones.
-The mixing weights can be selected by a (usually small) context for
-better compression.
-
-N1 is the context size in bits. The context is not hashed. If N1 is not a
-multiple of 8 then the low bits of the oldest byte are discarded.
-A good value is 0, 8, or 16. N2 specifies the update rate. A good value
-is around 16 to 32. For example, -method x6,0ci1,1,1m8,24 specifies
-64 MB blocks, no preprocessing, an order 0-1-2-3 ICM-ISSE chain with a
-final mixer taking all other components as input, order 0 (bitwise order 8)
-context, and a learning rate of 24. Default is m8,24. Memory usage is
-M*2^(N1+2) bytes up to M times the block size, where M is the number of
-mixer inputs.
-
-  t
-
-Specifies a MIX2. The input is only the previous 2 components. N1 and N2
-are the same as MIX. For example,
--method x6,0ci1,1,1m8,10m16,32t0,24 specifies the previous model with
-2 mixers taking different contexts with different learning rates, and
-then mixing both of them together with no context and a learning rate of 24.
-Default is t8,24. Memory usage is 2^(N1+2) bytes.
-
-  s
-
-Specifies an SSE. An SSE, like an ICM, uses a context to adjust the
-prediction of the previous component, but does so using the direct
-context (via a 2-D lookup table of the quantized and interpolated
-prediction) rather than a linear adjustment based on the bit history.
-Thus, it has more parameters, making a smaller context more appropriate.
-
-The input is the previous component. N1 is the context
-size in bits as in a MIX or MIX2. N2 and N3 are the start and limit
-arguments, where higher values specify lower initial and final learning
-rates. Default is s8,32,255.
-
-  w
-
-Word-model ICM-ISSE chain for modeling text. N1 is the length of the
-chain, with word-level context orders of 0..N1-1. A word is defined
-as a sequence of characters in the range N2..N2+N3-1 after ANDing
-with N4. For Default is w1,65,26,223,20,0 represents the set [A-Za-z]
-using a context hash multiplier of N5 = 20. Memory per chain
-component is 2^-N6 times block size.
-
-  f<cfg>
-
-Specifies a custom configuration file containing ZPAQL code.
-The ZPAQL language is described in libzpaq.h. N1..N9 are passed
-as arguments $1..$9, except that $1 may be reduced such that
-the actual block size is at most 2^$1 bytes.
-If there is a post-processor (PCOMP) section, then
-it must correctly invert any preprocessing steps specified by the N2
-argument to x. The PCOMP argument, normally the name of an external
-preprocessor command, is ignored. The .cfg filename extension is optional.
-Component specifications other than x are ignored.
-
-For example, -method x6,0fmax specifies 64 MB blocks, no preprocessing,
-and modeling using the external file max.cfg with $1 and $2 passed
-as 6 and 0 respectively.
-
+compatibility in Windows and Linux. See zpaq.pod for usage.
 
 TO COMPILE:
 
@@ -744,17 +35,15 @@ This program needs libzpaq from http://mattmahoney.net/zpaq/ and
 libdivsufsort-lite from above or http://code.google.com/p/libdivsufsort/
 Recommended compile for Windows with MinGW:
 
-  g++ -O3 -s -msse2 zpaq.cpp libzpaq.cpp divsufsort.c -o zpaq -DNDEBUG
+  g++ -O3 zpaq.cpp libzpaq.cpp -o zpaq
 
-With Visual C++ (on one line):
+With Visual C++:
 
-  cl /O2 /EHsc /arch:SSE2 /DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c
-  advapi32.lib
+  cl /O2 /EHsc zpaq.cpp libzpaq.cpp advapi32.lib
 
 For Linux:
 
-  g++ -O3 -s -Dunix -DNDEBUG zpaq.cpp libzpaq.cpp divsufsort.c \
-  -pthread -o zpaq
+  g++ -O3 -Dunix zpaq.cpp libzpaq.cpp -pthread -o zpaq
 
 Possible options:
 
@@ -769,8 +58,7 @@ Possible options:
   -Dunix     Not Windows. Sometimes automatic in Linux. Needed for Mac OS/X.
   -fopenmp   Parallel divsufsort (faster, implies -pthread, broken in MinGW).
   -pthread   Required in Linux, implied by -fopenmp.
-  -DNDEBUG   Turn off debugging checks in divsufsort (faster).
-  -DDEBUG    Turn on debugging checks in libzpaq, zpaq (slower).
+  -DDEBUG    Turn on debugging checks.
   -DPTHREAD  Use Pthreads instead of Windows threads. Requires pthreadGC2.dll
              or pthreadVC2.dll from http://sourceware.org/pthreads-win32/
   -Dunixtest To make -Dunix work in Windows with MinGW.
@@ -780,7 +68,6 @@ Possible options:
 #define _FILE_OFFSET_BITS 64  // In Linux make sizeof(off_t) == 8
 #define UNICODE  // For Windows
 #include "libzpaq.h"
-#include "divsufsort.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1135,7 +422,7 @@ time_t unix_time(int64_t date) {
 }
 
 // Put n cryptographic random bytes in buf[0..n-1].
-// The first 3 bytes will not be "zPQ" or "7kS" (start of a ZPAQ archive).
+// The first byte will not be 'z' or '7' (start of a ZPAQ archive).
 // For a pure random number, discard the first byte.
 
 void random(char* buf, int n) {
@@ -1157,7 +444,7 @@ void random(char* buf, int n) {
     error("key generation failed");
   }
 #endif
-  if (n>=3 && (memcmp(buf, "zPQ", 3)==0 || memcmp(buf, "7kS", 3)==0))
+  if (n>=1 && (buf[0]=='z' || buf[0]=='7'))
     buf[0]^=0x80;
 }
 
@@ -1168,7 +455,7 @@ string itos(int64_t x, int n=1) {
   assert(x>=0);
   assert(n>=0);
   string r;
-  for (; x || n>0; x/=10, --n) r=char('0'+x%10)+r;
+  for (; x || n>0; x/=10, --n) r=string(1, '0'+x%10)+r;
   return r;
 }
 
@@ -1718,9 +1005,13 @@ public:
   // is in encrypted format. mode_ is 'r' for reading or 'w' for writing.
   // If the filename contains wildcards then output is to the first
   // non-existing file, else to filename. If newsize>=0 then truncate
-  // the output to newsize bytes.
-  bool open(const char* filename, const char* password, int mode_='r',
-            int64_t newsize=-1);
+  // the output to newsize bytes. If password and offset>0 then encrypt
+  // output as if previous parts had size offset and salt salt.
+  bool open(const char* filename, const char* password=0, int mode_='r',
+            int64_t newsize=-1, int64_t offset=0, const char* salt=0);
+
+  // True if archive is open
+  bool isopen() const {return files.size()>0;}
 
   // Position the next read or write offset to p.
   void seek(int64_t p, int whence);
@@ -1789,14 +1080,14 @@ public:
 };
 
 bool Archive::open(const char* filename, const char* password, int mode_,
-                   int64_t newsize) {
+                   int64_t newsize, int64_t offset, const char* salt) {
   assert(filename);
   assert(mode_=='r' || mode_=='w');
   mode=mode_;
 
-  // Read part files and get sizes
+  // Read part files and get sizes. Get salt from the first part.
   string next;
-  for (int i=1; ; ++i) {
+  for (int i=1; !offset; ++i) {
     next=subpart(filename, i);
     if (!exists(next)) break;
     if (files.size()>0 && files[0].fn==next) break; // part overflow
@@ -1804,10 +1095,10 @@ bool Archive::open(const char* filename, const char* password, int mode_,
     // set up key from salt in first file
     if (!in.open(next.c_str())) error("cannot read archive");
     if (i==1 && password && newsize!=0) {
-      char salt[32], key[32];
-      if (in.read(salt, 32)!=32) error("no salt");
-      libzpaq::stretchKey(key, password, salt);
-      aes=new libzpaq::AES_CTR(key, 32, salt);
+      char slt[32], key[32];
+      if (in.read(slt, 32)!=32) error("no salt");
+      libzpaq::stretchKey(key, password, slt);
+      aes=new libzpaq::AES_CTR(key, 32, slt);
     }
 
     // Get file size
@@ -1816,6 +1107,19 @@ bool Archive::open(const char* filename, const char* password, int mode_,
         in.tell()+(files.size() ? files[files.size()-1].end : 0)));
     in.close();
     if (next==filename) break;  // no wildcards
+  }
+
+  // If offset is not 0 then use it for the part sizes and use
+  // salt as the salt of the first part.
+  if (offset>0) {
+    files.push_back(FE("", offset));
+    files.push_back(FE(filename, offset));
+    if (password) {
+      assert(salt);
+      char key[32]={0};
+      libzpaq::stretchKey(key, password, salt);
+      aes=new libzpaq::AES_CTR(key, 32, salt);
+    }
   }
 
   // Open file for reading
@@ -1870,11 +1174,13 @@ bool Archive::open(const char* filename, const char* password, int mode_,
     if (!out.open(files[fi].fn.c_str()))
       error("cannot write salt to archive");
     out.seek(0, SEEK_SET);
-    char salt[32]={0}, key[32]={0};
-    random(salt, 32);
-    libzpaq::stretchKey(key, password, salt);
-    aes=new libzpaq::AES_CTR(key, 32, salt);
-    out.write(salt, 32);
+    char key[32]={0};
+    char slt[32]={0};
+    if (salt) memcpy(slt, salt, 32);
+    else random(slt, 32);
+    libzpaq::stretchKey(key, password, slt);
+    aes=new libzpaq::AES_CTR(key, 32, slt);
+    out.write(slt, 32);
     files[fi].end=out.tell();  // 32
     out.close();
   }
@@ -1912,8 +1218,7 @@ void Archive::seek(int64_t p, int whence) {
     }
     if (fi<size(files)) in.seek(off-files[fi].end, SEEK_END);
   }
-  else {
-    assert(mode=='w');
+  else if (mode=='w') {
     assert(files.size()>0);
     assert(out.isopen());
     assert(fi+1==size(files));
@@ -1926,7 +1231,7 @@ void Archive::seek(int64_t p, int whence) {
 
 ///////////////////////// NumberOfProcessors ///////////////////////////
 
-// Guess number of cores. In 32 bit mode, max is 3.
+// Guess number of cores. In 32 bit mode, max is 2.
 int numberOfProcessors() {
   int rc=0;  // result
 #ifdef unix
@@ -1956,7 +1261,7 @@ int numberOfProcessors() {
   if (p) rc=atoi(p);
 #endif
   if (rc<1) rc=1;
-  if (sizeof(char*)==4 && rc>3) rc=3;
+  if (sizeof(char*)==4 && rc>2) rc=2;
   return rc;
 }
 
@@ -2038,6 +1343,7 @@ void WriteBuffer::write(const char* buf, int n) {
 
 // write to out
 void WriteBuffer::save(libzpaq::Writer* out) {
+  if (!out) return;
   for (int i=0; i<int(v.size())-1; ++i)
     out->write(v[i], BUFSIZE);
   if (v.size())
@@ -2450,9 +1756,10 @@ int read_password(char* hash, int repeats,
 // files with date, attributes, and list of fragment pointers.
 // Methods add to, extract from, compare, and list the archive.
 
-// enum for HT::csize
+// enum for HT::csize and version
 static const int64_t EXTRACTED= 0x7FFFFFFFFFFFFFFELL;  // decompressed?
 static const int64_t HT_BAD=   -0x7FFFFFFFFFFFFFFALL;  // no such frag
+static const int64_t DEFAULT_VERSION=9999999999999LL;  // unless -until
 
 // fragment hash table entry
 struct HT {
@@ -2536,8 +1843,11 @@ private:
   char new_password_string[32];  // hash of encrypt -to arg
   const char* password;     // points to password_string or NULL
   const char* new_password; // points to new_password_string or NULL
+  string with;              // -with option
 
   // Archive state
+  int64_t dhsize;           // total size of D blocks according to H blocks
+  int64_t dcsize;           // total size of D blocks according to C blocks
   vector<HT> ht;            // list of fragments
   DTMap dt;                 // set of files
   vector<VER> ver;          // version info
@@ -2553,7 +1863,7 @@ private:
   // Support functions
   string rename(const string& name);    // replace files prefix with tofiles
   string unrename(const string& name);  // undo rename
-  int64_t read_archive(int *errors=0);  // read index block chain
+  int64_t read_archive(int *errors=0, const char* arc=0);  // read arc
   void read_args(bool scan, bool mark_all=false);  // read args, scan dirs
   void scandir(string filename, bool recurse=true);  // scan dirs to dt
   void addfile(string filename, int64_t edate, int64_t esize,
@@ -2565,35 +1875,54 @@ private:
 // Print help message
 void Jidac::usage() {
   fprintf(con, 
-"zpaq (C) 2009-2014, Dell Inc. This is free software under GPL v3.\n"
+"zpaq archiver for incremental backups with rollback capability.\n"
+"(C) 2009-2014, Dell Inc. Free under GPL v3. http://mattmahoney.net/zpaq\n"
 #ifndef NDEBUG
 "DEBUG version\n"
 #endif
 "\n"
-"zpaq is a journaling (append-only) archiver for incremental backups.\n"
-"Files are added only when the last-modified date has changed. Both the old\n"
-"and new versions are saved. You can extract from old versions of the\n"
-"archive by specifying a date or version number.\n"
-"\n"
-"Usage: zpaq command archive files... -options...\n"
-"Commands may be abbreviated to one letter (or x for extract).\n"
-"Archive is assumed to have a .zpaq extension if not specified.\n"
+"Usage: zpaq command archive[.zpaq] files... -options...\n"
 "Files can be directories in which case the whole tree is included.\n"
 "Wildcards * and ? in file names match any string or character.\n"
 "Wildcards in archive match numbers or digits in multi-part archive.\n"
-"\n"
-"a  add          Compress and add files to archive (or to \"\" to test).\n"
-"x  extract      Decompress named files (default: entire contents).\n"
-"l  list         List named files (default: entire contents).\n"
-"c  compare      Compare with external files (default: entire contents).\n"
-"d  delete       Mark as deleted in a new version of archive.\n"
-"t  test         Test decompression without writing any files.\n"
-"p  purge -to out[.zpaq]  Create new archive with old versions removed.\n"
-"\n"
+"Part 0 is the index. If present, no other parts are needed to update.\n"
+"  a  add        Add changed files to archive (or to \"\" to test).\n"
+"  x  extract    Decompress named files (default: entire contents).\n"
+"  l  list       List named files (default: entire contents).\n"
+"  c  compare    Compare with external files (default: entire contents).\n"
+"  d  delete     Mark as deleted in a new version of archive.\n"
+"  t  test       Extract and verify but discard output.\n"
+"  p  purge -to out[.zpaq]  Create new archive with old versions removed.\n"
 "Options (may be abbreviated if not ambiguous):\n"
-"-to files...    a,x,c: Rename external files or specify prefix, e.g.\n"
-"                zpaq x backup file1 dir1 -to file2 dir2  (rename output).\n"
-"                zpaq x backup -to tmp/  (extract all to tmp/all).\n"
+"-all            l,t: All versions. c: compare metadata too. p: keep all.\n"
+"-duplicates     l: List by size and label identical files with =\n"
+"-force          a: Add even if dates unchanged. x: overwrite output files.\n"
+"-fragile        Don't save or verify checksums or recovery info.\n"
+"-fragment N     a: Set dedup fragment size to 2^N KiB (default: 6).\n"
+"-key [password] Required if encrypted (default: prompt without echo).\n"
+"-method 0..5    a: Compres faster..better (default: 1)\n"
+"-method 0..5[B] Use 2^B MiB blocks (default: 04, 14, 26, 36, 46, 56).\n"
+"-method {x|s|i}B[,N2]...[{c|i|a|w|m|s|t|fF}[N1[,N2]...]]...\n"
+"  x=journaling (default). s=streaming (no dedup). i=index (no data).\n"
+"    N2: 0=no pre/post. 1,2=packed,byte LZ77. 3=BWT. 4..7=0..3 with E8E9.\n"
+"    N3=LZ77 min match. N4=longer match to try first (0=none). 2^N5=search\n"
+"    depth. 2^N6=hash table size (N6=B+21: suffix array). N7=lookahead.\n"
+"    Context modeling defaults shown below:\n"
+"  c0,0,0: context model. N1: 0=ICM, 1..256=CM max count. 1000..1256 halves\n"
+"    memory. N2: 1..255=pos mod N2, 1000..1255=gap to last N2-1000 byte.\n"
+"    N3...: order 0... context masks (0..255). 256..511=mask+byte LZ77\n"
+"    parse state, >1000: gap of N3-1000 zeros.\n"
+"  i: ISSE chain. N1=context order. N2...=order increment.\n"
+"  a24,0,0: MATCH: N1=hash multiplier. N2=halve buffer. N3=halve hash tab.\n"
+"  w1,65,26,223,20,0: Order 0..N1-1 word ISSE chain. A word is bytes\n"
+"    N2..N2+N3-1 ANDed with N4, hash mulitpiler N5, memory halved by N6.\n"
+"  m8,24: MIX all previous models, N1 context bits, learning rate N2.\n"
+"  s8,32,255: SSE last model. N1 context bits, count range N2..N3.\n"
+"  t8,24: MIX2 last 2 models, N1 context bits, learning rate N2.\n"
+"  fF: use ZPAQL model in file F.cfg (see docs).\n"
+"-newkey [password]  p: Set out.zpaq password (default: no encryption).\n"
+"-noattributes   Ignore/don't save file attributes or permissions.\n"
+"-nodelete       a: Do not mark unmatched files as deleted.\n"
 "-not files...   Exclude, e.g. zpaq a backup c:/ -not c:/Windows *.obj\n"
 #ifdef unix
 "-not :+-drwx    Exclude if user permissions are +set or -unset.\n"
@@ -2601,24 +1930,17 @@ void Jidac::usage() {
 "-not :+-dashri  Exclude if Windows attributes are +set or -unset.\n"
 "-not :-Ad       If archive attribute is set then clear it before adding.\n"
 #endif
-"-until N        Revert archive to the N'th update (default: last).\n"
-"-until %s\n"
-"                Set date (UT) and revert archive. (default time: 235959).\n"
-"-since N        Start at version N or -N from end if N<0 (default: 1).\n"
-"-key [password] Create or access encrypted archive (default: prompt).\n"
-"-newkey [password]  p: Set out.zpaq password (default: none).\n"
-"-noattributes   Ignore/don't save file attributes or permissions.\n"
-"-nodelete       a: Do not mark unmatched files as deleted.\n"
-"-force          a: Add even if dates unchanged. x: overwrite output files.\n"
-"-method 0...5   a: Compress faster...better (default: 1).\n"
-"-threads N      a,x,t: Use N threads (default: %d cores detected).\n"
-"-all            l,t: All versions. c: compare metadata too. p: keep all.\n"
 "-quiet [N[k|m|g]]  Don't show files smaller than N (default none).\n"
+"-since N        x,c,l: Start at version N or -N from end (default: 1).\n"
 "-summary [N]    l: List top N (20) files and types and a version table.\n"
-"-duplicates     l: List by size and label identical files with =\n"
-"See zpaq.cpp for advanced options and complete documentation.\n"
-"The latest version can be found at http://mattmahoney.net/zpaq\n",
-  dateToString(date).c_str(), threads);
+"-threads N      a,x,t: Use N threads (default: %d cores detected).\n"
+"-to names...    a,x,l,c: Rename external files or specify prefix, e.g.\n"
+"                zpaq x backup file1 dir1 -to file2 dir2  (rename output).\n"
+"                zpaq x backup -to tmp/  (extract all to tmp/all).\n"
+"-until N        Revert to N'th update or -N from end (default: last).\n"
+"-until %s  Set date and revert (UT, default time: 235959).\n"
+"-with archive[.zpaq]   c: compare two archives.\n",
+  threads, dateToString(date).c_str());
   exit(1);
 }
 
@@ -2658,7 +1980,7 @@ string expandOption(const char* opt) {
     "list","add","extract","delete","test","compare","purge",
     "method","force","quiet","summary","since","noattributes","key",
     "to","not","version","until","threads","all","fragile","duplicates",
-    "fragment","nodelete","newkey",0};
+    "fragment","nodelete","newkey","with",0};
   assert(opt);
   if (opt[0]=='-') ++opt;
   const int n=strlen(opt);
@@ -2685,15 +2007,16 @@ int Jidac::doCommand(int argc, const char** argv) {
   force=all=noattributes=nodelete=duplicates=resetArchive=false;
   since=0;
   summary=0;
-  version=9999999999999LL;
+  version=DEFAULT_VERSION;
   date=0;
   threads=0; // 0 = auto-detect
   fragment=6;
   password=0;  // no password
   new_password=0;  // no new password
-  method="1";  // 0..5
+  method="";  // 0..5
   ht.resize(1);  // element 0 not used
   ver.resize(1); // version 0
+  dhsize=dcsize=0;
 
   // Get date
   time_t now=time(NULL);
@@ -2739,6 +2062,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     else if (opt=="-duplicates") duplicates=true;
     else if (opt=="-since" && i<argc-1) since=atoi(argv[++i]);
     else if (opt=="-fragment" && i<argc-1) fragment=atoi(argv[++i]);
+    else if (opt=="-with" && i<argc-1) with=argv[++i];
     else if (opt=="-summary") {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
@@ -2760,26 +2084,32 @@ int Jidac::doCommand(int argc, const char** argv) {
       }
       --i;
     }
-    else if ((opt=="-version" || opt=="-until")  // read date
-             && i<argc-1 && argv[i+1][0]!='-') {
+    else if ((opt=="-version" || opt=="-until") && i+1<argc) {  // read date
 
       // Read digits from multiple args and fill in leading zeros
       version=0;
       int digits=0;
-      while (++i<argc && argv[i][0]!='-') {
-        for (int j=0; ; ++j) {
-          if (isdigit(argv[i][j])) {
-            version=version*10+argv[i][j]-'0';
-            ++digits;
-          }
-          else {
-            if (digits==1) version=version/10*100+version%10;
-            digits=0;
-            if (argv[i][j]==0) break;
+      if (argv[i+1][0]=='-') {  // negative version
+        version=atol(argv[i+1]);
+        if (version>-1) usage();
+        ++i;
+      }
+      else {  // positive version or date
+        while (++i<argc && argv[i][0]!='-') {
+          for (int j=0; ; ++j) {
+            if (isdigit(argv[i][j])) {
+              version=version*10+argv[i][j]-'0';
+              ++digits;
+            }
+            else {
+              if (digits==1) version=version/10*100+version%10;
+              digits=0;
+              if (argv[i][j]==0) break;
+            }
           }
         }
+        --i;
       }
-      --i;
 
       // Append default time
       if (version>=19000000LL     && version<=29991231LL)
@@ -2826,6 +2156,15 @@ int Jidac::doCommand(int argc, const char** argv) {
        || command=="-extract") && quiet==-1)
     quiet=MAX_QUIET-1;
 
+  // Adjust negative version
+  if (version<0) {
+    Jidac jidac(*this);
+    jidac.version=DEFAULT_VERSION;
+    if (!jidac.read_archive())  // not found?
+      jidac.read_archive(0, subpart(archive, 0).c_str());  // try remote index
+    version+=size(jidac.ver)-1;
+  }
+
   // Execute command
   if (quiet<MAX_QUIET)
     fprintf(con, "zpaq v" ZPAQ_VERSION " journaling archiver, compiled "
@@ -2839,24 +2178,27 @@ int Jidac::doCommand(int argc, const char** argv) {
   return 0;
 }
 
-// Read archive up to -date into ht, dt, ver. Return place to append.
-// If errors is not NULL then set it to number of errors found.
-int64_t Jidac::read_archive(int *errors) {
+// Read arc (default: archive) up to -date into ht, dt, ver. Return place to
+// append. If errors is not NULL then set it to number of errors found.
+int64_t Jidac::read_archive(int *errors, const char* arc) {
   if (errors) *errors=0;
+  dcsize=dhsize=0;
 
-  // Open archive or archive.zpaq
+  // Open archive or archive.zpaq. If not found then try the index of
+  // a multi-part archive.
+  if (!arc) arc=archive.c_str();
   Archive in;
-  if (!in.open(archive.c_str(), password)) {
+  if (!in.open(arc, password)) {
     if (command!="-add") {
-      printUTF8(archive.c_str(), stderr);
+      printUTF8(arc, stderr);
       fprintf(stderr, " not found.\n");
       if (errors) ++*errors;
     }
     return 0;
   }
   if (quiet<MAX_QUIET) {
-    printUTF8(archive.c_str(), con);
-    if (version==9999999999999LL)
+    printUTF8(arc, con);
+    if (version==DEFAULT_VERSION)
       fprintf(con, ": ");
     else
       fprintf(con, " -until %1.0f: ", version+0.0);
@@ -2873,7 +2215,7 @@ int64_t Jidac::read_archive(int *errors) {
   }
 
   // Scan archive contents
-  string lastfile=archive; // last named file in streaming format
+  string lastfile=arc; // last named file in streaming format
   if (size(lastfile)>5)
     lastfile=lastfile.substr(0, size(lastfile)-5); // drop .zpaq
   int64_t block_offset=32*(password!=0);  // start of last block of any type
@@ -3012,8 +2354,10 @@ int64_t Jidac::read_archive(int *errors) {
                 fprintf(stderr, "Incomplete transaction ignored\n");
                 isbreak=true;
               }
-              else if (jmp>0)
+              else if (jmp>0) {
+                dcsize+=jmp;
                 in.seek(jmp, SEEK_CUR);
+              }
             }
             if (os.size()!=8) {
               fprintf(stderr, "Bad JIDAC header size: %d\n", size(os));
@@ -3040,6 +2384,7 @@ int64_t Jidac::read_archive(int *errors) {
                    && pass!=RECOVER) {
             const char* s=os.c_str();
             const unsigned bsize=btoi(s);
+            dhsize+=bsize;
             assert(size(ver)>0);
             const unsigned n=(os.size()-4)/24;
             if (ht.size()>num) {
@@ -3418,6 +2763,1784 @@ void Jidac::addfile(string filename, int64_t edate,
   d.written=0;
 }
 
+////////////////////////// divsufsort ///////////////////////////////
+
+/*
+ * divsufsort.c for libdivsufsort-lite
+ * Copyright (c) 2003-2008 Yuta Mori All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+/*- Constants -*/
+#define INLINE __inline
+#if defined(ALPHABET_SIZE) && (ALPHABET_SIZE < 1)
+# undef ALPHABET_SIZE
+#endif
+#if !defined(ALPHABET_SIZE)
+# define ALPHABET_SIZE (256)
+#endif
+#define BUCKET_A_SIZE (ALPHABET_SIZE)
+#define BUCKET_B_SIZE (ALPHABET_SIZE * ALPHABET_SIZE)
+#if defined(SS_INSERTIONSORT_THRESHOLD)
+# if SS_INSERTIONSORT_THRESHOLD < 1
+#  undef SS_INSERTIONSORT_THRESHOLD
+#  define SS_INSERTIONSORT_THRESHOLD (1)
+# endif
+#else
+# define SS_INSERTIONSORT_THRESHOLD (8)
+#endif
+#if defined(SS_BLOCKSIZE)
+# if SS_BLOCKSIZE < 0
+#  undef SS_BLOCKSIZE
+#  define SS_BLOCKSIZE (0)
+# elif 32768 <= SS_BLOCKSIZE
+#  undef SS_BLOCKSIZE
+#  define SS_BLOCKSIZE (32767)
+# endif
+#else
+# define SS_BLOCKSIZE (1024)
+#endif
+/* minstacksize = log(SS_BLOCKSIZE) / log(3) * 2 */
+#if SS_BLOCKSIZE == 0
+# define SS_MISORT_STACKSIZE (96)
+#elif SS_BLOCKSIZE <= 4096
+# define SS_MISORT_STACKSIZE (16)
+#else
+# define SS_MISORT_STACKSIZE (24)
+#endif
+#define SS_SMERGE_STACKSIZE (32)
+#define TR_INSERTIONSORT_THRESHOLD (8)
+#define TR_STACKSIZE (64)
+
+
+/*- Macros -*/
+#ifndef SWAP
+# define SWAP(_a, _b) do { t = (_a); (_a) = (_b); (_b) = t; } while(0)
+#endif /* SWAP */
+#ifndef MIN
+# define MIN(_a, _b) (((_a) < (_b)) ? (_a) : (_b))
+#endif /* MIN */
+#ifndef MAX
+# define MAX(_a, _b) (((_a) > (_b)) ? (_a) : (_b))
+#endif /* MAX */
+#define STACK_PUSH(_a, _b, _c, _d)\
+  do {\
+    assert(ssize < STACK_SIZE);\
+    stack[ssize].a = (_a), stack[ssize].b = (_b),\
+    stack[ssize].c = (_c), stack[ssize++].d = (_d);\
+  } while(0)
+#define STACK_PUSH5(_a, _b, _c, _d, _e)\
+  do {\
+    assert(ssize < STACK_SIZE);\
+    stack[ssize].a = (_a), stack[ssize].b = (_b),\
+    stack[ssize].c = (_c), stack[ssize].d = (_d), stack[ssize++].e = (_e);\
+  } while(0)
+#define STACK_POP(_a, _b, _c, _d)\
+  do {\
+    assert(0 <= ssize);\
+    if(ssize == 0) { return; }\
+    (_a) = stack[--ssize].a, (_b) = stack[ssize].b,\
+    (_c) = stack[ssize].c, (_d) = stack[ssize].d;\
+  } while(0)
+#define STACK_POP5(_a, _b, _c, _d, _e)\
+  do {\
+    assert(0 <= ssize);\
+    if(ssize == 0) { return; }\
+    (_a) = stack[--ssize].a, (_b) = stack[ssize].b,\
+    (_c) = stack[ssize].c, (_d) = stack[ssize].d, (_e) = stack[ssize].e;\
+  } while(0)
+#define BUCKET_A(_c0) bucket_A[(_c0)]
+#if ALPHABET_SIZE == 256
+#define BUCKET_B(_c0, _c1) (bucket_B[((_c1) << 8) | (_c0)])
+#define BUCKET_BSTAR(_c0, _c1) (bucket_B[((_c0) << 8) | (_c1)])
+#else
+#define BUCKET_B(_c0, _c1) (bucket_B[(_c1) * ALPHABET_SIZE + (_c0)])
+#define BUCKET_BSTAR(_c0, _c1) (bucket_B[(_c0) * ALPHABET_SIZE + (_c1)])
+#endif
+
+
+/*- Private Functions -*/
+
+static const int lg_table[256]= {
+ -1,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
+  5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+  6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+  6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7
+};
+
+#if (SS_BLOCKSIZE == 0) || (SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE)
+
+static INLINE
+int
+ss_ilg(int n) {
+#if SS_BLOCKSIZE == 0
+  return (n & 0xffff0000) ?
+          ((n & 0xff000000) ?
+            24 + lg_table[(n >> 24) & 0xff] :
+            16 + lg_table[(n >> 16) & 0xff]) :
+          ((n & 0x0000ff00) ?
+             8 + lg_table[(n >>  8) & 0xff] :
+             0 + lg_table[(n >>  0) & 0xff]);
+#elif SS_BLOCKSIZE < 256
+  return lg_table[n];
+#else
+  return (n & 0xff00) ?
+          8 + lg_table[(n >> 8) & 0xff] :
+          0 + lg_table[(n >> 0) & 0xff];
+#endif
+}
+
+#endif /* (SS_BLOCKSIZE == 0) || (SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE) */
+
+#if SS_BLOCKSIZE != 0
+
+static const int sqq_table[256] = {
+  0,  16,  22,  27,  32,  35,  39,  42,  45,  48,  50,  53,  55,  57,  59,  61,
+ 64,  65,  67,  69,  71,  73,  75,  76,  78,  80,  81,  83,  84,  86,  87,  89,
+ 90,  91,  93,  94,  96,  97,  98,  99, 101, 102, 103, 104, 106, 107, 108, 109,
+110, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+128, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+143, 144, 144, 145, 146, 147, 148, 149, 150, 150, 151, 152, 153, 154, 155, 155,
+156, 157, 158, 159, 160, 160, 161, 162, 163, 163, 164, 165, 166, 167, 167, 168,
+169, 170, 170, 171, 172, 173, 173, 174, 175, 176, 176, 177, 178, 178, 179, 180,
+181, 181, 182, 183, 183, 184, 185, 185, 186, 187, 187, 188, 189, 189, 190, 191,
+192, 192, 193, 193, 194, 195, 195, 196, 197, 197, 198, 199, 199, 200, 201, 201,
+202, 203, 203, 204, 204, 205, 206, 206, 207, 208, 208, 209, 209, 210, 211, 211,
+212, 212, 213, 214, 214, 215, 215, 216, 217, 217, 218, 218, 219, 219, 220, 221,
+221, 222, 222, 223, 224, 224, 225, 225, 226, 226, 227, 227, 228, 229, 229, 230,
+230, 231, 231, 232, 232, 233, 234, 234, 235, 235, 236, 236, 237, 237, 238, 238,
+239, 240, 240, 241, 241, 242, 242, 243, 243, 244, 244, 245, 245, 246, 246, 247,
+247, 248, 248, 249, 249, 250, 250, 251, 251, 252, 252, 253, 253, 254, 254, 255
+};
+
+static INLINE
+int
+ss_isqrt(int x) {
+  int y, e;
+
+  if(x >= (SS_BLOCKSIZE * SS_BLOCKSIZE)) { return SS_BLOCKSIZE; }
+  e = (x & 0xffff0000) ?
+        ((x & 0xff000000) ?
+          24 + lg_table[(x >> 24) & 0xff] :
+          16 + lg_table[(x >> 16) & 0xff]) :
+        ((x & 0x0000ff00) ?
+           8 + lg_table[(x >>  8) & 0xff] :
+           0 + lg_table[(x >>  0) & 0xff]);
+
+  if(e >= 16) {
+    y = sqq_table[x >> ((e - 6) - (e & 1))] << ((e >> 1) - 7);
+    if(e >= 24) { y = (y + 1 + x / y) >> 1; }
+    y = (y + 1 + x / y) >> 1;
+  } else if(e >= 8) {
+    y = (sqq_table[x >> ((e - 6) - (e & 1))] >> (7 - (e >> 1))) + 1;
+  } else {
+    return sqq_table[x] >> 4;
+  }
+
+  return (x < (y * y)) ? y - 1 : y;
+}
+
+#endif /* SS_BLOCKSIZE != 0 */
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Compares two suffixes. */
+static INLINE
+int
+ss_compare(const unsigned char *T,
+           const int *p1, const int *p2,
+           int depth) {
+  const unsigned char *U1, *U2, *U1n, *U2n;
+
+  for(U1 = T + depth + *p1,
+      U2 = T + depth + *p2,
+      U1n = T + *(p1 + 1) + 2,
+      U2n = T + *(p2 + 1) + 2;
+      (U1 < U1n) && (U2 < U2n) && (*U1 == *U2);
+      ++U1, ++U2) {
+  }
+
+  return U1 < U1n ?
+        (U2 < U2n ? *U1 - *U2 : 1) :
+        (U2 < U2n ? -1 : 0);
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+#if (SS_BLOCKSIZE != 1) && (SS_INSERTIONSORT_THRESHOLD != 1)
+
+/* Insertionsort for small size groups */
+static
+void
+ss_insertionsort(const unsigned char *T, const int *PA,
+                 int *first, int *last, int depth) {
+  int *i, *j;
+  int t;
+  int r;
+
+  for(i = last - 2; first <= i; --i) {
+    for(t = *i, j = i + 1; 0 < (r = ss_compare(T, PA + t, PA + *j, depth));) {
+      do { *(j - 1) = *j; } while((++j < last) && (*j < 0));
+      if(last <= j) { break; }
+    }
+    if(r == 0) { *j = ~*j; }
+    *(j - 1) = t;
+  }
+}
+
+#endif /* (SS_BLOCKSIZE != 1) && (SS_INSERTIONSORT_THRESHOLD != 1) */
+
+
+/*---------------------------------------------------------------------------*/
+
+#if (SS_BLOCKSIZE == 0) || (SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE)
+
+static INLINE
+void
+ss_fixdown(const unsigned char *Td, const int *PA,
+           int *SA, int i, int size) {
+  int j, k;
+  int v;
+  int c, d, e;
+
+  for(v = SA[i], c = Td[PA[v]]; (j = 2 * i + 1) < size; SA[i] = SA[k], i = k) {
+    d = Td[PA[SA[k = j++]]];
+    if(d < (e = Td[PA[SA[j]]])) { k = j; d = e; }
+    if(d <= c) { break; }
+  }
+  SA[i] = v;
+}
+
+/* Simple top-down heapsort. */
+static
+void
+ss_heapsort(const unsigned char *Td, const int *PA, int *SA, int size) {
+  int i, m;
+  int t;
+
+  m = size;
+  if((size % 2) == 0) {
+    m--;
+    if(Td[PA[SA[m / 2]]] < Td[PA[SA[m]]]) { SWAP(SA[m], SA[m / 2]); }
+  }
+
+  for(i = m / 2 - 1; 0 <= i; --i) { ss_fixdown(Td, PA, SA, i, m); }
+  if((size % 2) == 0) { SWAP(SA[0], SA[m]); ss_fixdown(Td, PA, SA, 0, m); }
+  for(i = m - 1; 0 < i; --i) {
+    t = SA[0], SA[0] = SA[i];
+    ss_fixdown(Td, PA, SA, 0, i);
+    SA[i] = t;
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Returns the median of three elements. */
+static INLINE
+int *
+ss_median3(const unsigned char *Td, const int *PA,
+           int *v1, int *v2, int *v3) {
+  int *t;
+  if(Td[PA[*v1]] > Td[PA[*v2]]) { SWAP(v1, v2); }
+  if(Td[PA[*v2]] > Td[PA[*v3]]) {
+    if(Td[PA[*v1]] > Td[PA[*v3]]) { return v1; }
+    else { return v3; }
+  }
+  return v2;
+}
+
+/* Returns the median of five elements. */
+static INLINE
+int *
+ss_median5(const unsigned char *Td, const int *PA,
+           int *v1, int *v2, int *v3, int *v4, int *v5) {
+  int *t;
+  if(Td[PA[*v2]] > Td[PA[*v3]]) { SWAP(v2, v3); }
+  if(Td[PA[*v4]] > Td[PA[*v5]]) { SWAP(v4, v5); }
+  if(Td[PA[*v2]] > Td[PA[*v4]]) { SWAP(v2, v4); SWAP(v3, v5); }
+  if(Td[PA[*v1]] > Td[PA[*v3]]) { SWAP(v1, v3); }
+  if(Td[PA[*v1]] > Td[PA[*v4]]) { SWAP(v1, v4); SWAP(v3, v5); }
+  if(Td[PA[*v3]] > Td[PA[*v4]]) { return v4; }
+  return v3;
+}
+
+/* Returns the pivot element. */
+static INLINE
+int *
+ss_pivot(const unsigned char *Td, const int *PA, int *first, int *last) {
+  int *middle;
+  int t;
+
+  t = last - first;
+  middle = first + t / 2;
+
+  if(t <= 512) {
+    if(t <= 32) {
+      return ss_median3(Td, PA, first, middle, last - 1);
+    } else {
+      t >>= 2;
+      return ss_median5(Td, PA, first, first + t, middle, last - 1 - t, last - 1);
+    }
+  }
+  t >>= 3;
+  first  = ss_median3(Td, PA, first, first + t, first + (t << 1));
+  middle = ss_median3(Td, PA, middle - t, middle, middle + t);
+  last   = ss_median3(Td, PA, last - 1 - (t << 1), last - 1 - t, last - 1);
+  return ss_median3(Td, PA, first, middle, last);
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Binary partition for substrings. */
+static INLINE
+int *
+ss_partition(const int *PA,
+                    int *first, int *last, int depth) {
+  int *a, *b;
+  int t;
+  for(a = first - 1, b = last;;) {
+    for(; (++a < b) && ((PA[*a] + depth) >= (PA[*a + 1] + 1));) { *a = ~*a; }
+    for(; (a < --b) && ((PA[*b] + depth) <  (PA[*b + 1] + 1));) { }
+    if(b <= a) { break; }
+    t = ~*b;
+    *b = *a;
+    *a = t;
+  }
+  if(first < a) { *first = ~*first; }
+  return a;
+}
+
+/* Multikey introsort for medium size groups. */
+static
+void
+ss_mintrosort(const unsigned char *T, const int *PA,
+              int *first, int *last,
+              int depth) {
+#define STACK_SIZE SS_MISORT_STACKSIZE
+  struct { int *a, *b, c; int d; } stack[STACK_SIZE];
+  const unsigned char *Td;
+  int *a, *b, *c, *d, *e, *f;
+  int s, t;
+  int ssize;
+  int limit;
+  int v, x = 0;
+
+  for(ssize = 0, limit = ss_ilg(last - first);;) {
+
+    if((last - first) <= SS_INSERTIONSORT_THRESHOLD) {
+#if 1 < SS_INSERTIONSORT_THRESHOLD
+      if(1 < (last - first)) { ss_insertionsort(T, PA, first, last, depth); }
+#endif
+      STACK_POP(first, last, depth, limit);
+      continue;
+    }
+
+    Td = T + depth;
+    if(limit-- == 0) { ss_heapsort(Td, PA, first, last - first); }
+    if(limit < 0) {
+      for(a = first + 1, v = Td[PA[*first]]; a < last; ++a) {
+        if((x = Td[PA[*a]]) != v) {
+          if(1 < (a - first)) { break; }
+          v = x;
+          first = a;
+        }
+      }
+      if(Td[PA[*first] - 1] < v) {
+        first = ss_partition(PA, first, a, depth);
+      }
+      if((a - first) <= (last - a)) {
+        if(1 < (a - first)) {
+          STACK_PUSH(a, last, depth, -1);
+          last = a, depth += 1, limit = ss_ilg(a - first);
+        } else {
+          first = a, limit = -1;
+        }
+      } else {
+        if(1 < (last - a)) {
+          STACK_PUSH(first, a, depth + 1, ss_ilg(a - first));
+          first = a, limit = -1;
+        } else {
+          last = a, depth += 1, limit = ss_ilg(a - first);
+        }
+      }
+      continue;
+    }
+
+    /* choose pivot */
+    a = ss_pivot(Td, PA, first, last);
+    v = Td[PA[*a]];
+    SWAP(*first, *a);
+
+    /* partition */
+    for(b = first; (++b < last) && ((x = Td[PA[*b]]) == v);) { }
+    if(((a = b) < last) && (x < v)) {
+      for(; (++b < last) && ((x = Td[PA[*b]]) <= v);) {
+        if(x == v) { SWAP(*b, *a); ++a; }
+      }
+    }
+    for(c = last; (b < --c) && ((x = Td[PA[*c]]) == v);) { }
+    if((b < (d = c)) && (x > v)) {
+      for(; (b < --c) && ((x = Td[PA[*c]]) >= v);) {
+        if(x == v) { SWAP(*c, *d); --d; }
+      }
+    }
+    for(; b < c;) {
+      SWAP(*b, *c);
+      for(; (++b < c) && ((x = Td[PA[*b]]) <= v);) {
+        if(x == v) { SWAP(*b, *a); ++a; }
+      }
+      for(; (b < --c) && ((x = Td[PA[*c]]) >= v);) {
+        if(x == v) { SWAP(*c, *d); --d; }
+      }
+    }
+
+    if(a <= d) {
+      c = b - 1;
+
+      if((s = a - first) > (t = b - a)) { s = t; }
+      for(e = first, f = b - s; 0 < s; --s, ++e, ++f) { SWAP(*e, *f); }
+      if((s = d - c) > (t = last - d - 1)) { s = t; }
+      for(e = b, f = last - s; 0 < s; --s, ++e, ++f) { SWAP(*e, *f); }
+
+      a = first + (b - a), c = last - (d - c);
+      b = (v <= Td[PA[*a] - 1]) ? a : ss_partition(PA, a, c, depth);
+
+      if((a - first) <= (last - c)) {
+        if((last - c) <= (c - b)) {
+          STACK_PUSH(b, c, depth + 1, ss_ilg(c - b));
+          STACK_PUSH(c, last, depth, limit);
+          last = a;
+        } else if((a - first) <= (c - b)) {
+          STACK_PUSH(c, last, depth, limit);
+          STACK_PUSH(b, c, depth + 1, ss_ilg(c - b));
+          last = a;
+        } else {
+          STACK_PUSH(c, last, depth, limit);
+          STACK_PUSH(first, a, depth, limit);
+          first = b, last = c, depth += 1, limit = ss_ilg(c - b);
+        }
+      } else {
+        if((a - first) <= (c - b)) {
+          STACK_PUSH(b, c, depth + 1, ss_ilg(c - b));
+          STACK_PUSH(first, a, depth, limit);
+          first = c;
+        } else if((last - c) <= (c - b)) {
+          STACK_PUSH(first, a, depth, limit);
+          STACK_PUSH(b, c, depth + 1, ss_ilg(c - b));
+          first = c;
+        } else {
+          STACK_PUSH(first, a, depth, limit);
+          STACK_PUSH(c, last, depth, limit);
+          first = b, last = c, depth += 1, limit = ss_ilg(c - b);
+        }
+      }
+    } else {
+      limit += 1;
+      if(Td[PA[*first] - 1] < v) {
+        first = ss_partition(PA, first, last, depth);
+        limit = ss_ilg(last - first);
+      }
+      depth += 1;
+    }
+  }
+#undef STACK_SIZE
+}
+
+#endif /* (SS_BLOCKSIZE == 0) || (SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE) */
+
+
+/*---------------------------------------------------------------------------*/
+
+#if SS_BLOCKSIZE != 0
+
+static INLINE
+void
+ss_blockswap(int *a, int *b, int n) {
+  int t;
+  for(; 0 < n; --n, ++a, ++b) {
+    t = *a, *a = *b, *b = t;
+  }
+}
+
+static INLINE
+void
+ss_rotate(int *first, int *middle, int *last) {
+  int *a, *b, t;
+  int l, r;
+  l = middle - first, r = last - middle;
+  for(; (0 < l) && (0 < r);) {
+    if(l == r) { ss_blockswap(first, middle, l); break; }
+    if(l < r) {
+      a = last - 1, b = middle - 1;
+      t = *a;
+      do {
+        *a-- = *b, *b-- = *a;
+        if(b < first) {
+          *a = t;
+          last = a;
+          if((r -= l + 1) <= l) { break; }
+          a -= 1, b = middle - 1;
+          t = *a;
+        }
+      } while(1);
+    } else {
+      a = first, b = middle;
+      t = *a;
+      do {
+        *a++ = *b, *b++ = *a;
+        if(last <= b) {
+          *a = t;
+          first = a + 1;
+          if((l -= r + 1) <= r) { break; }
+          a += 1, b = middle;
+          t = *a;
+        }
+      } while(1);
+    }
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+static
+void
+ss_inplacemerge(const unsigned char *T, const int *PA,
+                int *first, int *middle, int *last,
+                int depth) {
+  const int *p;
+  int *a, *b;
+  int len, half;
+  int q, r;
+  int x;
+
+  for(;;) {
+    if(*(last - 1) < 0) { x = 1; p = PA + ~*(last - 1); }
+    else                { x = 0; p = PA +  *(last - 1); }
+    for(a = first, len = middle - first, half = len >> 1, r = -1;
+        0 < len;
+        len = half, half >>= 1) {
+      b = a + half;
+      q = ss_compare(T, PA + ((0 <= *b) ? *b : ~*b), p, depth);
+      if(q < 0) {
+        a = b + 1;
+        half -= (len & 1) ^ 1;
+      } else {
+        r = q;
+      }
+    }
+    if(a < middle) {
+      if(r == 0) { *a = ~*a; }
+      ss_rotate(a, middle, last);
+      last -= middle - a;
+      middle = a;
+      if(first == middle) { break; }
+    }
+    --last;
+    if(x != 0) { while(*--last < 0) { } }
+    if(middle == last) { break; }
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Merge-forward with internal buffer. */
+static
+void
+ss_mergeforward(const unsigned char *T, const int *PA,
+                int *first, int *middle, int *last,
+                int *buf, int depth) {
+  int *a, *b, *c, *bufend;
+  int t;
+  int r;
+
+  bufend = buf + (middle - first) - 1;
+  ss_blockswap(buf, first, middle - first);
+
+  for(t = *(a = first), b = buf, c = middle;;) {
+    r = ss_compare(T, PA + *b, PA + *c, depth);
+    if(r < 0) {
+      do {
+        *a++ = *b;
+        if(bufend <= b) { *bufend = t; return; }
+        *b++ = *a;
+      } while(*b < 0);
+    } else if(r > 0) {
+      do {
+        *a++ = *c, *c++ = *a;
+        if(last <= c) {
+          while(b < bufend) { *a++ = *b, *b++ = *a; }
+          *a = *b, *b = t;
+          return;
+        }
+      } while(*c < 0);
+    } else {
+      *c = ~*c;
+      do {
+        *a++ = *b;
+        if(bufend <= b) { *bufend = t; return; }
+        *b++ = *a;
+      } while(*b < 0);
+
+      do {
+        *a++ = *c, *c++ = *a;
+        if(last <= c) {
+          while(b < bufend) { *a++ = *b, *b++ = *a; }
+          *a = *b, *b = t;
+          return;
+        }
+      } while(*c < 0);
+    }
+  }
+}
+
+/* Merge-backward with internal buffer. */
+static
+void
+ss_mergebackward(const unsigned char *T, const int *PA,
+                 int *first, int *middle, int *last,
+                 int *buf, int depth) {
+  const int *p1, *p2;
+  int *a, *b, *c, *bufend;
+  int t;
+  int r;
+  int x;
+
+  bufend = buf + (last - middle) - 1;
+  ss_blockswap(buf, middle, last - middle);
+
+  x = 0;
+  if(*bufend < 0)       { p1 = PA + ~*bufend; x |= 1; }
+  else                  { p1 = PA +  *bufend; }
+  if(*(middle - 1) < 0) { p2 = PA + ~*(middle - 1); x |= 2; }
+  else                  { p2 = PA +  *(middle - 1); }
+  for(t = *(a = last - 1), b = bufend, c = middle - 1;;) {
+    r = ss_compare(T, p1, p2, depth);
+    if(0 < r) {
+      if(x & 1) { do { *a-- = *b, *b-- = *a; } while(*b < 0); x ^= 1; }
+      *a-- = *b;
+      if(b <= buf) { *buf = t; break; }
+      *b-- = *a;
+      if(*b < 0) { p1 = PA + ~*b; x |= 1; }
+      else       { p1 = PA +  *b; }
+    } else if(r < 0) {
+      if(x & 2) { do { *a-- = *c, *c-- = *a; } while(*c < 0); x ^= 2; }
+      *a-- = *c, *c-- = *a;
+      if(c < first) {
+        while(buf < b) { *a-- = *b, *b-- = *a; }
+        *a = *b, *b = t;
+        break;
+      }
+      if(*c < 0) { p2 = PA + ~*c; x |= 2; }
+      else       { p2 = PA +  *c; }
+    } else {
+      if(x & 1) { do { *a-- = *b, *b-- = *a; } while(*b < 0); x ^= 1; }
+      *a-- = ~*b;
+      if(b <= buf) { *buf = t; break; }
+      *b-- = *a;
+      if(x & 2) { do { *a-- = *c, *c-- = *a; } while(*c < 0); x ^= 2; }
+      *a-- = *c, *c-- = *a;
+      if(c < first) {
+        while(buf < b) { *a-- = *b, *b-- = *a; }
+        *a = *b, *b = t;
+        break;
+      }
+      if(*b < 0) { p1 = PA + ~*b; x |= 1; }
+      else       { p1 = PA +  *b; }
+      if(*c < 0) { p2 = PA + ~*c; x |= 2; }
+      else       { p2 = PA +  *c; }
+    }
+  }
+}
+
+/* D&C based merge. */
+static
+void
+ss_swapmerge(const unsigned char *T, const int *PA,
+             int *first, int *middle, int *last,
+             int *buf, int bufsize, int depth) {
+#define STACK_SIZE SS_SMERGE_STACKSIZE
+#define GETIDX(a) ((0 <= (a)) ? (a) : (~(a)))
+#define MERGE_CHECK(a, b, c)\
+  do {\
+    if(((c) & 1) ||\
+       (((c) & 2) && (ss_compare(T, PA + GETIDX(*((a) - 1)), PA + *(a), depth) == 0))) {\
+      *(a) = ~*(a);\
+    }\
+    if(((c) & 4) && ((ss_compare(T, PA + GETIDX(*((b) - 1)), PA + *(b), depth) == 0))) {\
+      *(b) = ~*(b);\
+    }\
+  } while(0)
+  struct { int *a, *b, *c; int d; } stack[STACK_SIZE];
+  int *l, *r, *lm, *rm;
+  int m, len, half;
+  int ssize;
+  int check, next;
+
+  for(check = 0, ssize = 0;;) {
+    if((last - middle) <= bufsize) {
+      if((first < middle) && (middle < last)) {
+        ss_mergebackward(T, PA, first, middle, last, buf, depth);
+      }
+      MERGE_CHECK(first, last, check);
+      STACK_POP(first, middle, last, check);
+      continue;
+    }
+
+    if((middle - first) <= bufsize) {
+      if(first < middle) {
+        ss_mergeforward(T, PA, first, middle, last, buf, depth);
+      }
+      MERGE_CHECK(first, last, check);
+      STACK_POP(first, middle, last, check);
+      continue;
+    }
+
+    for(m = 0, len = MIN(middle - first, last - middle), half = len >> 1;
+        0 < len;
+        len = half, half >>= 1) {
+      if(ss_compare(T, PA + GETIDX(*(middle + m + half)),
+                       PA + GETIDX(*(middle - m - half - 1)), depth) < 0) {
+        m += half + 1;
+        half -= (len & 1) ^ 1;
+      }
+    }
+
+    if(0 < m) {
+      lm = middle - m, rm = middle + m;
+      ss_blockswap(lm, middle, m);
+      l = r = middle, next = 0;
+      if(rm < last) {
+        if(*rm < 0) {
+          *rm = ~*rm;
+          if(first < lm) { for(; *--l < 0;) { } next |= 4; }
+          next |= 1;
+        } else if(first < lm) {
+          for(; *r < 0; ++r) { }
+          next |= 2;
+        }
+      }
+
+      if((l - first) <= (last - r)) {
+        STACK_PUSH(r, rm, last, (next & 3) | (check & 4));
+        middle = lm, last = l, check = (check & 3) | (next & 4);
+      } else {
+        if((next & 2) && (r == middle)) { next ^= 6; }
+        STACK_PUSH(first, lm, l, (check & 3) | (next & 4));
+        first = r, middle = rm, check = (next & 3) | (check & 4);
+      }
+    } else {
+      if(ss_compare(T, PA + GETIDX(*(middle - 1)), PA + *middle, depth) == 0) {
+        *middle = ~*middle;
+      }
+      MERGE_CHECK(first, last, check);
+      STACK_POP(first, middle, last, check);
+    }
+  }
+#undef STACK_SIZE
+}
+
+#endif /* SS_BLOCKSIZE != 0 */
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Substring sort */
+static
+void
+sssort(const unsigned char *T, const int *PA,
+       int *first, int *last,
+       int *buf, int bufsize,
+       int depth, int n, int lastsuffix) {
+  int *a;
+#if SS_BLOCKSIZE != 0
+  int *b, *middle, *curbuf;
+  int j, k, curbufsize, limit;
+#endif
+  int i;
+
+  if(lastsuffix != 0) { ++first; }
+
+#if SS_BLOCKSIZE == 0
+  ss_mintrosort(T, PA, first, last, depth);
+#else
+  if((bufsize < SS_BLOCKSIZE) &&
+      (bufsize < (last - first)) &&
+      (bufsize < (limit = ss_isqrt(last - first)))) {
+    if(SS_BLOCKSIZE < limit) { limit = SS_BLOCKSIZE; }
+    buf = middle = last - limit, bufsize = limit;
+  } else {
+    middle = last, limit = 0;
+  }
+  for(a = first, i = 0; SS_BLOCKSIZE < (middle - a); a += SS_BLOCKSIZE, ++i) {
+#if SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE
+    ss_mintrosort(T, PA, a, a + SS_BLOCKSIZE, depth);
+#elif 1 < SS_BLOCKSIZE
+    ss_insertionsort(T, PA, a, a + SS_BLOCKSIZE, depth);
+#endif
+    curbufsize = last - (a + SS_BLOCKSIZE);
+    curbuf = a + SS_BLOCKSIZE;
+    if(curbufsize <= bufsize) { curbufsize = bufsize, curbuf = buf; }
+    for(b = a, k = SS_BLOCKSIZE, j = i; j & 1; b -= k, k <<= 1, j >>= 1) {
+      ss_swapmerge(T, PA, b - k, b, b + k, curbuf, curbufsize, depth);
+    }
+  }
+#if SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE
+  ss_mintrosort(T, PA, a, middle, depth);
+#elif 1 < SS_BLOCKSIZE
+  ss_insertionsort(T, PA, a, middle, depth);
+#endif
+  for(k = SS_BLOCKSIZE; i != 0; k <<= 1, i >>= 1) {
+    if(i & 1) {
+      ss_swapmerge(T, PA, a - k, a, middle, buf, bufsize, depth);
+      a -= k;
+    }
+  }
+  if(limit != 0) {
+#if SS_INSERTIONSORT_THRESHOLD < SS_BLOCKSIZE
+    ss_mintrosort(T, PA, middle, last, depth);
+#elif 1 < SS_BLOCKSIZE
+    ss_insertionsort(T, PA, middle, last, depth);
+#endif
+    ss_inplacemerge(T, PA, first, middle, last, depth);
+  }
+#endif
+
+  if(lastsuffix != 0) {
+    /* Insert last type B* suffix. */
+    int PAi[2]; PAi[0] = PA[*(first - 1)], PAi[1] = n - 2;
+    for(a = first, i = *(first - 1);
+        (a < last) && ((*a < 0) || (0 < ss_compare(T, &(PAi[0]), PA + *a, depth)));
+        ++a) {
+      *(a - 1) = *a;
+    }
+    *(a - 1) = i;
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+static INLINE
+int
+tr_ilg(int n) {
+  return (n & 0xffff0000) ?
+          ((n & 0xff000000) ?
+            24 + lg_table[(n >> 24) & 0xff] :
+            16 + lg_table[(n >> 16) & 0xff]) :
+          ((n & 0x0000ff00) ?
+             8 + lg_table[(n >>  8) & 0xff] :
+             0 + lg_table[(n >>  0) & 0xff]);
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Simple insertionsort for small size groups. */
+static
+void
+tr_insertionsort(const int *ISAd, int *first, int *last) {
+  int *a, *b;
+  int t, r;
+
+  for(a = first + 1; a < last; ++a) {
+    for(t = *a, b = a - 1; 0 > (r = ISAd[t] - ISAd[*b]);) {
+      do { *(b + 1) = *b; } while((first <= --b) && (*b < 0));
+      if(b < first) { break; }
+    }
+    if(r == 0) { *b = ~*b; }
+    *(b + 1) = t;
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+static INLINE
+void
+tr_fixdown(const int *ISAd, int *SA, int i, int size) {
+  int j, k;
+  int v;
+  int c, d, e;
+
+  for(v = SA[i], c = ISAd[v]; (j = 2 * i + 1) < size; SA[i] = SA[k], i = k) {
+    d = ISAd[SA[k = j++]];
+    if(d < (e = ISAd[SA[j]])) { k = j; d = e; }
+    if(d <= c) { break; }
+  }
+  SA[i] = v;
+}
+
+/* Simple top-down heapsort. */
+static
+void
+tr_heapsort(const int *ISAd, int *SA, int size) {
+  int i, m;
+  int t;
+
+  m = size;
+  if((size % 2) == 0) {
+    m--;
+    if(ISAd[SA[m / 2]] < ISAd[SA[m]]) { SWAP(SA[m], SA[m / 2]); }
+  }
+
+  for(i = m / 2 - 1; 0 <= i; --i) { tr_fixdown(ISAd, SA, i, m); }
+  if((size % 2) == 0) { SWAP(SA[0], SA[m]); tr_fixdown(ISAd, SA, 0, m); }
+  for(i = m - 1; 0 < i; --i) {
+    t = SA[0], SA[0] = SA[i];
+    tr_fixdown(ISAd, SA, 0, i);
+    SA[i] = t;
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Returns the median of three elements. */
+static INLINE
+int *
+tr_median3(const int *ISAd, int *v1, int *v2, int *v3) {
+  int *t;
+  if(ISAd[*v1] > ISAd[*v2]) { SWAP(v1, v2); }
+  if(ISAd[*v2] > ISAd[*v3]) {
+    if(ISAd[*v1] > ISAd[*v3]) { return v1; }
+    else { return v3; }
+  }
+  return v2;
+}
+
+/* Returns the median of five elements. */
+static INLINE
+int *
+tr_median5(const int *ISAd,
+           int *v1, int *v2, int *v3, int *v4, int *v5) {
+  int *t;
+  if(ISAd[*v2] > ISAd[*v3]) { SWAP(v2, v3); }
+  if(ISAd[*v4] > ISAd[*v5]) { SWAP(v4, v5); }
+  if(ISAd[*v2] > ISAd[*v4]) { SWAP(v2, v4); SWAP(v3, v5); }
+  if(ISAd[*v1] > ISAd[*v3]) { SWAP(v1, v3); }
+  if(ISAd[*v1] > ISAd[*v4]) { SWAP(v1, v4); SWAP(v3, v5); }
+  if(ISAd[*v3] > ISAd[*v4]) { return v4; }
+  return v3;
+}
+
+/* Returns the pivot element. */
+static INLINE
+int *
+tr_pivot(const int *ISAd, int *first, int *last) {
+  int *middle;
+  int t;
+
+  t = last - first;
+  middle = first + t / 2;
+
+  if(t <= 512) {
+    if(t <= 32) {
+      return tr_median3(ISAd, first, middle, last - 1);
+    } else {
+      t >>= 2;
+      return tr_median5(ISAd, first, first + t, middle, last - 1 - t, last - 1);
+    }
+  }
+  t >>= 3;
+  first  = tr_median3(ISAd, first, first + t, first + (t << 1));
+  middle = tr_median3(ISAd, middle - t, middle, middle + t);
+  last   = tr_median3(ISAd, last - 1 - (t << 1), last - 1 - t, last - 1);
+  return tr_median3(ISAd, first, middle, last);
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+typedef struct _trbudget_t trbudget_t;
+struct _trbudget_t {
+  int chance;
+  int remain;
+  int incval;
+  int count;
+};
+
+static INLINE
+void
+trbudget_init(trbudget_t *budget, int chance, int incval) {
+  budget->chance = chance;
+  budget->remain = budget->incval = incval;
+}
+
+static INLINE
+int
+trbudget_check(trbudget_t *budget, int size) {
+  if(size <= budget->remain) { budget->remain -= size; return 1; }
+  if(budget->chance == 0) { budget->count += size; return 0; }
+  budget->remain += budget->incval - size;
+  budget->chance -= 1;
+  return 1;
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+static INLINE
+void
+tr_partition(const int *ISAd,
+             int *first, int *middle, int *last,
+             int **pa, int **pb, int v) {
+  int *a, *b, *c, *d, *e, *f;
+  int t, s;
+  int x = 0;
+
+  for(b = middle - 1; (++b < last) && ((x = ISAd[*b]) == v);) { }
+  if(((a = b) < last) && (x < v)) {
+    for(; (++b < last) && ((x = ISAd[*b]) <= v);) {
+      if(x == v) { SWAP(*b, *a); ++a; }
+    }
+  }
+  for(c = last; (b < --c) && ((x = ISAd[*c]) == v);) { }
+  if((b < (d = c)) && (x > v)) {
+    for(; (b < --c) && ((x = ISAd[*c]) >= v);) {
+      if(x == v) { SWAP(*c, *d); --d; }
+    }
+  }
+  for(; b < c;) {
+    SWAP(*b, *c);
+    for(; (++b < c) && ((x = ISAd[*b]) <= v);) {
+      if(x == v) { SWAP(*b, *a); ++a; }
+    }
+    for(; (b < --c) && ((x = ISAd[*c]) >= v);) {
+      if(x == v) { SWAP(*c, *d); --d; }
+    }
+  }
+
+  if(a <= d) {
+    c = b - 1;
+    if((s = a - first) > (t = b - a)) { s = t; }
+    for(e = first, f = b - s; 0 < s; --s, ++e, ++f) { SWAP(*e, *f); }
+    if((s = d - c) > (t = last - d - 1)) { s = t; }
+    for(e = b, f = last - s; 0 < s; --s, ++e, ++f) { SWAP(*e, *f); }
+    first += (b - a), last -= (d - c);
+  }
+  *pa = first, *pb = last;
+}
+
+static
+void
+tr_copy(int *ISA, const int *SA,
+        int *first, int *a, int *b, int *last,
+        int depth) {
+  /* sort suffixes of middle partition
+     by using sorted order of suffixes of left and right partition. */
+  int *c, *d, *e;
+  int s, v;
+
+  v = b - SA - 1;
+  for(c = first, d = a - 1; c <= d; ++c) {
+    if((0 <= (s = *c - depth)) && (ISA[s] == v)) {
+      *++d = s;
+      ISA[s] = d - SA;
+    }
+  }
+  for(c = last - 1, e = d + 1, d = b; e < d; --c) {
+    if((0 <= (s = *c - depth)) && (ISA[s] == v)) {
+      *--d = s;
+      ISA[s] = d - SA;
+    }
+  }
+}
+
+static
+void
+tr_partialcopy(int *ISA, const int *SA,
+               int *first, int *a, int *b, int *last,
+               int depth) {
+  int *c, *d, *e;
+  int s, v;
+  int rank, lastrank, newrank = -1;
+
+  v = b - SA - 1;
+  lastrank = -1;
+  for(c = first, d = a - 1; c <= d; ++c) {
+    if((0 <= (s = *c - depth)) && (ISA[s] == v)) {
+      *++d = s;
+      rank = ISA[s + depth];
+      if(lastrank != rank) { lastrank = rank; newrank = d - SA; }
+      ISA[s] = newrank;
+    }
+  }
+
+  lastrank = -1;
+  for(e = d; first <= e; --e) {
+    rank = ISA[*e];
+    if(lastrank != rank) { lastrank = rank; newrank = e - SA; }
+    if(newrank != rank) { ISA[*e] = newrank; }
+  }
+
+  lastrank = -1;
+  for(c = last - 1, e = d + 1, d = b; e < d; --c) {
+    if((0 <= (s = *c - depth)) && (ISA[s] == v)) {
+      *--d = s;
+      rank = ISA[s + depth];
+      if(lastrank != rank) { lastrank = rank; newrank = d - SA; }
+      ISA[s] = newrank;
+    }
+  }
+}
+
+static
+void
+tr_introsort(int *ISA, const int *ISAd,
+             int *SA, int *first, int *last,
+             trbudget_t *budget) {
+#define STACK_SIZE TR_STACKSIZE
+  struct { const int *a; int *b, *c; int d, e; }stack[STACK_SIZE];
+  int *a, *b, *c;
+  int t;
+  int v, x = 0;
+  int incr = ISAd - ISA;
+  int limit, next;
+  int ssize, trlink = -1;
+
+  for(ssize = 0, limit = tr_ilg(last - first);;) {
+
+    if(limit < 0) {
+      if(limit == -1) {
+        /* tandem repeat partition */
+        tr_partition(ISAd - incr, first, first, last, &a, &b, last - SA - 1);
+
+        /* update ranks */
+        if(a < last) {
+          for(c = first, v = a - SA - 1; c < a; ++c) { ISA[*c] = v; }
+        }
+        if(b < last) {
+          for(c = a, v = b - SA - 1; c < b; ++c) { ISA[*c] = v; }
+        }
+
+        /* push */
+        if(1 < (b - a)) {
+          STACK_PUSH5(NULL, a, b, 0, 0);
+          STACK_PUSH5(ISAd - incr, first, last, -2, trlink);
+          trlink = ssize - 2;
+        }
+        if((a - first) <= (last - b)) {
+          if(1 < (a - first)) {
+            STACK_PUSH5(ISAd, b, last, tr_ilg(last - b), trlink);
+            last = a, limit = tr_ilg(a - first);
+          } else if(1 < (last - b)) {
+            first = b, limit = tr_ilg(last - b);
+          } else {
+            STACK_POP5(ISAd, first, last, limit, trlink);
+          }
+        } else {
+          if(1 < (last - b)) {
+            STACK_PUSH5(ISAd, first, a, tr_ilg(a - first), trlink);
+            first = b, limit = tr_ilg(last - b);
+          } else if(1 < (a - first)) {
+            last = a, limit = tr_ilg(a - first);
+          } else {
+            STACK_POP5(ISAd, first, last, limit, trlink);
+          }
+        }
+      } else if(limit == -2) {
+        /* tandem repeat copy */
+        a = stack[--ssize].b, b = stack[ssize].c;
+        if(stack[ssize].d == 0) {
+          tr_copy(ISA, SA, first, a, b, last, ISAd - ISA);
+        } else {
+          if(0 <= trlink) { stack[trlink].d = -1; }
+          tr_partialcopy(ISA, SA, first, a, b, last, ISAd - ISA);
+        }
+        STACK_POP5(ISAd, first, last, limit, trlink);
+      } else {
+        /* sorted partition */
+        if(0 <= *first) {
+          a = first;
+          do { ISA[*a] = a - SA; } while((++a < last) && (0 <= *a));
+          first = a;
+        }
+        if(first < last) {
+          a = first; do { *a = ~*a; } while(*++a < 0);
+          next = (ISA[*a] != ISAd[*a]) ? tr_ilg(a - first + 1) : -1;
+          if(++a < last) { for(b = first, v = a - SA - 1; b < a; ++b) { ISA[*b] = v; } }
+
+          /* push */
+          if(trbudget_check(budget, a - first)) {
+            if((a - first) <= (last - a)) {
+              STACK_PUSH5(ISAd, a, last, -3, trlink);
+              ISAd += incr, last = a, limit = next;
+            } else {
+              if(1 < (last - a)) {
+                STACK_PUSH5(ISAd + incr, first, a, next, trlink);
+                first = a, limit = -3;
+              } else {
+                ISAd += incr, last = a, limit = next;
+              }
+            }
+          } else {
+            if(0 <= trlink) { stack[trlink].d = -1; }
+            if(1 < (last - a)) {
+              first = a, limit = -3;
+            } else {
+              STACK_POP5(ISAd, first, last, limit, trlink);
+            }
+          }
+        } else {
+          STACK_POP5(ISAd, first, last, limit, trlink);
+        }
+      }
+      continue;
+    }
+
+    if((last - first) <= TR_INSERTIONSORT_THRESHOLD) {
+      tr_insertionsort(ISAd, first, last);
+      limit = -3;
+      continue;
+    }
+
+    if(limit-- == 0) {
+      tr_heapsort(ISAd, first, last - first);
+      for(a = last - 1; first < a; a = b) {
+        for(x = ISAd[*a], b = a - 1; (first <= b) && (ISAd[*b] == x); --b) { *b = ~*b; }
+      }
+      limit = -3;
+      continue;
+    }
+
+    /* choose pivot */
+    a = tr_pivot(ISAd, first, last);
+    SWAP(*first, *a);
+    v = ISAd[*first];
+
+    /* partition */
+    tr_partition(ISAd, first, first + 1, last, &a, &b, v);
+    if((last - first) != (b - a)) {
+      next = (ISA[*a] != v) ? tr_ilg(b - a) : -1;
+
+      /* update ranks */
+      for(c = first, v = a - SA - 1; c < a; ++c) { ISA[*c] = v; }
+      if(b < last) { for(c = a, v = b - SA - 1; c < b; ++c) { ISA[*c] = v; } }
+
+      /* push */
+      if((1 < (b - a)) && (trbudget_check(budget, b - a))) {
+        if((a - first) <= (last - b)) {
+          if((last - b) <= (b - a)) {
+            if(1 < (a - first)) {
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              STACK_PUSH5(ISAd, b, last, limit, trlink);
+              last = a;
+            } else if(1 < (last - b)) {
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              first = b;
+            } else {
+              ISAd += incr, first = a, last = b, limit = next;
+            }
+          } else if((a - first) <= (b - a)) {
+            if(1 < (a - first)) {
+              STACK_PUSH5(ISAd, b, last, limit, trlink);
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              last = a;
+            } else {
+              STACK_PUSH5(ISAd, b, last, limit, trlink);
+              ISAd += incr, first = a, last = b, limit = next;
+            }
+          } else {
+            STACK_PUSH5(ISAd, b, last, limit, trlink);
+            STACK_PUSH5(ISAd, first, a, limit, trlink);
+            ISAd += incr, first = a, last = b, limit = next;
+          }
+        } else {
+          if((a - first) <= (b - a)) {
+            if(1 < (last - b)) {
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              STACK_PUSH5(ISAd, first, a, limit, trlink);
+              first = b;
+            } else if(1 < (a - first)) {
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              last = a;
+            } else {
+              ISAd += incr, first = a, last = b, limit = next;
+            }
+          } else if((last - b) <= (b - a)) {
+            if(1 < (last - b)) {
+              STACK_PUSH5(ISAd, first, a, limit, trlink);
+              STACK_PUSH5(ISAd + incr, a, b, next, trlink);
+              first = b;
+            } else {
+              STACK_PUSH5(ISAd, first, a, limit, trlink);
+              ISAd += incr, first = a, last = b, limit = next;
+            }
+          } else {
+            STACK_PUSH5(ISAd, first, a, limit, trlink);
+            STACK_PUSH5(ISAd, b, last, limit, trlink);
+            ISAd += incr, first = a, last = b, limit = next;
+          }
+        }
+      } else {
+        if((1 < (b - a)) && (0 <= trlink)) { stack[trlink].d = -1; }
+        if((a - first) <= (last - b)) {
+          if(1 < (a - first)) {
+            STACK_PUSH5(ISAd, b, last, limit, trlink);
+            last = a;
+          } else if(1 < (last - b)) {
+            first = b;
+          } else {
+            STACK_POP5(ISAd, first, last, limit, trlink);
+          }
+        } else {
+          if(1 < (last - b)) {
+            STACK_PUSH5(ISAd, first, a, limit, trlink);
+            first = b;
+          } else if(1 < (a - first)) {
+            last = a;
+          } else {
+            STACK_POP5(ISAd, first, last, limit, trlink);
+          }
+        }
+      }
+    } else {
+      if(trbudget_check(budget, last - first)) {
+        limit = tr_ilg(last - first), ISAd += incr;
+      } else {
+        if(0 <= trlink) { stack[trlink].d = -1; }
+        STACK_POP5(ISAd, first, last, limit, trlink);
+      }
+    }
+  }
+#undef STACK_SIZE
+}
+
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Tandem repeat sort */
+static
+void
+trsort(int *ISA, int *SA, int n, int depth) {
+  int *ISAd;
+  int *first, *last;
+  trbudget_t budget;
+  int t, skip, unsorted;
+
+  trbudget_init(&budget, tr_ilg(n) * 2 / 3, n);
+/*  trbudget_init(&budget, tr_ilg(n) * 3 / 4, n); */
+  for(ISAd = ISA + depth; -n < *SA; ISAd += ISAd - ISA) {
+    first = SA;
+    skip = 0;
+    unsorted = 0;
+    do {
+      if((t = *first) < 0) { first -= t; skip += t; }
+      else {
+        if(skip != 0) { *(first + skip) = skip; skip = 0; }
+        last = SA + ISA[t] + 1;
+        if(1 < (last - first)) {
+          budget.count = 0;
+          tr_introsort(ISA, ISAd, SA, first, last, &budget);
+          if(budget.count != 0) { unsorted += budget.count; }
+          else { skip = first - last; }
+        } else if((last - first) == 1) {
+          skip = -1;
+        }
+        first = last;
+      }
+    } while(first < (SA + n));
+    if(skip != 0) { *(first + skip) = skip; }
+    if(unsorted == 0) { break; }
+  }
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/* Sorts suffixes of type B*. */
+static
+int
+sort_typeBstar(const unsigned char *T, int *SA,
+               int *bucket_A, int *bucket_B,
+               int n) {
+  int *PAb, *ISAb, *buf;
+#ifdef _OPENMP
+  int *curbuf;
+  int l;
+#endif
+  int i, j, k, t, m, bufsize;
+  int c0, c1;
+#ifdef _OPENMP
+  int d0, d1;
+  int tmp;
+#endif
+
+  /* Initialize bucket arrays. */
+  for(i = 0; i < BUCKET_A_SIZE; ++i) { bucket_A[i] = 0; }
+  for(i = 0; i < BUCKET_B_SIZE; ++i) { bucket_B[i] = 0; }
+
+  /* Count the number of occurrences of the first one or two characters of each
+     type A, B and B* suffix. Moreover, store the beginning position of all
+     type B* suffixes into the array SA. */
+  for(i = n - 1, m = n, c0 = T[n - 1]; 0 <= i;) {
+    /* type A suffix. */
+    do { ++BUCKET_A(c1 = c0); } while((0 <= --i) && ((c0 = T[i]) >= c1));
+    if(0 <= i) {
+      /* type B* suffix. */
+      ++BUCKET_BSTAR(c0, c1);
+      SA[--m] = i;
+      /* type B suffix. */
+      for(--i, c1 = c0; (0 <= i) && ((c0 = T[i]) <= c1); --i, c1 = c0) {
+        ++BUCKET_B(c0, c1);
+      }
+    }
+  }
+  m = n - m;
+/*
+note:
+  A type B* suffix is lexicographically smaller than a type B suffix that
+  begins with the same first two characters.
+*/
+
+  /* Calculate the index of start/end point of each bucket. */
+  for(c0 = 0, i = 0, j = 0; c0 < ALPHABET_SIZE; ++c0) {
+    t = i + BUCKET_A(c0);
+    BUCKET_A(c0) = i + j; /* start point */
+    i = t + BUCKET_B(c0, c0);
+    for(c1 = c0 + 1; c1 < ALPHABET_SIZE; ++c1) {
+      j += BUCKET_BSTAR(c0, c1);
+      BUCKET_BSTAR(c0, c1) = j; /* end point */
+      i += BUCKET_B(c0, c1);
+    }
+  }
+
+  if(0 < m) {
+    /* Sort the type B* suffixes by their first two characters. */
+    PAb = SA + n - m; ISAb = SA + m;
+    for(i = m - 2; 0 <= i; --i) {
+      t = PAb[i], c0 = T[t], c1 = T[t + 1];
+      SA[--BUCKET_BSTAR(c0, c1)] = i;
+    }
+    t = PAb[m - 1], c0 = T[t], c1 = T[t + 1];
+    SA[--BUCKET_BSTAR(c0, c1)] = m - 1;
+
+    /* Sort the type B* substrings using sssort. */
+#ifdef _OPENMP
+    tmp = omp_get_max_threads();
+    buf = SA + m, bufsize = (n - (2 * m)) / tmp;
+    c0 = ALPHABET_SIZE - 2, c1 = ALPHABET_SIZE - 1, j = m;
+#pragma omp parallel default(shared) private(curbuf, k, l, d0, d1, tmp)
+    {
+      tmp = omp_get_thread_num();
+      curbuf = buf + tmp * bufsize;
+      k = 0;
+      for(;;) {
+        #pragma omp critical(sssort_lock)
+        {
+          if(0 < (l = j)) {
+            d0 = c0, d1 = c1;
+            do {
+              k = BUCKET_BSTAR(d0, d1);
+              if(--d1 <= d0) {
+                d1 = ALPHABET_SIZE - 1;
+                if(--d0 < 0) { break; }
+              }
+            } while(((l - k) <= 1) && (0 < (l = k)));
+            c0 = d0, c1 = d1, j = k;
+          }
+        }
+        if(l == 0) { break; }
+        sssort(T, PAb, SA + k, SA + l,
+               curbuf, bufsize, 2, n, *(SA + k) == (m - 1));
+      }
+    }
+#else
+    buf = SA + m, bufsize = n - (2 * m);
+    for(c0 = ALPHABET_SIZE - 2, j = m; 0 < j; --c0) {
+      for(c1 = ALPHABET_SIZE - 1; c0 < c1; j = i, --c1) {
+        i = BUCKET_BSTAR(c0, c1);
+        if(1 < (j - i)) {
+          sssort(T, PAb, SA + i, SA + j,
+                 buf, bufsize, 2, n, *(SA + i) == (m - 1));
+        }
+      }
+    }
+#endif
+
+    /* Compute ranks of type B* substrings. */
+    for(i = m - 1; 0 <= i; --i) {
+      if(0 <= SA[i]) {
+        j = i;
+        do { ISAb[SA[i]] = i; } while((0 <= --i) && (0 <= SA[i]));
+        SA[i + 1] = i - j;
+        if(i <= 0) { break; }
+      }
+      j = i;
+      do { ISAb[SA[i] = ~SA[i]] = j; } while(SA[--i] < 0);
+      ISAb[SA[i]] = j;
+    }
+
+    /* Construct the inverse suffix array of type B* suffixes using trsort. */
+    trsort(ISAb, SA, m, 1);
+
+    /* Set the sorted order of tyoe B* suffixes. */
+    for(i = n - 1, j = m, c0 = T[n - 1]; 0 <= i;) {
+      for(--i, c1 = c0; (0 <= i) && ((c0 = T[i]) >= c1); --i, c1 = c0) { }
+      if(0 <= i) {
+        t = i;
+        for(--i, c1 = c0; (0 <= i) && ((c0 = T[i]) <= c1); --i, c1 = c0) { }
+        SA[ISAb[--j]] = ((t == 0) || (1 < (t - i))) ? t : ~t;
+      }
+    }
+
+    /* Calculate the index of start/end point of each bucket. */
+    BUCKET_B(ALPHABET_SIZE - 1, ALPHABET_SIZE - 1) = n; /* end point */
+    for(c0 = ALPHABET_SIZE - 2, k = m - 1; 0 <= c0; --c0) {
+      i = BUCKET_A(c0 + 1) - 1;
+      for(c1 = ALPHABET_SIZE - 1; c0 < c1; --c1) {
+        t = i - BUCKET_B(c0, c1);
+        BUCKET_B(c0, c1) = i; /* end point */
+
+        /* Move all type B* suffixes to the correct position. */
+        for(i = t, j = BUCKET_BSTAR(c0, c1);
+            j <= k;
+            --i, --k) { SA[i] = SA[k]; }
+      }
+      BUCKET_BSTAR(c0, c0 + 1) = i - BUCKET_B(c0, c0) + 1; /* start point */
+      BUCKET_B(c0, c0) = i; /* end point */
+    }
+  }
+
+  return m;
+}
+
+/* Constructs the suffix array by using the sorted order of type B* suffixes. */
+static
+void
+construct_SA(const unsigned char *T, int *SA,
+             int *bucket_A, int *bucket_B,
+             int n, int m) {
+  int *i, *j, *k;
+  int s;
+  int c0, c1, c2;
+
+  if(0 < m) {
+    /* Construct the sorted order of type B suffixes by using
+       the sorted order of type B* suffixes. */
+    for(c1 = ALPHABET_SIZE - 2; 0 <= c1; --c1) {
+      /* Scan the suffix array from right to left. */
+      for(i = SA + BUCKET_BSTAR(c1, c1 + 1),
+          j = SA + BUCKET_A(c1 + 1) - 1, k = NULL, c2 = -1;
+          i <= j;
+          --j) {
+        if(0 < (s = *j)) {
+          assert(T[s] == c1);
+          assert(((s + 1) < n) && (T[s] <= T[s + 1]));
+          assert(T[s - 1] <= T[s]);
+          *j = ~s;
+          c0 = T[--s];
+          if((0 < s) && (T[s - 1] > c0)) { s = ~s; }
+          if(c0 != c2) {
+            if(0 <= c2) { BUCKET_B(c2, c1) = k - SA; }
+            k = SA + BUCKET_B(c2 = c0, c1);
+          }
+          assert(k < j);
+          *k-- = s;
+        } else {
+          assert(((s == 0) && (T[s] == c1)) || (s < 0));
+          *j = ~s;
+        }
+      }
+    }
+  }
+
+  /* Construct the suffix array by using
+     the sorted order of type B suffixes. */
+  k = SA + BUCKET_A(c2 = T[n - 1]);
+  *k++ = (T[n - 2] < c2) ? ~(n - 1) : (n - 1);
+  /* Scan the suffix array from left to right. */
+  for(i = SA, j = SA + n; i < j; ++i) {
+    if(0 < (s = *i)) {
+      assert(T[s - 1] >= T[s]);
+      c0 = T[--s];
+      if((s == 0) || (T[s - 1] < c0)) { s = ~s; }
+      if(c0 != c2) {
+        BUCKET_A(c2) = k - SA;
+        k = SA + BUCKET_A(c2 = c0);
+      }
+      assert(i < k);
+      *k++ = s;
+    } else {
+      assert(s < 0);
+      *i = ~s;
+    }
+  }
+}
+
+/* Constructs the burrows-wheeler transformed string directly
+   by using the sorted order of type B* suffixes. */
+static
+int
+construct_BWT(const unsigned char *T, int *SA,
+              int *bucket_A, int *bucket_B,
+              int n, int m) {
+  int *i, *j, *k, *orig;
+  int s;
+  int c0, c1, c2;
+
+  if(0 < m) {
+    /* Construct the sorted order of type B suffixes by using
+       the sorted order of type B* suffixes. */
+    for(c1 = ALPHABET_SIZE - 2; 0 <= c1; --c1) {
+      /* Scan the suffix array from right to left. */
+      for(i = SA + BUCKET_BSTAR(c1, c1 + 1),
+          j = SA + BUCKET_A(c1 + 1) - 1, k = NULL, c2 = -1;
+          i <= j;
+          --j) {
+        if(0 < (s = *j)) {
+          assert(T[s] == c1);
+          assert(((s + 1) < n) && (T[s] <= T[s + 1]));
+          assert(T[s - 1] <= T[s]);
+          c0 = T[--s];
+          *j = ~((int)c0);
+          if((0 < s) && (T[s - 1] > c0)) { s = ~s; }
+          if(c0 != c2) {
+            if(0 <= c2) { BUCKET_B(c2, c1) = k - SA; }
+            k = SA + BUCKET_B(c2 = c0, c1);
+          }
+          assert(k < j);
+          *k-- = s;
+        } else if(s != 0) {
+          *j = ~s;
+#ifndef NDEBUG
+        } else {
+          assert(T[s] == c1);
+#endif
+        }
+      }
+    }
+  }
+
+  /* Construct the BWTed string by using
+     the sorted order of type B suffixes. */
+  k = SA + BUCKET_A(c2 = T[n - 1]);
+  *k++ = (T[n - 2] < c2) ? ~((int)T[n - 2]) : (n - 1);
+  /* Scan the suffix array from left to right. */
+  for(i = SA, j = SA + n, orig = SA; i < j; ++i) {
+    if(0 < (s = *i)) {
+      assert(T[s - 1] >= T[s]);
+      c0 = T[--s];
+      *i = c0;
+      if((0 < s) && (T[s - 1] < c0)) { s = ~((int)T[s - 1]); }
+      if(c0 != c2) {
+        BUCKET_A(c2) = k - SA;
+        k = SA + BUCKET_A(c2 = c0);
+      }
+      assert(i < k);
+      *k++ = s;
+    } else if(s != 0) {
+      *i = ~s;
+    } else {
+      orig = i;
+    }
+  }
+
+  return orig - SA;
+}
+
+
+/*---------------------------------------------------------------------------*/
+
+/*- Function -*/
+
+int
+divsufsort(const unsigned char *T, int *SA, int n) {
+  int *bucket_A, *bucket_B;
+  int m;
+  int err = 0;
+
+  /* Check arguments. */
+  if((T == NULL) || (SA == NULL) || (n < 0)) { return -1; }
+  else if(n == 0) { return 0; }
+  else if(n == 1) { SA[0] = 0; return 0; }
+  else if(n == 2) { m = (T[0] < T[1]); SA[m ^ 1] = 0, SA[m] = 1; return 0; }
+
+  bucket_A = (int *)malloc(BUCKET_A_SIZE * sizeof(int));
+  bucket_B = (int *)malloc(BUCKET_B_SIZE * sizeof(int));
+
+  /* Suffixsort. */
+  if((bucket_A != NULL) && (bucket_B != NULL)) {
+    m = sort_typeBstar(T, SA, bucket_A, bucket_B, n);
+    construct_SA(T, SA, bucket_A, bucket_B, n, m);
+  } else {
+    err = -2;
+  }
+
+  free(bucket_B);
+  free(bucket_A);
+
+  return err;
+}
+
+int
+divbwt(const unsigned char *T, unsigned char *U, int *A, int n) {
+  int *B;
+  int *bucket_A, *bucket_B;
+  int m, pidx, i;
+
+  /* Check arguments. */
+  if((T == NULL) || (U == NULL) || (n < 0)) { return -1; }
+  else if(n <= 1) { if(n == 1) { U[0] = T[0]; } return n; }
+
+  if((B = A) == NULL) { B = (int *)malloc((size_t)(n + 1) * sizeof(int)); }
+  bucket_A = (int *)malloc(BUCKET_A_SIZE * sizeof(int));
+  bucket_B = (int *)malloc(BUCKET_B_SIZE * sizeof(int));
+
+  /* Burrows-Wheeler Transform. */
+  if((B != NULL) && (bucket_A != NULL) && (bucket_B != NULL)) {
+    m = sort_typeBstar(T, B, bucket_A, bucket_B, n);
+    pidx = construct_BWT(T, B, bucket_A, bucket_B, n, m);
+
+    /* Copy to output string. */
+    U[0] = T[n - 1];
+    for(i = 0; i < pidx; ++i) { U[i + 1] = (unsigned char)B[i]; }
+    for(i += 1; i < n; ++i) { U[i] = (unsigned char)B[i]; }
+    pidx += 1;
+  } else {
+    pidx = -2;
+  }
+
+  free(bucket_B);
+  free(bucket_A);
+  if(A == NULL) { free(B); }
+
+  return pidx;
+}
+
+// End divsufsort.c
+
 /////////////////////////////// add ///////////////////////////////////
 
 // E8E9 transform of buf[0..n-1] to improve compression of .exe and .dll.
@@ -3596,7 +4719,7 @@ LZBuffer::LZBuffer(StringBuffer& inbuf, int args[], const unsigned* sap):
   assert(n<=(1u<<20<<args[0]));
   assert(args[1]>=1 && args[1]<=7 && args[1]!=4);
   assert(level>=1 && level<=3);
-  if ((minMatch<4 && level==1) || minMatch<1)
+  if ((minMatch<4 && level==1) || (minMatch<1 && level==2))
     error("match length $3 too small");
 
   // e8e9 transform
@@ -3859,20 +4982,20 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
 }
 
 // Generate a config file from the method argument with syntax:
-// {0|x|s}[N1[,N2]...][{ciamtswf<cfg>}[N1[,N2]]...]...
+// {0|x|s|i}[N1[,N2]...][{ciamtswf<cfg>}[N1[,N2]]...]...
 // Write the initial args into args[0..8].
 string makeConfig(const char* method, int args[]) {
   assert(method);
   const char type=method[0];
-  assert(type=='x' || type=='s' || type=='0');
+  assert(type=='x' || type=='s' || type=='0' || type=='i');
 
-  // Read "{x|s|0}N1,N2...N9" into args[0..8] ($1..$9)
+  // Read "{x|s|i|0}N1,N2...N9" into args[0..8] ($1..$9)
   args[0]=4;  // log block size in MB
-  args[1]=1;  // lz77 with variable length codes
-  args[2]=4;  // minimum match length
+  args[1]=0;  // 0..3=none, lz77+huf, lz77+byte, bwt. 4..7 adds E8E9
+  args[2]=0;  // lz77 minimum match length
   args[3]=0;  // secondary context length
-  args[4]=3;  // log searches
-  args[5]=24; // lz77 hash table size
+  args[4]=0;  // log searches
+  args[5]=0;  // lz77 hash table size or SA if args[0]+21
   args[6]=0;  // secondary context look ahead
   args[7]=0;  // not used
   args[8]=0;  // not used
@@ -4951,9 +6074,8 @@ ThreadReturn writeThread(void* arg) {
 // depend on input data.
 void writeJidacHeader(libzpaq::Writer *out, int64_t date,
                       int64_t cdata, unsigned htsize) {
-  assert(out);
+  if (!out) return;
   assert(date>=19700000000000LL && date<30000000000000LL);
-  libzpaq::Compressor co;
   StringBuffer is;
   is+=ltob(cdata);
   compressBlock(&is, out, "0",
@@ -5001,22 +6123,83 @@ bool compareFilename(DTMap::iterator ap, DTMap::iterator bp) {
   return ap->first<bp->first;
 }
 
+// For writing to two archives at once
+struct WriterPair: public libzpaq::Writer {
+  libzpaq::Writer *a, *b;
+  void put(int c) {
+    if (a) a->put(c);
+    if (b) b->put(c);
+  }
+  void write(const char* buf, int n) {
+    if (a) a->write(buf, n);
+    if (b) b->write(buf, n);
+  }
+  WriterPair(): a(0), b(0) {}
+};
+
 // Add or delete files from archive. Return 1 if error else 0.
 int Jidac::add() {
 
-  // Set block size
-  assert(method!="");
+  // Read archive (preferred) or index into ht, dt, ver.
+  int errors=0;
+  int64_t header_pos=0;  // end of archive
+  int64_t index_pos=0;   // end of index
+  const string part1=subpart(archive, 1);
+  const string part0=subpart(archive, 0);
+  if (exists(part1)) {
+    if (part0!=part1 && exists(part0)) {  // compare archive with index
+      Jidac jidac(*this);
+      header_pos=read_archive(&errors);
+      index_pos=jidac.read_archive(&errors, part0.c_str());
+      if (index_pos+dhsize!=header_pos || ver.size()!=jidac.ver.size()) {
+        fprintf(stderr, "Index ");
+        printUTF8(part0.c_str(), stderr);
+        fprintf(stderr, " shows %1.0f bytes in %d versions\n"
+            " but archive has %1.0f bytes in %d versions.\n",
+            index_pos+dhsize+0.0, size(jidac.ver)-1,
+            header_pos+0.0, size(ver)-1);
+        error("index does not match multi-part archive");
+      }
+    }
+    else {  // archive with no index
+      header_pos=read_archive(&errors);
+      index_pos=header_pos-dhsize;
+    }
+  }
+  else if (exists(part0)) {  // read index of remote archive
+    index_pos=read_archive(&errors, part0.c_str());
+    if (dcsize!=0) error("index contains data");
+    dcsize=dhsize;  // assumed
+    header_pos=index_pos+dhsize;
+    if (quiet<MAX_QUIET) {
+      printUTF8(part0.c_str(), con);
+      fprintf(con, ": assuming %1.0f bytes in %d versions\n",
+          dhsize+index_pos+0.0, size(ver)-1);
+    }
+  }
+
+  // Set method and block size
+  if (method=="") {  // set default method
+    if (dhsize>0 && dcsize==0) method="i";  // index 
+    else method="1";  // archive
+  }
+  if (size(method)==1) {  // set default blocksize
+    if (method[0]>='2' && method[0]<='9') method+="6";
+    else method+="4";
+  }
+  if (command=="-add" && quiet<MAX_QUIET)
+    fprintf(con, "Compressing with -method %s\n", method.c_str());
+  if (strchr("0123456789xsi", method[0])==0)
+    error("-method must begin with 0..5, x, s, or i");
+  assert(size(method)>=2);
   unsigned blocksize=(1<<24)-4096;
-  if (isdigit(method[0]) && method[0]>'1')
-    blocksize=(1<<26)-4096;
-  if (method.size()>1)
-    blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+  blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
   if (fragment<0 || fragment>19 || (1u<<(12+fragment))>blocksize)
     error("fragment size too large");
-
-  // Read archive index list into ht, dt, ver.
-  int errors=0;
-  int64_t header_pos=read_archive(&errors);
+  if (command=="-add") {  // don't mix archives and indexes
+    if (method[0]=='i' && dcsize>0) error("archive is not an index");
+    if (method[0]!='i' && dcsize!=dhsize) error("archive is an index");
+  }
 
   // Make list of files to add or delete
   read_args(command!="-delete");
@@ -5061,23 +6244,63 @@ int Jidac::add() {
     return errors>0;
   }
 
+  // Open index to append
+  WriterPair wp;  // wp.a points to output, wp.b to index
+  Archive index;
+  if (part0!=part1 && (exists(part0) || !exists(part1))) {
+    if (method[0]=='s')
+      error("Cannot update indexed archive in streaming mode");
+    if (!index.open(part0.c_str(), password, 'w', index_pos))
+      error("Index open failed");
+    index_pos=index.tell();
+    wp.b=&index;
+  }
+
   // Open archive to append
   Archive out;
   Counter counter;
-  libzpaq::Writer* outp=0;  // pointer to output
   if (archive=="")
-    outp=&counter;
+    wp.a=&counter;
+  else if (part0!=part1 && exists(part0) && !exists(part1)) {  // remote
+    char salt[32]={0};
+    if (password) {  // get salt from index
+      index.close();
+      if (index.open(part0.c_str()) && index.read(salt, 32)==32) {
+        salt[0]^=0x4d;
+        index.close();
+      }
+      else error("cannot read salt from index");
+      if (!index.open(part0.c_str(), password, 'w'))
+        error("index reopen failed");
+    }
+    string part=subpart(archive, ver.size());
+    if (quiet<MAX_QUIET) {
+      fprintf(con, "Creating ");
+      printUTF8(part.c_str(), con);
+      fprintf(con, " dated %s assuming %1.0f prior bytes\n",
+           dateToString(date).c_str(), header_pos+0.0);
+    }
+    if (exists(part)) error("output archive part exists");
+    if (!out.open(part.c_str(), password, 'w', header_pos, header_pos, salt))
+      error("Archive open failed");
+    header_pos=out.tell();
+    wp.a=&out;  
+  }
   else {
     if (!out.open(archive.c_str(), password, 'w', header_pos))
       error("Archive open failed");
-    if (password && header_pos==0) header_pos=32;
+    header_pos=out.tell();
     if (quiet<MAX_QUIET) {
       fprintf(con, "%s ", (header_pos>32 ? "Updating" : "Creating"));
       printUTF8(archive.c_str(), con);
       fprintf(con, " version %d at %s\n",
         size(ver), dateToString(date).c_str());
     }
-    outp=&out;
+    wp.a=&out;
+  }
+  if (method[0]=='i') {  // create index
+    wp.b=wp.a;
+    wp.a=0;
   }
   int64_t inputsize=0;  // total input size
 
@@ -5108,7 +6331,7 @@ int Jidac::add() {
                   comment+=itos(p->second.eattr>>8);
                 }
               }
-              compressBlock(&sb, outp, method, filename.c_str(),
+              compressBlock(&sb, &wp, method, filename.c_str(),
                             comment.c_str());
               assert(sb.size()==0);
             }
@@ -5153,13 +6376,13 @@ int Jidac::add() {
 
   // reserve space for the header block
   const unsigned htsize=ht.size();  // fragments at start of update
-  writeJidacHeader(outp, date, -1, htsize);
+  writeJidacHeader(&wp, date, -1, htsize);
   const int64_t header_end=archive=="" ? counter.pos : out.tell();
 
   // Start compress and write jobs
   vector<ThreadID> tid(threads*2-1);
   ThreadID wid;
-  CompressJob job(threads, tid.size(), outp);
+  CompressJob job(threads, tid.size(), wp.a);
   if (quiet<MAX_QUIET && deletions>0)
     fprintf(con, "Deleting %d files.\n", deletions);
   if (quiet<MAX_QUIET && size(vf)>0)
@@ -5414,7 +6637,7 @@ int Jidac::add() {
   for (unsigned i=htsize; i<=ht.size(); ++i) {
     if ((i==ht.size() || ht[i].csize>0) && is.size()>0) {  // write a block
       assert(block_start>=htsize && block_start<i);
-      compressBlock(&is, outp, "0",
+      compressBlock(&is, &wp, "0",
                     ("jDC"+itos(date, 14)+"h"+itos(block_start, 10)).c_str());
       assert(is.size()==0);
     }
@@ -5485,7 +6708,7 @@ int Jidac::add() {
     }
     ++p;
     if (is.size()>16000 || (is.size()>0 && p==dt.end())) {
-      compressBlock(&is, outp, "1",
+      compressBlock(&is, &wp, "1",
                     ("jDC"+itos(date)+"i"+itos(++dtcount, 10)).c_str());
       assert(is.size()==0);
     }
@@ -5499,7 +6722,9 @@ int Jidac::add() {
   else {
     archive_end=out.tell();
     out.seek(header_pos, SEEK_SET);
-    writeJidacHeader(&out, date, cdatasize, htsize);
+    if (wp.b) index.seek(index_pos, SEEK_SET);
+    writeJidacHeader(wp.a, date, cdatasize, htsize);
+    if (wp.b) writeJidacHeader(wp.b, date, 0, htsize);
   }
   if (quiet<MAX_QUIET)
     fprintf(con, "\n%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
@@ -5507,12 +6732,10 @@ int Jidac::add() {
            double(inputsize),
            double(archive_end-header_pos),
            double(archive_end));
-    if (archiveResets)
-      fprintf(con, "%d file archive bits reset.\n", archiveResets);
-  if (archive!="") {
-    assert(header_end==out.tell());
-    out.close();
-  }
+  if (archiveResets)
+    fprintf(con, "%d file archive bits reset.\n", archiveResets);
+  out.close();
+  index.close();
   return errors>0;
 }
 
@@ -6341,20 +7564,107 @@ void Jidac::list() {
     }
     if (p->second.dtv.size() && p->second.dtv.back().date) ++nfiles;
   }
-  if (quiet<MAX_QUIET)
+  if (quiet<MAX_QUIET) {
     fprintf(con, "%u of %u files shown. %1.0f -> %1.0f\n",
-           shown, nfiles, double(usize), double(csize));
+           shown, nfiles, double(usize), double(csize+dhsize-dcsize));
+    if (dhsize!=dcsize)  // index?
+      fprintf(con, "Note: %1.0f of %1.0f compressed bytes are in archive\n",
+          dcsize+0.0, dhsize+0.0);
+  }
   if (all) list_versions(csize);
 }
 
 /////////////////////////////// compare ///////////////////////////////
 
-// Compare archive with external files and list differences.
+// Compare archive with external files or archive and list differences.
 // Return 1 if differences are found, else 0.
 int Jidac::compare() {
+  int count=0, differences=0;
+
+  // Compare -with another archive
+  if (with!="") {
+    if (size(with)<5 || with.substr(size(with)-5)!=".zpaq") with+=".zpaq";
+    Jidac jidac(*this);
+    if (archive!="") read_archive();
+    jidac.read_archive(0, with.c_str());
+    read_args(false);
+    jidac.read_args(false);
+
+    // test all files in first archive
+    for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
+      if (p->second.written!=0) continue;
+      if (p->second.dtv.size()<1) continue;
+      DTV& dp=p->second.dtv.back();
+      if (dp.date==0) continue;
+      ++count;
+      bool isequal=false;
+      DTMap::iterator q=jidac.dt.find(rename(p->first));
+      if (q!=jidac.dt.end() && q->second.dtv.size()>0
+          && q->second.dtv.back().date>0) {  // exists in both archives
+        DTV& dq=q->second.dtv.back();
+        isequal=(!all || dp.date==dq.date)
+            && dp.size==dq.size
+            && (!all || noattributes || dp.attr==dq.attr)
+            && dp.ptr.size()==dq.ptr.size();
+        for (unsigned i=0; isequal && i<dp.ptr.size(); ++i) {
+          if (dp.ptr[i]<1 || dp.ptr[i]>ht.size())
+            error("bad ptr in first archive");
+          if (dq.ptr[i]<1 || dq.ptr[i]>jidac.ht.size())
+            error("bad ptr in second archive");
+          if (ht[dp.ptr[i]].usize!=jidac.ht[dq.ptr[i]].usize)
+            isequal=false;
+          else if (memcmp(ht[dp.ptr[i]].sha1, jidac.ht[dq.ptr[i]].sha1, 20))
+            isequal=false;
+        }
+        if (!isequal && (dp.size>=quiet || dq.size>=quiet)) {
+          fprintf(con, "< %s %s%12.0f ",
+              dateToString(dq.date).c_str(),
+              noattributes ? "" : (attrToString(dq.attr)+" ").c_str(), 
+              double(dq.size));
+          printUTF8(rename(q->first).c_str(), con);
+          fprintf(con, "\n");
+        }
+      }
+      if (!isequal) ++differences;
+      if (!isequal && dp.size>=quiet) {
+        fprintf(con, "> %s %s%12.0f ",
+            dateToString(dp.date).c_str(),
+            noattributes ? "" : (attrToString(dp.attr)+" ").c_str(), 
+            double(dp.size));
+        printUTF8(p->first.c_str(), con);
+        fprintf(con, "\n");
+      }
+    }
+
+    // list files in second archive but not the first
+    for (DTMap::iterator p=jidac.dt.begin(); p!=jidac.dt.end(); ++p) {
+      if (p->second.written!=0) continue;
+      if (p->second.dtv.size()<1) continue;
+      if (p->second.dtv.back().date==0) continue;
+      DTMap::iterator q=dt.find(unrename(p->first));
+      if (q==dt.end() || q->second.dtv.size()==0
+          || q->second.written!=0 || q->second.dtv.back().date==0) {
+        ++count;
+        ++differences;
+        DTV& dp=p->second.dtv.back();
+        if (dp.size>=quiet) {
+          fprintf(con, "< %s %s%12.0f ",
+              dateToString(dp.date).c_str(),
+              noattributes ? "" : (attrToString(dp.attr)+" ").c_str(), 
+              double(dp.size));
+          printUTF8(rename(p->first).c_str(), con);
+          fprintf(con, "\n");
+        }
+      }
+    }
+    if (quiet<MAX_QUIET)
+      fprintf(con, "%d of %d files differ\n", differences, count);
+    return differences>0;
+  }
+
+  // Compare with external files
   if (archive!="") read_archive();
   read_args(true);
-  int count=0, differences=0;
   for (DTMap::iterator p=dt.begin(); p!=dt.end(); ++p) {
     if (p->second.written!=0) continue;
     bool isequal=p->second.edate!=0 && p->second.dtv.size()>0
