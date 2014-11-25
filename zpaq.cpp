@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.56"
+#define ZPAQ_VERSION "6.57"
 
 /*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
@@ -4983,15 +4983,14 @@ void LZBuffer::write_match(unsigned len, unsigned off) {
 
 // Generate a config file from the method argument with syntax:
 // {0|x|s|i}[N1[,N2]...][{ciamtswf<cfg>}[N1[,N2]]...]...
-// Write the initial args into args[0..8].
 string makeConfig(const char* method, int args[]) {
   assert(method);
   const char type=method[0];
   assert(type=='x' || type=='s' || type=='0' || type=='i');
 
   // Read "{x|s|i|0}N1,N2...N9" into args[0..8] ($1..$9)
-  args[0]=4;  // log block size in MB
-  args[1]=0;  // 0..3=none, lz77+huf, lz77+byte, bwt. 4..7 adds E8E9
+  args[0]=0;  // log block size in MiB
+  args[1]=0;  // 0=none, 1=var-LZ77, 2=byte-LZ77, 3=BWT, 4..7 adds E8E9
   args[2]=0;  // lz77 minimum match length
   args[3]=0;  // secondary context length
   args[4]=0;  // log searches
@@ -5666,8 +5665,7 @@ string compressBlock(StringBuffer* in, libzpaq::Writer* out, string method,
   assert(out);
   assert(method!="");
   const unsigned n=in->size();  // input size
-  const int arg0=method.size()>1
-      ? atoi(method.c_str()+1) : max(lg(n+4095)-20, 0);  // block size
+  const int arg0=max(lg(n+4095)-20, 0);  // block size
   assert((1u<<(arg0+20))>=n+4096);
 
   // Get hash of input
@@ -6192,8 +6190,7 @@ int Jidac::add() {
   if (strchr("0123456789xsi", method[0])==0)
     error("-method must begin with 0..5, x, s, or i");
   assert(size(method)>=2);
-  unsigned blocksize=(1<<24)-4096;
-  blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+  unsigned blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
   if (fragment<0 || fragment>19 || (1u<<(12+fragment))>blocksize)
     error("fragment size too large");
   if (command=="-add") {  // don't mix archives and indexes

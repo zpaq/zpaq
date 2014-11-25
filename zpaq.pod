@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v6.56 man page source
+#   zpaq.pod - zpaq v6.57 man page source
 #
 #   Copyright
 #
@@ -1078,7 +1078,7 @@ C<zip(1)>
 
 I<zpaq> uses code from I<libzpaq> v6.52 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v6.56 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
+I<zpaq> v6.57 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
