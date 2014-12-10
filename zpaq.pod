@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v6.57 man page source
+#   zpaq.pod - zpaq v6.58 man page source
 #
 #   Copyright
 #
@@ -46,7 +46,7 @@ zpaq - Journaling archiver for incremental backups.
 
 =head1 SYNOPSIS
 
-zpaq I<command> I<archive> [I<files>]... [-I<options>]...
+zpaq I<command> I<archive>[C<.zpaq>] [I<files>]... [-I<options>]...
 
 =head1 DESCRIPTION
 
@@ -106,8 +106,8 @@ salt and keystream.
 
 =head1 COMMANDS
 
-I<command> is one of C<add>, C<compare>, C<delete>, C<extract>, C<list>,
-C<purge>, or C<test>. Commands may be abbreviated to one letter.
+I<command> is one of C<add>, C<extract>, C<list>, or C<test>.
+Commands may be abbreviated to one letter.
 
 I<archive> is assumed to have a C<.zpaq> extension if not specified.
 Wildcards C<*> or C<?> in I<archive> specify a multi-part archive
@@ -120,31 +120,20 @@ to C<part00.zpaq> (index), C<part01.zpaq> (first update), C<part02.zpaq>
 (second update), etc. The index is only needed if the other parts
 are removed. Otherwise it is ignored.
 
-I<files> is a list of file and directory names separated by spaces. If a
-name is a directory, then it recursively includes all
-files and subdirectories within.
-
-Depending on the command,
-I<files> may refer either to internal files and directories (stored in the
-archive) or external files and directories (stored on disk), or both.
-File names may contain wildcards. When referring to internal names,
-the wildcard C<*> matches any string of zero or more characters
-(including C</>) and C<?> matches exactly one character.
-In Unix/Linux, C<*> should be escaped as C<\*> or the name should be
-enclosed in quotes to protect it from the shell. When referring
-to external names, C<zpaq> expands wildcards only in Windows, and only
-in the last component of the path (after the last C</> or C<\>).
-
-In Windows, C<\> matches C</> and upper case matches lower case.
-
 =over
 
 =item a
 
 =item add
 
-Append changes in I<files>
-to I<archive>, or create I<archive> if it does not exist. If I<archive>
+Append changes in I<files> to I<archive>, or create I<archive> if it does not
+exist. I<files> is a list of file and directory names separated by spaces. If a
+name is a directory, then it recursively includes all
+files and subdirectories within. In Windows, I<files> may contain
+wildcards C<*> and C<?> in the last component of the path (after the last slash).
+C<*> matches any string and C<?> matches any character.
+
+If I<archive>
 contains wildcards indicating a multi-part archive, then create a new
 part using the next available part number starting with 1. If an index
 (part 0) is present, then it is also checked for consistency (number
@@ -182,83 +171,39 @@ If I<archive> is C<""> (a quoted empty string), then C<zpaq> compresses
 I<files> as if creating a new archive, but discards the output without
 writing to disk.
 
-=item c
-
-=item compare
-
-Compare contents of I<files> between the archive and disk and list
-any differences. If I<files> is omitted, then compare all of the files
-in the archive with files on disk. Files are compared first by size,
-and if identical, then by computing the fragment SHA-1 hashes of the
-file on disk and comparing with the stored hashes.
-Any differences are listed (as in C<list>) using a leading ">" character
-to represent the internal file and "<" to represent the external file.
-Files are considered identical (and not listed) even if the dates
-and attributes/permissions differ.
-
-=item d
-
-=item delete
-
-Update the archive such that I<files> (and contents
-of directories) are internally marked as deleted.
-It is equivalent to C<add> when the external files do not exist.
-Thus, it makes the archive larger. (Use C<purge> to permanently remove
-deleted files).
-
 =item e
 
 =item x
 
-=item extract
+=item extract I<archive>
 
-For each of the named I<files>, extract the files (or directories) to disk.
-If I<files> is omitted, then the entire archive is extracted.
-The last-modified date and permissions or attributes
-are set as saved in the archive.
-Existing output files are skipped without generating an error.
-(Use C<-force> to overwrite. Use C<-quiet 0> to report individual
-skipped files).
+Extract I<files> (including the contents of directories), or extract
+the whole archive contents if I<files> is omitted.
+The file names, last-modified date,
+and permissions or attributes are set as saved in the archive.
+If there are multiple versions of a file stored, then only the latest
+version is extracted. If a stored file has been marked as deleted,
+then it is not extracted.
+
+Existing files are skipped without being overwritten. (Use C<-force>
+to overwrite).
 
 As files are extracted, the fragment SHA-1 hashes are computed and compared
 with the stored hashes. The program reports an error in case of mismatches.
 Blocks are only decompressed up to the last used fragment. Thus, the block
 SHA-1 hash is not normally checked.
-
-If C<zpaq> runs out of memory, then it kills a thread and continues extracting
-with the remaining threads. If only one thread is left then it is an error.
-
-If a fragment table block is damaged, then C<zpaq> recovers the fragment
-sizes (but not hashes) from a copy of the list at the end of the data block.
-Data integrity is verified by the block hash rather than the fragment
-hashes.
-
-If a data block is damaged, then any files pointing to fragments in those
-blocks cannot be extracted. If a file points to both damaged and undamaged
-data blocks then the file will be partially extracted and may be filled
-with fragments containing zero bytes. C<zpaq> will report such errors.
-
-If an index block is damaged, then any files listed within are lost. In
-case of an update or deletion, the earlier version will be extracted. The
-index is split into blocks of about 16 KB to limit damage.
-
-If an update header block is lost, then C<zpaq> will scan past the data blocks
-searching for the 13 byte header tag of the first index block.
-No files are lost.
-
-Damaged blocks are detected by errors parsing the header, decompression
-errors such as runaway decompression exceeding the expected output size,
-parsing errors in the decompressed data, or a mismatch between the SHA-1
-hash of the decompressed block and the hash stored in the block trailer.
+C<zpaq> will do its best to extract as much data as it can if the archive
+is damaged.
 
 =item l
 
-=item list
+=item list I<archive>
 
-For each of the named I<files>, list the version number, last-modified
-date (UT time zone), file name, attributes or permissions, size,
-and approximate compression ratio.
-If I<files> is not specified then list the entire archive contents.
+List I<files> within the archive, or list the entire archive contents
+if I<files> is omitted. For each file or directory, show the version number,
+last modified date, Windows attributes or Unix/Linux permissions, uncompressed
+size, approximate compression ratio, and name of each file or directory.
+
 The version number refers to the number of times the archive was updated
 up to and including the update that added the file.
 
@@ -275,32 +220,29 @@ are listed, ignoring the index. To list the index (C<part00.zpaq>),
 specify the index file (like C<zpaq list part00>). This should give the same
 result if the index is correct.
 
-=item p
-
-=item purge
-
-Permanently remove old versions and deleted files from the archive, keeping only
-the contents of the latest version. The C<-to> option is required
-to specify the output archive. I<archive> is not modified. This is
-the only way to make an archive smaller. The output is not encrypted by default,
-even if the input is.
-
-An archive is purged by keeping any data block and the corresponding
-fragment table block if any of the fragments are pointed to by any files
-in the latest version. Unused fragments are not removed because it would
-require decompressing and recompressing the block.
-Then a new header is written with the current
-date, and new fragment tables and index blocks are written with old
-versions removed and fragments renumbered consecutively.
-
 =item t
 
-=item test
+=item test I<archive>
 
-Test the archive by extracting I<files>, computing their SHA-1 hashes,
-comparing with the stored hashes, then discarding the output
-without writing to disk. If I<files> is omitted, then test all files
-in the latest version. (Use C<-all> to test all versions).
+Test archive integrity by reading the archive in a single pass in a single
+thread. Verify that the decompressed data agrees with the stored SHA-1
+hashes and sizes and that the data otherwise conforms to the ZPAQ standard.
+The block hashes and the redundant list of fragment sizes are not
+required by the ZPAQ standard but are required by C<test> unless the
+C<-fragile> option is given.
+
+For all blocks, report the filename field, stored uncompressed size from
+the comment field, and
+C<OK> or C<?> if the checksum matches or is not stored, respectivey.
+For streaming segments, report the whole comment field. For C blocks,
+report the new version number and size of the following data blocks.
+For D blocks, compute and remember the fragment hashes and report the range
+processed. For H blocks, compare the stored and remembered hashes and
+report OK if they match. For I blocks, report the number of files
+added and deleted and OK if dates are valid (1900 to 2999) and fragment
+pointers are valid.
+
+I<files> and most other options (in particular, C<-until>) have no effect.
 
 =back
 
@@ -312,8 +254,11 @@ Options may be abbreviated as long as it is not ambiguous.
 
 =item -all
 
-With C<compare>, treat files as different if only the last-modified
-date or attributes/permissions differ.
+With C<extract -to> to another archive,
+keep all versions, which has the effect of simply copying the archive.
+This option is useful when combined with
+C<-key> and C<-newkey> to encrypt, decrypt, or change the password
+of an encrypted archive.
 
 With C<list>, list all saved versions and not just the latest version,
 including versions where the file is marked as deleted. Also show
@@ -323,14 +268,6 @@ this point, the date and time of the update (UT time zone), number of
 files added or updated, number of files deleted, and the uncompressed
 and compressed sizes of the update.
 
-With C<purge>, keep all versions, which has the effect of simply
-copying the archive. This option is useful when combined with
-C<-key> and C<-newkey> to encrypt, decrypt, or change the password
-of an encrypted archive.
-
-With C<test>, test all versions of each file and not just the latest.
-Also verify data block SHA-1 checksums.
-
 =item -duplicates
 
 With C<list>, list the contents sorted by decreasing size and label each listing
@@ -339,19 +276,18 @@ previous one.
 
 =item -force
 
-With C<add>, do not assume that files are identical just because the
-last-modified date, size, and attributes/permissions match. However,
-files are only added if they really are different. Files are assumed
-identical if the computed SHA-1 hashes match those stored in the archive.
+With C<add>, attempt to add files even if the last-modified date has
+not changed. Files are added only if they really are different, based
+on comparing the computed and stored SHA-1 hashes
 
-With C<extract>, overwrite existing output files if they differ. If the
+With C<extract>, overwrite existing output files. If the
 contents differ (tested by comparing SHA-1 hashes), then the file is
 decompressed and extracted. If the dates or attributes/permissions
 differ, then they are set to match those stored in the archive.
 
 =item -fragile
 
-With C<add> and C<delete>, do not save extra data used for error detection
+With C<add> do not save extra data used for error detection
 and recovery. This includes a 13 byte locator tag that allows compressed
 blocks to be found after corrupted data, block SHA-1 checksums for
 error detection, and the redundant list of fragment sizes stored in data
@@ -363,11 +299,14 @@ are extracted to compare with the stored fragment hashes. This slightly
 speeds up decompression, but output errors from corrupted archives would
 go undetected.
 
+With C<test>, allow the test to pass if block checksums or the redundant
+fragment size lists are misssing.
+
 With all commands, do not verify block checksums when reading the archive.
 
 =item -fragment I<N>
 
-Set the average dedup fragment size to 2^I<N> KB. I<N>
+With C<add>, set the average dedup fragment size to 2^I<N> KB. I<N>
 can range from 0 (1 KB) to 1/8 of the block size.
 The default is 6 (64 KB). Deduplication works by splitting large files
 along content-dependent boundaries, computing their SHA-1 hashes, and
@@ -831,7 +770,8 @@ C<MATCH $1+2 $1>.
 
 =item -newkey [I<password>]
 
-Set the encryption key for the output of C<purge>. If I<password>
+Set the encryption key for the output of C<extract -to> to a new archive.
+If I<password>
 is omitted, then the program will prompt for it without echoing to
 the console until the same value is entered twice consecutively.
 If the same password is used as C<-key>, the output will still be
@@ -841,9 +781,6 @@ different because a new salt will be used (generated as with C<-key>).
 
 With C<add>, do not save Windows attributes or Unix/Linux permissions
 to the archive. With all commands, ignore values already saved.
-Thus, C<extract> will create files with default attributes and
-permissions, C<compare -all> will not compare attributes, and
-C<list> will not show them.
 
 =item -nodelete
 
@@ -851,46 +788,37 @@ With C<add>, do not mark files in the archive as deleted when the
 corresponding external file does not exist. This makes C<zpaq>
 consistent with the behavior of most non-journaling archivers.
 
-=item -not I<names>...
+=item -not [I<file>]...
 
-=item -not :[+|-|d|a|A|s|h|r|i]...  (Windows)
+=item -not =[=#/?]...
 
-=item -not :[+|-|d|r|w|x]...  (Unix/Linux)
+In the first form, do not add, extract, or list files that match any I<file>
+by name. I<file> may contain
+wildcards C<*> and C<?> that match any string or character respectively,
+including C</>. A match to a directory also matches all of
+its contents. In Windows, matches are not case sensitive, and C<\>
+matches C</>.
 
-Exclude each name in I<names> from I<files> so that they are
-not added, extracted,
-listed, compared, deleted, or tested. Excluding a directory excludes
-all of its contents. A name in I<names> may contain wildcards
-such that C<*> matches any string and C<?> matches any character
-including C</>. Files are excluded before renaming with C<-to>.
-For example:
+With C<list>, C<-not =[=#/?]...> compares with external files
+(after renaming with C<-to>). The characters C<=>, C<#>, C</>, and C<?>
+in any order after the first C<=> tell C<zpaq> not to list any
+files that are equal, different, not found, or unknown respectively.
+For example, C<-not ==/> means do not list any files that are equal
+or not found.
+Any files that are listed are shown with the corresponding character
+to indicate the result of the comparison. The total number of each
+type is reported regardless. Files are compared
+by computing their SHA-1 hashes and comparing with the stored hashes.
+The comparison result is unknown if fragment hashes or sizes are not
+stored (e.g. if compressed with C<-method s... -fragile>).
+Dates and attributes are not compared. Directories always match.
+C<zpaq> returns an error status of 1 if not all files are equal.
 
-    zpaq add backup home/bob -not home/bob/tmp "*.o"
+=item -only I<file>...
 
-will exclude everything in C<home/bob/tmp> and exclude all files
-ending with C<.o>.
-
-The second and third form exclude files according to their Windows
-attributes and Unix/Linux user permissions, respectively. A file is
-excluded if all of the listed bits are set when following C<+>
-and clear when following C<->. In Windows, d, a, s, h, r, i
-are the directory, archive, system, hidden, read-only, and index
-attributes, respectively. In Unix/Linux, d, r, w, x are the directory,
-user read, user write, and user execute permissions respectively.
-(It is not possible to filter on the group and other permissions).
-For example:
-
-    zpaq add files -not :+d-xr
-
-means do not add directories that lack both user read and user execute
-permission.
-
-In Windows, if the first
-attribute is C<A> instead of C<a> then it means to also clear the archive
-bit both internally and externally when adding, thus implementing the
-intended meaning of this bit. For example, C<-not :-Ad> means do not
-add regular files where the archive bit is clear, then clear the archive
-bit of those files that are added.
+Do not add, extract, or list any files unless they match
+at least one argument. The rules for matching wildcards are the
+same as C<-not>. The default is C<*> which matches everything.
 
 =item -quiet [I<size>[k|m|g]]
 
@@ -900,11 +828,11 @@ of file names when smaller than I<size>.
 The suffixes C<k>, C<m>, and C<g> mean KB, MB, and GB respectively.
 For example:
 
-    zpaq list backup -quiet 1k
+    zpaq list archive -quiet 1k
 
 lists all files that are 1000 bytes or larger.
 
-C<add>, C<extract>, and C<test> will display progress,
+C<add> and C<extract> will display progress,
 listing files of size I<size> or greater as they are added or extracted.
 Additionally, C<add> will display for each compressed block the
 estimated time to completion, fragment range, original and
@@ -921,54 +849,61 @@ The algorithm is as described in C<-method> (LZ77 in this example).
 
 =item -since [[-]I<version>]
 
-List, compare, or extract only I<version> and later. If I<version> is negative
-then list, compare, or extract only the last -I<version> updates.
+List only I<version> and later. If I<version> is negative
+then list only the last -I<version> updates.
 Default is 0 (all). For example:
 
-    zpaq list backup -since -2
+    zpaq list archive -since -2
 
 shows files that were added in the last two updates.
 
 =item -threads I<N>
 
-Compress or decompress at most I<N> blocks in parallel. The default
+Add or extract at most I<N> blocks in parallel. The default
 is the number of processor cores, except not more than 2 when when C<zpaq>
 is compiled to 32-bit code. Selecting fewer threads will reduce memory
 usage but run
 slower. Selecting more threads than cores does not help.
 
-=item -to I<names>...
+=item -to I<name>...
 
-For each internal file in I<files>, replace with the respective name
-in I<names> when referencing the corresponding external file on disk.
-If I<files> is empty, then prefix each file in the archive with the first
-name in I<names> when referencing external files. For example:
+With C<extract>, specify the output. If one or more I<files>
+is specified, then each file (or directory) is replaced with the
+correponding I<name>. For example:
 
-    zpaq extract backup alice bob charlie -to dave ed
+    zpaq extract archive file dir -to newfile newdir
 
-will extract directory C<alice> to C<dave> (e.g. C<alice/file> to C<dave/file>),
-C<bob> to C<ed>, and C<charlie> without renaming.
+extracts C<file> as C<newfile> and C<dir> as C<newdir>.
 
-    zpaq extract backup -to tmp/
+If I<files> is empty, then the entire archive contents is renamed
+by appending the first I<name> as a prefix, inserting or removing
+a C</> as necessary and removing the C<:> from a Windows drive letter.
+For example:
 
-will extract C<bob> to C<tmp/bob>.
+    zpaq extract archive -to tmp
 
-    zpaq compare backup -to tmp/
+will extract C<foo> or C</foo> as C<tmp/foo> and extract C<C:/foo>
+or C<C:foo> as C<tmp/C/foo>.
 
-will compare internal C<bob> with external C<tmp/bob>.
-C<-to> renames in reverse when updating, for example:
+If I<files> is empty and the first I<name> has a C<.zpaq> extension
+then extract to a new archive, retaining only the latest version
+of each file. This is faster than extracting and creating a new archive
+because it works by copying only those data blocks referenced by at
+least one file, then building a new index.
+The new archive is not encrypted by default.
 
-    zpaq add backup alice -to dave
+With C<list>, show how files would be renamed. When comparing with C<-not =>,
+C<-to> renames the external files to be compared, for example:
 
-will add external C<dave> but save the name as C<alice>.
+    zpaq list archive dir1 -to dir2 -not ==
 
-With C<list>, C<-to> will show how files would be renamed when extracted.
+lists the differences between internal C<dir1> and external C<dir2>.
 
 =item -until I<date> | [-]I<version>
 
 Ignore any part of the archive updated after I<date> or after I<version>
 updates or -I<version>s from the end if negative.
-Additionally, C<add> and C<delete> will truncate the archive at
+Additionally, C<add> will truncate the archive at
 this point before appending the next update. When a date is specified,
 the update will be timestamped with I<date> rather than the current date.
 
@@ -1007,34 +942,12 @@ attack can be prevented by changing the keystream after updating using
 C<zpaq purge backup -to new_backup -all -key -newkey>
 (same password is OK) and securely deleting C<backup.zpaq>.
 
-=item -with I<archive2>
-
-With C<compare>, compare I<archive> with archive or index
-I<archive2> instead of external files. If I<archive2>
-does not have a C<.zpaq> extension, then one will be added.
-I<files> specifies the files to be compared in both archives
-(default: all files). I<-to> renames files in I<archive2>.
-For example:
-
-    zpaq compare part00 -with part?? -all
-
-compares an index with the corresponding archive, including dates
-and attributes. Both archives may be the same, for example:
-
-    zpaq compare backup dir1 dir2 -to dir2 -with backup
-
-compares C<dir1> with C<dir2> in C<backup.zpaq>.
-
-Files are compared by their fragment hashes. If two files
-are compressed with different C<-fragment> options, then the
-hashes will be different even if the files are identical. 
-
 =back
 
 =head1 EXIT STATUS
 
-Returns 0 if successful or 1 in case of an error. C<compare>
-returns 1 if any files differ.
+Returns 0 if successful or 1 in case of an error. Comparison
+with C<list -not => returns 1 if any files differ or are not found.
 
 =head1 ENVIRONMENT
 
@@ -1078,7 +991,7 @@ C<zip(1)>
 
 I<zpaq> uses code from I<libzpaq> v6.52 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v6.57 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
+I<zpaq> v6.58 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
