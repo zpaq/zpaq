@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v6.58 man page source
+#   zpaq.pod - zpaq v6.59 man page source
 #
 #   Copyright
 #
@@ -242,7 +242,8 @@ report OK if they match. For I blocks, report the number of files
 added and deleted and OK if dates are valid (1900 to 2999) and fragment
 pointers are valid.
 
-I<files> and most other options (in particular, C<-until>) have no effect.
+I<files>, C<-not>, and C<-only> have no effect. C<-until> will stop
+after testing the first block detected to be in a later version.
 
 =back
 
@@ -258,7 +259,7 @@ With C<extract -to> to another archive,
 keep all versions, which has the effect of simply copying the archive.
 This option is useful when combined with
 C<-key> and C<-newkey> to encrypt, decrypt, or change the password
-of an encrypted archive.
+of an encrypted archive. I<files>, I<-only>, and I<-not> are ignored.
 
 With C<list>, list all saved versions and not just the latest version,
 including versions where the file is marked as deleted. Also show
@@ -301,8 +302,6 @@ go undetected.
 
 With C<test>, allow the test to pass if block checksums or the redundant
 fragment size lists are misssing.
-
-With all commands, do not verify block checksums when reading the archive.
 
 =item -fragment I<N>
 
@@ -490,7 +489,8 @@ is C<-method x4,0> which selects no compression.
 
 Store in streaming format rather than journaling. Streaming mode is
 compatible with zpaq versions prior to 6.00 but does not support
-deduplication or storing directories. Each file is stored
+multiple file versions,
+deduplication, or storing directories. Each file is stored
 in a separate block. Large files are split into blocks of size
 2^(N1+20) - 4096 bytes. Block sizes, dates, and attributes
 are stored in the first segment comment header of the first block
@@ -800,6 +800,7 @@ its contents. In Windows, matches are not case sensitive, and C<\>
 matches C</>.
 
 With C<list>, C<-not =[=#/?]...> compares with external files
+or another archive
 (after renaming with C<-to>). The characters C<=>, C<#>, C</>, and C<?>
 in any order after the first C<=> tell C<zpaq> not to list any
 files that are equal, different, not found, or unknown respectively.
@@ -814,13 +815,21 @@ stored (e.g. if compressed with C<-method s... -fragile>).
 Dates and attributes are not compared. Directories always match.
 C<zpaq> returns an error status of 1 if not all files are equal.
 
+When comparing two archives, files are compared by comparing their
+fragment hashes. Identical files will be listed as unknown if they
+are fragmented on different boundaries. This can happen if they are
+compressed with different values of the C<-fragment> option, or
+if one is streaming (C<-method s...>), or if both are streaming and
+compressed with different block sizes (like C<-method s1...> and
+C<-method s2...>).
+
 =item -only I<file>...
 
 Do not add, extract, or list any files unless they match
 at least one argument. The rules for matching wildcards are the
 same as C<-not>. The default is C<*> which matches everything.
 
-=item -quiet [I<size>[k|m|g]]
+=item -quiet [d|I<size>[k|m|g]]
 
 With no argument, suppress all console output except error messages
 to standard error. With a numeric argument, suppress console display
@@ -846,6 +855,9 @@ The type is a number in 0..255 with higher numbers predicting
 better compression, followed by C<t> if text is detected, C<e>
 if x86 (.exe or .dll) is detected, or C<b> if both are detected.
 The algorithm is as described in C<-method> (LZ77 in this example).
+
+C<-quiet d> is equivalent to C<-quiet 0> with additional detailed
+output. C<-list> will show the fragment numbers for each file.
 
 =item -since [[-]I<version>]
 
@@ -890,7 +902,17 @@ then extract to a new archive, retaining only the latest version
 of each file. This is faster than extracting and creating a new archive
 because it works by copying only those data blocks referenced by at
 least one file, then building a new index.
-The new archive is not encrypted by default.
+The new archive is not encrypted by default. If additional I<names>
+are specified, then I<files> or the entire contents are renamed in
+the new archive as above. For example:
+
+    zpaq extract arc1 dir1 -to arc2.zpaq dir2
+
+creates arc2.zpaq with dir1 saved as dir2.
+
+    zpaq extract arc1 -to arc2.zpaq dir2
+
+would save dir1 in arc1.zpaq as dir2/dir1 in arc2.zpaq.
 
 With C<list>, show how files would be renamed. When comparing with C<-not =>,
 C<-to> renames the external files to be compared, for example:
@@ -898,6 +920,15 @@ C<-to> renames the external files to be compared, for example:
     zpaq list archive dir1 -to dir2 -not ==
 
 lists the differences between internal C<dir1> and external C<dir2>.
+
+When the first I<name> ends with C<.zpaq>, then compare two archives,
+using the same renaming rules. For example:
+
+    zpaq list arc1 dir1 -to arc2.zpaq dir2 -not =
+
+compares dir1 in arc1.zpaq with dir2 in arc2.zpaq. Both archives may
+be the same to compare files within the same archive. With C<extract>,
+the archives must be different.
 
 =item -until I<date> | [-]I<version>
 
@@ -933,13 +964,17 @@ With comparing two archives, C<-until> rolls back both archives to
 the indicated date or version. If the version is negative, it means
 the number of versions from the end of the first archive.
 
+If an archive contains a mix of file compressed in journaling and
+streaming format (C<-method s>...), then any streaming files are
+considered to be part of the previous journaling update.
+
 Truncating and appending an encrypted archive with C<add -until>
-or C<delete -until> (even C<-until 0>)
+(even C<-until 0>)
 does not change the salt or keystream. Thus, it is possible for an attacker
 with the old and new versions to obtain the XOR of the trailing
 plaintexts without a password. If this is a concern, then the
 attack can be prevented by changing the keystream after updating using
-C<zpaq purge backup -to new_backup -all -key -newkey>
+C<zpaq extract backup -to new_backup.zpaq -all -key -newkey>
 (same password is OK) and securely deleting C<backup.zpaq>.
 
 =back
@@ -991,7 +1026,7 @@ C<zip(1)>
 
 I<zpaq> uses code from I<libzpaq> v6.52 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v6.58 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
+I<zpaq> v6.59 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.

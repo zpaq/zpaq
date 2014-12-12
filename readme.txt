@@ -1,4 +1,4 @@
-zpaq658.zip, Dec 10, 2014.
+zpaq659.zip, Dec 12, 2014.
 
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees in Windows and *nix. It supports AES-256
@@ -13,10 +13,10 @@ versions of the program. Contents:
 
 File          Ver.  License          Description
 -----------   ----  -------          -----------
-zpaq.exe      6.58  GPL v3           Archiver, 32 bit Windows.
-zpaq64.exe    6.58  GPL v3           Archiver, 64 bit Windows.
-zpaq.cpp      6.58  GPL v3           zpaq source code.
-zpaq.pod      6.58  GPL v3           zpaq documentation and man source.
+zpaq.exe      6.59  GPL v3           Archiver, 32 bit Windows.
+zpaq64.exe    6.59  GPL v3           Archiver, 64 bit Windows.
+zpaq.cpp      6.59  GPL v3           zpaq source code.
+zpaq.pod      6.59  GPL v3           zpaq documentation and man source.
 libzpaq.h     6.51  Public Domain    libzpaq API documentation and header.
 libzpaq.cpp   6.52  Public Domain    libzpaq API source code.
 Makefile            Public Domain    To compile in Linux: make
