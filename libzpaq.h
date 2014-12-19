@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 6.51 header - Apr. 3, 2014.
+/* libzpaq.h - LIBZPAQ Version 7.00 header - Dec. 15, 2014.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -7,16 +7,251 @@
   I grant anyone the right to use this software for any purpose,
   without any conditions, unless such conditions are required by law.
 
-LIBZPAQ is a C++ library providing data compression and decompression
-services using the ZPAQ level 2 format as described in
-http://mattmahoney.net/zpaq/
+LIBZPAQ is a C++ library providing ZPAQ archive management and
+streaming data compression and decompression services using the ZPAQ
+level 2 (v2.04) format as described in http://mattmahoney.net/zpaq/
 
-An application wishing to use these services should #include "libzpaq.h"
-and link to libzpaq.cpp. libzpaq recognizes the following options:
+An application wishing to create, update, extract, or list ZPAQ archives
+can be written in any language that can link to C through a single
+function. A lower level service providing ZPAQ formatted streaming
+compression and decompression services to or from memory is also
+available but only in C++.
+
+
+ARCHIVE MANAGEMENT API
+
+An application can create, update, extract, and list archives through a
+single function:
+
+  extern "C"  // if in C++
+  int zpaq(const char* command, void* userdata,
+           int callback(const char* response, void* userdata));
+
+which you would declare in your application, along with a callback
+function that you would pass to zpaq() to handle responses. You
+would then link to libzpaq. For example, if your application is app.c:
+
+  g++ -O3 -c libzpaq.cpp
+  gcc -O3 app.c libzpaq.o -o app
+
+command and response are NUL terminated strings. The command
+string tells zpaq() what to do (add, extract, list), with options
+and a list of files. zpaq() will then call callback() multiple
+times with response pointing to an error and warning message, status
+update, or in the case of a list command, the archive contents.
+The memory pointed to by response remains valid only until callback()
+returns, so you should copy it if you will need it later.
+
+For example, to add file.txt to archive arc.zpaq with compression level 3,
+extract it as new.txt, and list the archive contents:
+
+  int callback(const char* response, void* userdata) {
+    printf("%s\n", response);
+    return 0;
+  }
+
+  int main() {
+    zpaq("Aarc.zpaq,m3,-file.txt", 0, callback);  // add file.txt, level 3
+    zpaq("Xarc.zpaq,-file.txt,+new.txt", 0, callback); // extract as new.txt
+    zpaq("Larc.zpaq", 0, callback);  // list archive contents
+  }
+
+userdata is passed back to callback(). This is so if you make multiple
+calls to zpaq(), you can tell which one is calling you back.
+zpaq() does not otherwise use this value.
+
+The command is a list of comma separated strings where the first
+character denotes the type:
+
+  AS = Add to archive S.
+  XS = Extract from archive S.
+  LS = List contents of archive S.
+  uD = Revert archive to date D.
+  kS = Encrypt with password S.
+  mS = Use compression method S = "0".."5" (faster..better) or "i" = index.
+  tN = Use N threads. Default is "0" to auto-detect.
+  -S = Add or extract input file S.
+  +S = Set output file name to S.
+  aH = Set attributes to H.
+  dD = Set date to D (A: 0=delete. X: 0=don't set).
+  pL = Set fragment pointer list to L.
+
+The remaining string is interpreted as follows:
+
+  S = arbitrary string where "%c" decodes to ASCII c - 64. "%" and ","
+      must be encoded as "%e" and "%l" respectively.
+  N = string of [0-9] interpreted as a decimal number.
+  D = either "0" or 14 digits in format "YYYYMMDDHHMMSS" representing a
+      valid date in range 19000101000000 to 29991231235959 UT time zone.
+  H = string of [0-9a-f] of even length interpreted as hexadecimal bytes.
+  L = string of decimal numbers separated by spaces or hyphens to indicate
+      ascending sequences like "10 20-23 30" meaning "10 20 21 22 23 30".
+      Valid pointers are 1 to 4294967395 that exist in the archive.
+
+Commands A, X, or L must be first, followed by options (u, k, m, t)
+appearing at most once each, and then by a list of files (-, each
+optionally modified by +, a, d, p). Any other string is ignored.
+
+All commands may respond with callback() responses whose first character
+is "1" for errors, "2" for warnings, or "3".."9" for messages of decreasing
+importance. callback() should return 1 to request that zpaq() terminate
+or 0 to continue. The request might be delayed or ignored. zpaq() returns 1
+in case of error or requested termination, or 0 otherwise.
+
+File names (A, X, L, +, -) are UTF-8 encoded with "/" as a path separator.
+A trailing "/" indicates a directory, or else a plain file.
+
+Add
+
+Command "AS" appends to archive S. For each file S specified with "-S",
+the file is read from disk, compressed, and added. If there is an error
+reading the file but it exists in the archive, then it is deleted from,
+the archive. (It can still be recovered from the previous version).
+The file name is saved as S unless overridden with "+S".
+
+The date is saved using the last-modified date (in UT time zone) as
+read from disk unless overridden with "dN". If N is 0, then it means to
+delete S from the archive regardless of whether the external file exists
+and is readable.
+
+The Windows attributes or Linux permissions are saved as read from
+the file unless overridden with "aH". The first byte of H is 'w'
+(77) for Windows or 'u' (75) for Linux. 'w' is followed by 4 bytes
+as returned by GetFileAttributes(). 'u' is followed by 2 bytes as
+returned by the st_mode field of lstat(). In both cases, the least
+significant byte is first. For example, "a7720000000" sets the
+Windows archive bit (bit 5) and clears all other bits (normal for
+a plain file).
+
+Future versions of zpaq() may append additional file metadata to
+the attribute string in a format not yet specified.
+
+A file is compressed by splitting it into fragments along content
+dependent boundaries, computing the SHA-1 hash of each fragment,
+comparing to the hashes already in the archive, and then packing
+any remaining fragments into blocks and compressing them. The "p"
+option overrides this by letting you supply a list of fragments,
+which must already exist in the archive. For example, "p1-10"
+means to point to the first 10 fragments. A list of valid fragment
+numbers can be obtained with "L".
+
+Option "m" selects compression level. S is "0".."5" or "i".
+A number is the compression level, where higher numbers compress better
+but slower. The default is 1. 0 means no compresion. 2 decompresses
+as fast as 1 but higher levels also decompress slower. "mi" means to
+create or update an index with no compressed data. Additional
+values of S are possible but not guaranteed to be supported in future
+versions.
+
+Extract
+
+Command "XS" extracts from archive S. Only the files listed by "-S"
+are extracted, and only if they exist in the archive. The output file
+is overwritten if it exists. If an error occurs in writing the file
+then it is skipped with a warning. Directories are created as needed.
+
+The date is set as stored in the archive unless overridden with "dN".
+If N is 0 then it means to not set the date. Otherwise N is 14 digits.
+
+The attributes are set as stored in the archive unless overridden
+with "aH". Attributes are interpreted as described above. If the
+attributes cannot be interpreted as appropriate for the operating
+system, then they are not set.
+
+The output is created by extracting the fragments listed in the
+saved pointer list, unless overridden by "pL". In this case, L must
+list valid fragments.
+
+List
+
+Command "LS" lists archive S. It generates additional callbacks
+in the format:
+
+  cN,N,N,D = start of version: fragment, size, offset, date
+  bN,N     = block: fragment, size
+  hH,N     = fragment: hash, uncompressed size
+  iD,S,H,L = index: date, filename, attributes, pointer list
+
+Reponse "c" is generated once for each C block (version header) with
+the first fragment number, compressed size of all of the data blocks
+in the version, offset of the first data block in the archive (less
+than 2^63), and the date when the update was appended in the
+form "YYYYMMDDHHMMSS".
+
+Response "b" is generated once per H block (fragment hashes). It returns
+the first fragment number and the compressed size of the block.
+
+Response "h" is generated for each fragment in an H block right after "b".
+It returns a fragment hash and uncompressed size. The hash is either "00"
+if there is no hash, or 01 followed by 40 lowercase hexadecimal digits
+(20 bytes) of the SHA-1 hash. The hash is only absent in streaming
+archives. The fragment number is either 1, or 1 plus the previous fragment,
+or the last fragment number returned by "c" or "b", whichever is the highest.
+
+Response "i" is generated for each entry in an index (I block).
+It returns a date, filename, attributes, and pointer list.
+If a file is marked as deleted, then the date will be 0 and the attributes
+and pointer list will be empty like "i0,file,,".
+
+A streaming archive will generate responses that appear to be from
+a journaling archive, except that the date, attributes, size, and hashes
+may be missing. In a streaming archive, a block may contain multiple
+segments, each with an optional filename, comment, and hash. An empty
+filename is a continuation of the previous file. The comment may
+or may not encode the date, uncompressed size, and attributes. There
+are no pointer lists because streaming archives do not support
+deduplication. Directories are not stored. The following are generated:
+
+  c = none. (Rollback is not supported).
+  b = once per block after the block is read.
+  h = once per segment. These may occur before the b block. The hash
+      may be empty "00". The size is omitted if not known, like "h00,".
+      If the size is known and 0 it is stored as "0" rather than "".
+  i = once after the last unnamed segment. If the date is not saved,
+      then the current date is returned. A pointer list is generated.
+
+All commands
+
+Archive S (AS, XS, LS) may contain "*" and "?" to indicate the number or
+digits respectively of a multi-part archive. Parts start at 1. Part 0
+is an index, a copy of the archive but without any compressed data.
+Each update (A) creates a new part and updates the index.
+Either the index or the other parts needs to be present to update,
+but if both are present then zpaq() checks that they are consistent and
+exits with an error if not. The other parts but not the index are required
+to extract. Either the index or the other parts may be listed. For example:
+
+  zpaq("Apart??.zpaq,-file1", callback);  // creates part00.zpaq, part01.zpaq
+  zpaq("Apart??.zpaq,-file2", callback);  // creates part02.zpaq
+  zpaq("Lpart??.zpaq", callback);         // lists from multiple parts
+  zpaq("Lpart00.zpaq", callback);         // lists from index
+  zpaq("Xpart??.zpaq,-file1,-file2", callback);  // extract both files
+
+Option "uD" tells all commands to not read the archive past date D
+(in format YYYYMMDDHHMMSS). It also tells "A" to truncate the archive
+at this point before appending. The default date is the system time
+(UT time zone) or 1 second past the last completed version, whichever
+is later.
+
+Option "kS" reads and/or writes an encrypted archive with password S.
+If S is empty then the archive is not encrypted. All parts of a multi-part
+archive including the index are encrypted with the same password (but
+different keystreams).
+
+Option "tN" sets the number of threads to N. The default is 0 which means
+to auto detect the number of cores.
+
+libzpaq recognizes the following compiler options:
 
   -DDEBUG   Turn on assertion checks (slower).
   -DNOJIT   Don't assume x86-32 or x86-64 with SSE2 (slower).
   -Dunix    Without -DNOJIT, assume Unix (Linux, Mac) rather than Windows.
+
+
+STREAMING SERVICES
+
+An application wishing to use streaming services should #include "libzpaq.h"
+and link to libzpaq.cpp with options as above.
 
 The application must provide an error handling function and derived
 implementations of two abstract classes, Reader and Writer,

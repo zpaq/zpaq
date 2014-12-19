@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "6.59"
+#define ZPAQ_VERSION "6.60"
 
 /*  Copyright (C) 2009-2014, Dell Inc. Written by Matt Mahoney.
 
@@ -6127,10 +6127,7 @@ int Jidac::add() {
   }
 
   // Set method and block size
-  if (method=="") {  // set default method
-    if (dhsize>0 && dcsize==0) method="i";  // index 
-    else method="1";  // archive
-  }
+  if (method=="") method="1";
   if (size(method)==1) {  // set default blocksize
     if (method[0]>='2' && method[0]<='9') method+="6";
     else method+="4";

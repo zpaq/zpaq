@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v6.59 man page source
+#   zpaq.pod - zpaq v6.60 man page source
 #
 #   Copyright
 #
@@ -342,10 +342,9 @@ In the first form, higher numbers compress better but slower and
 (except for 2) also decompress slower. 0 means no compression.
 In the second form, the arguments describe the exact algorithm to be applied
 to all blocks (which might otherwise vary based on an analysis of the block).
-The default for regular archives is C<-method 1>,
+The default is C<-method 1>,
 which is good for fast backups. C<-method 2> is useful for archives that
 will be compressed once and extracted many times.
-If I<archive> is detected to be an index, then the default is C<-method i>.
 
 In both forms, I<N1> in range 0..11 optionally specifies a maximum block
 size of 2^I<N1> MiB. The default is 6 (64 MiB) for levels
@@ -1026,7 +1025,7 @@ C<zip(1)>
 
 I<zpaq> uses code from I<libzpaq> v6.52 and I<libdivsufsort-lite> v2.01.
 
-I<zpaq> v6.59 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
+I<zpaq> v6.60 is copyright (C) 2009-2014, Dell Inc. It is written by Matt
 Mahoney. It is licensed under GPL v3, or at your option,
 any later version. For information on
 the license, see <http://www.gnu.org/copyleft/gpl.html>.
