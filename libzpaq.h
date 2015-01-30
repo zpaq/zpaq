@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.00 header - Dec. 15, 2014.
+/* libzpaq.h - LIBZPAQ Version 7.00 header - Jan. 30, 2015.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, on behalf of Dell Inc., release this software into
@@ -7,251 +7,17 @@
   I grant anyone the right to use this software for any purpose,
   without any conditions, unless such conditions are required by law.
 
-LIBZPAQ is a C++ library providing ZPAQ archive management and
-streaming data compression and decompression services using the ZPAQ
-level 2 (v2.04) format as described in http://mattmahoney.net/zpaq/
+LIBZPAQ is a C++ library providing data compression and decompression
+services using the ZPAQ level 2 format as described in
+http://mattmahoney.net/zpaq/
 
-An application wishing to create, update, extract, or list ZPAQ archives
-can be written in any language that can link to C through a single
-function. A lower level service providing ZPAQ formatted streaming
-compression and decompression services to or from memory is also
-available but only in C++.
-
-
-ARCHIVE MANAGEMENT API
-
-An application can create, update, extract, and list archives through a
-single function:
-
-  extern "C"  // if in C++
-  int zpaq(const char* command, void* userdata,
-           int callback(const char* response, void* userdata));
-
-which you would declare in your application, along with a callback
-function that you would pass to zpaq() to handle responses. You
-would then link to libzpaq. For example, if your application is app.c:
-
-  g++ -O3 -c libzpaq.cpp
-  gcc -O3 app.c libzpaq.o -o app
-
-command and response are NUL terminated strings. The command
-string tells zpaq() what to do (add, extract, list), with options
-and a list of files. zpaq() will then call callback() multiple
-times with response pointing to an error and warning message, status
-update, or in the case of a list command, the archive contents.
-The memory pointed to by response remains valid only until callback()
-returns, so you should copy it if you will need it later.
-
-For example, to add file.txt to archive arc.zpaq with compression level 3,
-extract it as new.txt, and list the archive contents:
-
-  int callback(const char* response, void* userdata) {
-    printf("%s\n", response);
-    return 0;
-  }
-
-  int main() {
-    zpaq("Aarc.zpaq,m3,-file.txt", 0, callback);  // add file.txt, level 3
-    zpaq("Xarc.zpaq,-file.txt,+new.txt", 0, callback); // extract as new.txt
-    zpaq("Larc.zpaq", 0, callback);  // list archive contents
-  }
-
-userdata is passed back to callback(). This is so if you make multiple
-calls to zpaq(), you can tell which one is calling you back.
-zpaq() does not otherwise use this value.
-
-The command is a list of comma separated strings where the first
-character denotes the type:
-
-  AS = Add to archive S.
-  XS = Extract from archive S.
-  LS = List contents of archive S.
-  uD = Revert archive to date D.
-  kS = Encrypt with password S.
-  mS = Use compression method S = "0".."5" (faster..better) or "i" = index.
-  tN = Use N threads. Default is "0" to auto-detect.
-  -S = Add or extract input file S.
-  +S = Set output file name to S.
-  aH = Set attributes to H.
-  dD = Set date to D (A: 0=delete. X: 0=don't set).
-  pL = Set fragment pointer list to L.
-
-The remaining string is interpreted as follows:
-
-  S = arbitrary string where "%c" decodes to ASCII c - 64. "%" and ","
-      must be encoded as "%e" and "%l" respectively.
-  N = string of [0-9] interpreted as a decimal number.
-  D = either "0" or 14 digits in format "YYYYMMDDHHMMSS" representing a
-      valid date in range 19000101000000 to 29991231235959 UT time zone.
-  H = string of [0-9a-f] of even length interpreted as hexadecimal bytes.
-  L = string of decimal numbers separated by spaces or hyphens to indicate
-      ascending sequences like "10 20-23 30" meaning "10 20 21 22 23 30".
-      Valid pointers are 1 to 4294967395 that exist in the archive.
-
-Commands A, X, or L must be first, followed by options (u, k, m, t)
-appearing at most once each, and then by a list of files (-, each
-optionally modified by +, a, d, p). Any other string is ignored.
-
-All commands may respond with callback() responses whose first character
-is "1" for errors, "2" for warnings, or "3".."9" for messages of decreasing
-importance. callback() should return 1 to request that zpaq() terminate
-or 0 to continue. The request might be delayed or ignored. zpaq() returns 1
-in case of error or requested termination, or 0 otherwise.
-
-File names (A, X, L, +, -) are UTF-8 encoded with "/" as a path separator.
-A trailing "/" indicates a directory, or else a plain file.
-
-Add
-
-Command "AS" appends to archive S. For each file S specified with "-S",
-the file is read from disk, compressed, and added. If there is an error
-reading the file but it exists in the archive, then it is deleted from,
-the archive. (It can still be recovered from the previous version).
-The file name is saved as S unless overridden with "+S".
-
-The date is saved using the last-modified date (in UT time zone) as
-read from disk unless overridden with "dN". If N is 0, then it means to
-delete S from the archive regardless of whether the external file exists
-and is readable.
-
-The Windows attributes or Linux permissions are saved as read from
-the file unless overridden with "aH". The first byte of H is 'w'
-(77) for Windows or 'u' (75) for Linux. 'w' is followed by 4 bytes
-as returned by GetFileAttributes(). 'u' is followed by 2 bytes as
-returned by the st_mode field of lstat(). In both cases, the least
-significant byte is first. For example, "a7720000000" sets the
-Windows archive bit (bit 5) and clears all other bits (normal for
-a plain file).
-
-Future versions of zpaq() may append additional file metadata to
-the attribute string in a format not yet specified.
-
-A file is compressed by splitting it into fragments along content
-dependent boundaries, computing the SHA-1 hash of each fragment,
-comparing to the hashes already in the archive, and then packing
-any remaining fragments into blocks and compressing them. The "p"
-option overrides this by letting you supply a list of fragments,
-which must already exist in the archive. For example, "p1-10"
-means to point to the first 10 fragments. A list of valid fragment
-numbers can be obtained with "L".
-
-Option "m" selects compression level. S is "0".."5" or "i".
-A number is the compression level, where higher numbers compress better
-but slower. The default is 1. 0 means no compresion. 2 decompresses
-as fast as 1 but higher levels also decompress slower. "mi" means to
-create or update an index with no compressed data. Additional
-values of S are possible but not guaranteed to be supported in future
-versions.
-
-Extract
-
-Command "XS" extracts from archive S. Only the files listed by "-S"
-are extracted, and only if they exist in the archive. The output file
-is overwritten if it exists. If an error occurs in writing the file
-then it is skipped with a warning. Directories are created as needed.
-
-The date is set as stored in the archive unless overridden with "dN".
-If N is 0 then it means to not set the date. Otherwise N is 14 digits.
-
-The attributes are set as stored in the archive unless overridden
-with "aH". Attributes are interpreted as described above. If the
-attributes cannot be interpreted as appropriate for the operating
-system, then they are not set.
-
-The output is created by extracting the fragments listed in the
-saved pointer list, unless overridden by "pL". In this case, L must
-list valid fragments.
-
-List
-
-Command "LS" lists archive S. It generates additional callbacks
-in the format:
-
-  cN,N,N,D = start of version: fragment, size, offset, date
-  bN,N     = block: fragment, size
-  hH,N     = fragment: hash, uncompressed size
-  iD,S,H,L = index: date, filename, attributes, pointer list
-
-Reponse "c" is generated once for each C block (version header) with
-the first fragment number, compressed size of all of the data blocks
-in the version, offset of the first data block in the archive (less
-than 2^63), and the date when the update was appended in the
-form "YYYYMMDDHHMMSS".
-
-Response "b" is generated once per H block (fragment hashes). It returns
-the first fragment number and the compressed size of the block.
-
-Response "h" is generated for each fragment in an H block right after "b".
-It returns a fragment hash and uncompressed size. The hash is either "00"
-if there is no hash, or 01 followed by 40 lowercase hexadecimal digits
-(20 bytes) of the SHA-1 hash. The hash is only absent in streaming
-archives. The fragment number is either 1, or 1 plus the previous fragment,
-or the last fragment number returned by "c" or "b", whichever is the highest.
-
-Response "i" is generated for each entry in an index (I block).
-It returns a date, filename, attributes, and pointer list.
-If a file is marked as deleted, then the date will be 0 and the attributes
-and pointer list will be empty like "i0,file,,".
-
-A streaming archive will generate responses that appear to be from
-a journaling archive, except that the date, attributes, size, and hashes
-may be missing. In a streaming archive, a block may contain multiple
-segments, each with an optional filename, comment, and hash. An empty
-filename is a continuation of the previous file. The comment may
-or may not encode the date, uncompressed size, and attributes. There
-are no pointer lists because streaming archives do not support
-deduplication. Directories are not stored. The following are generated:
-
-  c = none. (Rollback is not supported).
-  b = once per block after the block is read.
-  h = once per segment. These may occur before the b block. The hash
-      may be empty "00". The size is omitted if not known, like "h00,".
-      If the size is known and 0 it is stored as "0" rather than "".
-  i = once after the last unnamed segment. If the date is not saved,
-      then the current date is returned. A pointer list is generated.
-
-All commands
-
-Archive S (AS, XS, LS) may contain "*" and "?" to indicate the number or
-digits respectively of a multi-part archive. Parts start at 1. Part 0
-is an index, a copy of the archive but without any compressed data.
-Each update (A) creates a new part and updates the index.
-Either the index or the other parts needs to be present to update,
-but if both are present then zpaq() checks that they are consistent and
-exits with an error if not. The other parts but not the index are required
-to extract. Either the index or the other parts may be listed. For example:
-
-  zpaq("Apart??.zpaq,-file1", callback);  // creates part00.zpaq, part01.zpaq
-  zpaq("Apart??.zpaq,-file2", callback);  // creates part02.zpaq
-  zpaq("Lpart??.zpaq", callback);         // lists from multiple parts
-  zpaq("Lpart00.zpaq", callback);         // lists from index
-  zpaq("Xpart??.zpaq,-file1,-file2", callback);  // extract both files
-
-Option "uD" tells all commands to not read the archive past date D
-(in format YYYYMMDDHHMMSS). It also tells "A" to truncate the archive
-at this point before appending. The default date is the system time
-(UT time zone) or 1 second past the last completed version, whichever
-is later.
-
-Option "kS" reads and/or writes an encrypted archive with password S.
-If S is empty then the archive is not encrypted. All parts of a multi-part
-archive including the index are encrypted with the same password (but
-different keystreams).
-
-Option "tN" sets the number of threads to N. The default is 0 which means
-to auto detect the number of cores.
-
-libzpaq recognizes the following compiler options:
+An application wishing to use these services should #include "libzpaq.h"
+and link to libzpaq.cpp (and advapi32.lib in Windows/VC++).
+libzpaq recognizes the following options:
 
   -DDEBUG   Turn on assertion checks (slower).
   -DNOJIT   Don't assume x86-32 or x86-64 with SSE2 (slower).
   -Dunix    Without -DNOJIT, assume Unix (Linux, Mac) rather than Windows.
-
-
-STREAMING SERVICES
-
-An application wishing to use streaming services should #include "libzpaq.h"
-and link to libzpaq.cpp with options as above.
 
 The application must provide an error handling function and derived
 implementations of two abstract classes, Reader and Writer,
@@ -278,13 +44,12 @@ from stdin to stdout (assuming binary I/O as in Linux):
   } out;
 
   int main() {
-    libzpaq::compress(&in, &out, 2);  // level may be 1, 2, or 3
+    libzpaq::compress(&in, &out, "1");  // "0".."5" = faster..better
   }
 
-Compression has 3 built in levels, where 1 is fastest and 3 gives
-the best compression. To decompress:
+Or to decompress:
 
-  libzpaq::decompress(&in, &out);
+    libzpaq::decompress(&in, &out);
 
 The function error() will be called with an English language message
 in case of an unrecoverable error such as badly formatted compressed
@@ -305,61 +70,298 @@ number of times. For example:
   // Write buf[0..n-1]
   void Out::write(char* buf, int n) {fwrite(buf, 1, n, stdout);}
 
-By default, compress() compresses to a single segment within a single
-ZPAQ block with no header locator tag, filename, comment, or checksum.
+By default, compress() divides the input into blocks with one segment
+each. The segment filename field is empty. The comment field of each
+block is the uncompressed size as a decimal string. The checksum
+is saved. To override:
+
+  compress(&in, &out, "1", "filename", "comment", false);
+
+If the filename is not NULL then it is saved in the first block only.
+If the comment is not NULL then a space and the comment are appended
+to the decimal size in the first block only. The comment would normally
+be the date and attributes like "20141231235959 w32", or "jDC\x01" for
+a journaling archive as described in the ZPAQ specification.
+
+The method string has the general form of a concatenation of single
+character commands each possibly followed by a list of decimal
+numeric arguments separated by commas or periods:
+
+  {012345xciawmst}[N1[{.,}N2]...]...
+
+For example "1" or "14,128,0" or "x6.3ci1m".
+
+Only the first command can be a digit 0..5. If it is, then it selects
+a compression level and the other commands are ignored. Otherwise,
+if it is "x" then the arguments and remaining commands describe
+the compression method. Any other letter as the first command is
+interpreted the same as "x". 
+
+Higher compression levels are slower but compress better. "1" is
+good for most purposes. "0" does not compress. "2" compresses slower
+but decompression is just as fast as 1. "3", "4", and "5" also
+decompress slower. The numeric arguments are as follows:
+
+  N1: 0..11 = block size of at most 2^N1 MiB - 4096 bytes (default 4).
+  N2: 0..255 = estimated ease of compression (default 128).
+  N3: 0..3 = data type. 1 = text, 2 = exe, 3 = both (default 0).
+
+For example, "14" or "54" divide the input in 16 MB blocks which
+are compressed independently. N2 and N3 are hints to the compressor
+based on analysis of the input data. N2 is 0 if the data is random
+or 255 if the data is easily compressed (for example, all zero bytes).
+Most compression methods will simply store random data with no
+compression. The default is "14,128,0".
+
+If the first command is "x" then the string describes the exact
+compression method. The arguments to "x" describe the pre/post
+processing (LZ77, BWT, E8E9), and remaining commands describe the
+context model, if any, of the transformed data. The arguments to "x" are:
+
+  N1: 0..11 = block size as before.
+  N2: 0..7: 0=none, 1=packed LZ77, 2=LZ77, 3=BWT, 4..7 = 0..3 + E8E9.
+  N3: 4..63: LZ77 min match.
+  N4: LZ77 secondary match to try first or 0 to skip.
+  N5: LZ77 log search depth.
+  N6: LZ77 log hash table size, or N1+21 to use a suffix array.
+  N7: LZ77 lookahead.
+
+N2 selects the basic transform applied before context modeling.
+N2 = 0 does not transform the input. N2 = 1 selects LZ77 encoding
+of literals strings and matches using bit-packed codes. It is normally
+not used with a context model. N2 = 2 selects byte aligned LZ77, which
+compresses worse by itself but better than 1 when a context model is
+used. It uses single bytes to encode either a literal of length 1..64
+or a match of length N3..N3+63 with a 2, 3, or 4 byte offset.
+
+N2 = 3 selects a Burrows-Wheeler transform, in which the input is
+sorted by right-context. This does not compress by itself but makes
+the data more compressible using a low order, adaptive context model.
+BWT requires 4 times the block size in additional memory for both
+compression and decompression.
+
+N2 = 4..7 are the same as 0..3 except that a E8E9 transform is first applied
+to improve the compression of x86 code usually found .exe and .dll files.
+It scans the input block backward for 5 byte strings of the form
+{E8|E9 xx xx xx 00|FF} and adds the offset from the start of the
+block to the middle 3 bytes interpreted as a little-endian (LSB first)
+number (mod 2^24). E8 and E9 are the CALL and JMP instructions, followed
+by a 32 bit relative offset.
+
+N3..N7 apply only to LZ77. For either type, it searches for matches
+by hashing the next N4 bytes, and then the next N3 bytes, and looking
+up each of the hashes at 2^N5 locations in a table with 2^N6 entries.
+Of those, it picks the longest match, or closest in case of a tie.
+If no match is at least N3, then a literal is encoded instead. If N5
+is 0 then only one hash is computed, which is faster but does not
+compress as well. Typical good values for fast compression are
+"x4.1.5.0.3.22" which means 16 MiB blocks, packed LZ77, mininum match
+length 5, no secondary match, search depth 2^3 = 8, and 2^22 = 4M
+hash table (using 16 MiB memory).
+
+The hash table requires 4 x 2^N6 bytes of memory. If N6 = N1+21, then
+matches are found using a suffix array and inverse suffix array using
+2.25 x 2^N6 bytes (4.5 x block size). This finds better matches but
+takes longer to compute the suffix array (SA). The matches are found by
+searching forward and backward in the SA 2^N5 in each direction up
+to the first earlier match, and picking the longer of the two.
+Good values are "x4.1.4.0.8.25". The secondary match N4 has no effect.
+
+N7 is the lookahead. It looks for matches of length at least N4+N7
+when using a hash table or N3+N7 for a SA, but allows the first N7
+bytes not to match and be coded as literals if this results in
+a significantly longer match. Values higher than 1 are rarely effective.
+The default is 0.
+
+All subsequent commands after "x" describe a context model. A model
+consists of a set of components that output a bit prediction, taking
+a context and possibly earlier predictions as input. The final prediction
+is arithmetic coded. The component types are:
+
+  c = CM or ICM (context model or indirect context model).
+  i = ISSE chain (indirect secondary symbol estimator).
+  a = MATCH.
+  w = word model (ICM-ISSE chain with whole word contexts).
+  m = MIX.
+  s = SSE (secondary symbol estimator).
+  t = MIX2 (2 input MIX).
+
+For example, "x4.3ci1" describes a BWT followed by an order 0 CM
+and order 1 ISSE, which is used for level 3 text compression. The
+parameters to "c" (default all 0) are as follows:
+
+  N1: 0 = ICM, 1..256 CM with faster..slower adaptation, +1000 halves memory.
+  N2: 1..255 = offset mod N2, 1000..1255 = offset to last N2-1000 byte.
+  N3: 0..255 = order 0 context mask, 256..511 mixes LZ77 parse state.
+  N4...: 0..255 order 1... context masks. 1000... skips N4-1000 bytes.
+
+Most components use no more memory than the block size, depending on
+the number of context bits, but it is possible to select less memory
+and lose compression.
+
+A CM inputs a context hash and outputs a prediction from a table.
+The table entry is then updated by adjusting in the direction of the
+actual bit. The adjustment is 1/count, where the maximum count is 4 x N1.
+Larger values are best for stationary data. Smaller values adapt faster
+to changing data.
+
+If N1 is 0 then c selects an ICM. An ICM maps a context to a bit history
+(8 bit state), and then to slow adapting prediction. It is generally
+better than a CM on most nonstationary data.
+
+The context for a CM or ICM is a hash of all selected contexts: a
+cyclic counter (N2 = 1..255), the distance from the last occurrence
+of some byte value (N2 = 1000..1255), and the masked history of the
+last 64K bytes ANDED with N3, N4... For example, "c0.0.255.255.255" is
+an order 3 ICM. "C0.1010.255" is an order 1 context hashed together
+with the column number in a text file (distance to the last linefeed,
+ASCII 10). "c256.0.255.1511.255" is a stationary grayscale 512 byte
+wide image model using the two previous neighboring pixels as context.
+"c0.0.511.255" is an order 1 model for LZ77, which helps compress
+literal strings. The LZ77 state context applies only to byte aligned
+LZ77 (type 2 or 6).
+
+The parameters to "i" (ISSE chain) are the initial context length and
+subsequent increments for a chain connected to an existing earlier component.
+For example, "ci1.1.2" specifies an ICM (order 0) followed by a chain
+of 3 ISSE with orders 1, 2, and 4. An ISSE maps a context to a bit
+history like an ISSE, but uses the history to select a pair of weights
+to mix the input prediction with a constant 1, thus performing the
+mapping q' := w1 x q + w2 in the logistic domain (q = log p/(1-p)).
+The mixer is then updated by adjusting the weights to improve the
+prediction. High order ISSE chains (like "x4.0ci1.1.1.1.2") and BWT
+followed by a low order chain (like "x4.3ci1") both provide
+excellent general purpose compression.
+
+A MATCH ("a") keeps a rotating history buffer and a hash table to look
+up the previous occurrence of the current context hash and predicts
+whatever bit came next. The parameters are:
+
+  N1 = hash multiplier, default 24.
+  N2 = halve buffer size, default 0 = same size as input block.
+  N3 = halve hash table size, default 0 = block size / 4.
+
+For example, "x4.0m24.1.1" selects a 16 MiB block size, 8 MiB match
+buffer size, and 2M hash table size (using 8 MiB at 4 bytes per entry).
+The hash is computed as hash := hash x N1 + next_byte + 1 (mod hash table
+size). Thus, N1 = 12 selects a higher order context, and N1 = 48 selects a
+lower order.
+
+A word model ('w") is an ICM-ISSE chain of length N1 (orders 0..N1-1)
+in which the contexts are whole words. A word is defined as the set
+of characters in the range N2..N2+N3-1 after ANDing with N4. The context
+is hashed using multiplier N5. Memory is halved by N6. The default is
+"w1.65.26.223.20.0" which is a chain of length 1 (ICM only), where words
+are in range 65 ('A') to 65+26-1 ('Z') after ANDing with 223 (which
+converts to upper case). The hash multiplier is 20, which has the
+effect of shifting the high 2 bits out of the hash. The memory usage
+of each component is the same as the block size.
+
+A MIX ("m") performs the weighted average of all previous component
+predictions. The weights are then adjusted to improve the prediction
+by favoring the most accurate components. N1 selects the number of
+context bits (not hashed) to select a set of weights. N2 is the
+learning rate (around 16..32 works well). The default is "m8.24"
+which selects the previously modeled bits of the current byte as
+context. When N1 is not a multiple of 8, it selects the most significant
+bits of the oldest byte.
+
+A SSE ("s") adjusts the previous prediction like an ISSE, but uses
+a direct lookup table of the quantized and interpolated input prediction
+and a direct (not hashed) N1-bit context. The adjustment is 1/count where
+the count is allowed to range from N2 to 4 x N3. The default
+is "s8.32.255".
+
+A MIX2 ("t") is a MIX but mixing only the last 2 components. The
+default is "t8.24" where the meaning is the same as "m".
+
+For example, a good model for text is "x6.0ci1.1.1.1.2aw2mm16tst"
+which selects 2^6 = 64 MiB blocks, no preprocessing, an order 0 ICM,
+an ISSE chain with orders 1, 2, 3, 4, 6, a MATCH, an order 0-1 word
+ICM-ISSE chain, two mixers with 0 and 1 byte contexts, whose outputs are
+mixed by a MIX2. The MIX2 output is adjusted by a SSE, and finally
+the SSE input and outputs are mixed again for the final bit prediction.
+
+
+COMPRESSBLOCK
+
+CompressBlock() takes the same arguments as compress() except that
+the input is a StringBuffer instead of a Reader. The output is always
+a single block, regardless of the N1 (block size) argument in the method.
+
+  void compressBlock(StringBuffer* in, Writer* out, const char* method,
+                     const char* filename=0, const char* comment=0,
+                     bool compute_sha1=false);
+
+A StringBuffer is both a Reader and a Writer, but also allows random
+memory access. It provides convenient and efficient storage when the
+input size is unknown.
+
+  class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
+  public:
+    StringBuffer(size_t n=0);     // initial allocation after first use
+    ~StringBuffer();
+    int get();                    // read 1 byte or EOF from memory
+    int read(char* buf, int n);   // read n bytes
+    void put(int c);              // write 1 byte to memory
+    void write(const char* buf, int n);  // write n bytes
+    const char* c_str() const;    // read-only access to written data
+    unsigned char* data();        // read-write access
+    size_t size() const;          // number of bytes written
+    size_t remaining() const;     // number of bytes to read until EOF
+    void setLimit(size_t n);      // set maximum write size
+    void reset();                 // discard contents and free memory
+    void resize(size_t n);        // truncate to n bytes
+    void swap(StringBuffer& s);   // exchange contents efficiently
+  };
+
+The constructor sets the inital allocation size after the first
+write to n or 128, whichever is larger. Initially, no memory is allocated.
+The allocated size is always n x (2^k - 1), for example
+128 x (1, 3, 7, 15, 31...).
+
+put() and write() append 1 or n bytes, allocating memory as needed.
+buf can be NULL and the StringBuffer will be enlarged by n.
+get() and read() read 1 or up to n bytes. get() returns EOF if you
+attempt to read past the end of written data. read() returns less
+than n if it reaches EOF first, or 0 at EOF.
+
+size() is the number of bytes written, which does not change when
+data is read. remaining() is the number of bytes left to read
+before EOF.
+
+c_str() provides read-only access to the data. It is not NUL terminated.
+data() provides read-write access. Either may return NULL if size()
+is 0. write(), put(), reset(), swap(), and the destructor may
+invalidate saved pointers.
+
+setLimit() sets a maximum size. It will call error() if you try to
+write past it. The default is -1 or no limit.
+
+reset() sets the size to 0 and frees memory. resize() sets the size
+to n by moving the write pointer, but does not allocate or free memory.
+Moving the pointer forward does not overwrite the previous contents
+in between. The write pointer can be moved past the end of allocated
+memory, and the next put() or write() will allocate as needed. If the
+write pointer is moved back before the read pointer, then remaining()
+is set to 0.
+
+swap() swaps 2 StringBuffers efficiently, but does not change their
+initial allocations.
+
+
+DECOMPRESSER
+
 decompress() will decompress any valid ZPAQ stream, which may contain
 multiple blocks with multiple segments each. It will ignore filenames,
-comments, and checksums. If a block is immediately preceded by a
-(13 byte) locator tag, then the block can be extracted even if embedded
-in arbitrary data (such as self-extractor code). decompress() will skip
-over any non-ZPAQ data between tagged blocks without generating errors.
+comments, and checksums. You need the Decompresser class if you want to
+do something other than decompress all of the data serially to a single
+file. To decompress individual blocks and segments and retrieve the
+filenames, comments, data, and hashes of each segment (in exactly this
+order):
 
-The Compressor and Decompresser classes allow you to write and read
-these components individually. To compress:
-
-  libzpaq::Compressor c;
-  for (int i=0; i<num_blocks; ++i) {
-    c.setOutput(&out);              // if omitted or NULL, discard output
-    c.writeTag();                   // optional locator tag
-    c.startBlock(2);                // compression level 1, 2, or 3
-    for (int j=0; j<num_segments; ++j) {
-      c.startSegment("filename", "comment");  // default NULL = empty
-      c.setInput(&in);
-      while (c.compress(1000));     // bytes to compress, default -1 = all
-      c.endSegment(sha1.result());  // default NULL = don't save checksum
-    }
-    c.endBlock();
-  }
-
-Input and output can be set anywhere before the first input and output
-operation, respectively. Input can be changed at any time. Output
-should only be changed between blocks.
-
-compress() will read the requested number of bytes or until in.get()
-returns EOF (-1), whichever comes first, and return true if there is
-more data to decompress. If the argument is omitted or -1, then it will
-read to EOF and return false.
-
-endSegment() writes a provided SHA-1 cryptographic hash checksum of the
-input segment before any preprocessing. It is safe to assume that two
-inputs with the same hash are identical. To compute a hash you can use
-the SHA1 class:
-
-  libzpaq::SHA1 sha1;
-  int ch;
-  while ((ch=getchar())!=EOF)
-    sha1.put(ch);
-  printf("Size is %1.0f or %1.0f bytes\n", sha1.size(), double(sha1.usize()));
-
-size() returns the number of bytes read as a double, and usize() as a
-64 bit integer. result() returns a pointer to the 20 byte hash and
-resets the size to 0. The hash (not just the pointer) should be copied
-before the next call to result() if you want to save it.
-
-To decompress individual blocks and segments and retrieve the filenames,
-comments, data, and hashes of each segment (in exactly this order):
-
-  libzpaq::Decompresser d;
+  libzpaq::Decompresser d;               // to decompress
+  libzpaq::SHA1 sha1;                    // to verify output hashes
   double memory;                         // bytes required to decompress
   Out filename, comment;
   char sha1out[21];
@@ -402,10 +404,80 @@ or a 1 followed by the 20 byte saved hash. If any data is skipped,
 then all data in the remaining segments in the current block must
 also be skipped.
 
+
+SHA1
+
+The SHA1 object computes SHA-1 cryptographic hashes. It is safe to
+assume that two inputs with the same hash are identical. For example:
+
+  libzpaq::SHA1 sha1;
+  int ch;
+  while ((ch=getchar())!=EOF)
+    sha1.put(ch);
+  printf("Size is %1.0f or %1.0f bytes\n", sha1.size(), double(sha1.usize()));
+
+size() returns the number of bytes read as a double, and usize() as a
+64 bit integer. result() returns a pointer to the 20 byte hash and
+resets the size to 0. The hash (not just the pointer) should be copied
+before the next call to result() if you want to save it. You can also
+call sha1.write(buffer, n) to hash n bytes of char* buffer.
+
+
+COMPRESSOR
+
+A Compressor object allows greater control over the compressed data.
+In particular you can specify the compression algorithm in ZPAQL to
+specify methods not possible using compress() or compressBlock(). You
+can create blocks with multiple segments specifying different files,
+or compress streams of unlimited size to a single block when the
+input size is not known.
+
+  libzpaq::Compressor c;
+  for (int i=0; i<num_blocks; ++i) {
+    c.setOutput(&out);              // if omitted or NULL, discard output
+    c.writeTag();                   // optional locator tag
+    c.startBlock(2);                // compression level 1, 2, or 3
+    for (int j=0; j<num_segments; ++j) {
+      c.startSegment("filename", "comment");  // default NULL = empty
+      c.setInput(&in);
+      while (c.compress(1000));     // bytes to compress, default -1 = all
+      c.endSegment(sha1.result());  // default NULL = don't save checksum
+    }
+    c.endBlock();
+  }
+
+Input and output can be set anywhere before the first input and output
+operation, respectively. Output may be changed any time.
+
+writeTag() outputs a 13 byte string that allows decompress() to scan
+for blocks that don't occur immediately, such as searching from the
+start of a self extracting archive.
+
+startBlock() specifies either a compression level (1, 2, 3), or a ZPAQL
+program, described below. It does not work with the fast method type
+arguments to compress() or compressBlock(). Levels 1, 2, and 3 correspond
+approximately to "3", "4", and "5". Any preprocessing must be done
+by the application before input to the Compressor.
+
+StartSegment() starts a segment. An empty or NULL filename continues
+the previous file. The comment normally contains the uncompressed size
+of the segment as a decimal string, but it is allowed to omit it.
+
+compress() will read the requested number of bytes or until in.get()
+returns EOF (-1), whichever comes first, and return true if there is
+more data to decompress. If the argument is omitted or -1, then it will
+read to EOF and return false.
+
+endSegment() writes a provided SHA-1 cryptographic hash checksum of the
+input segment before any preprocessing. It may be omitted.
+
+
+ZPAQL
+
 ZPAQ supports arbitrary compression algorithms in addition to the
-3 built in levels. For example, level 1 compression could alternatively
-be specified using the ZPAQL language description of the compression
-algorithm:
+built in levels. For example, method "x4.0c0.0.255.255i4" compression could
+alternatively be specified using the ZPAQL language description of the
+compression algorithm:
 
   int args[9]={0}
   c.startBlock(
@@ -435,7 +507,7 @@ postprocessor, if present, is generally different, which presents
 the possibility that the user supplied code may not restore the
 original data exactly. It is assumed that the input has already been
 preprocessed by the application but that the hash supplied to endSegment()
-is of the original input before preprocessing. The fullowing functions
+is of the original input before preprocessing. The following functions
 allow you to test the postprocesser during compression:
 
   c.setVerify(true); // before c.compress(), may run slower
@@ -449,13 +521,14 @@ getChecksum() would return the hash which could be compared with
 the hash of the input computed by the application. Also,
 
   int64_t size;
-  c.endSegmentChecksum(&size);
+  c.endSegmentChecksum(&size, true);
 
 instead of c.endSegment() will automatically add the computed checksum
 if setVerify is true and return the checksum, whether or not there
 is a postprocessor. If &size is not NULL then the segment size is written
-to size. If setVerify is false, then no checksum is saved
-and the function returns 0 with size not written.
+to size. If the second argument is false then the computed checksum is
+not saved to output. Default is true. If setVerify is false, then no
+checksum is saved and the function returns 0 with size not written.
 
 A context model consists of two parts, an array COMP of n components,
 and some code HCOMP that computes contexts for the components.
@@ -677,10 +750,11 @@ of decompression, the HCOMP and PCOMP strings are read from the archive.
 The preprocessor command (from "PCOMP cmd ;") is not saved in the compressed
 data.
 
-OTHER CLASSES
 
-The Array template class is convenient for creating arrays aligned on
-64 byte addresses. It calls error("Out of memory") if needed.
+ARRAY
+
+The libzpaq::Array template class is convenient for creating arrays aligned
+on 64 byte addresses. It calls error("Out of memory") if needed.
 It is used as follows:
 
   libzpaq::Array<T> a(n);  // array a[0]..a[n-1] of type T, zeroed
@@ -700,11 +774,14 @@ which is equivalent to n << e except that it calls error("Array too big")
 rather than overflow if n << e would require more than 32 bits. If
 compiled with -DDEBUG, then bounds are checked at run time.
 
-There is a class libzpaq::SHA256 with an identical interface to SHA1
-which returns a 32 byte SHA-256 hash. It is not part of the ZPAQ standard.
 
-The AES_CTR class allows encryption in CTR mode with 128, 192, or 256
-bit keys. The public members are:
+ENCRYPTION
+
+There is a class libzpaq::SHA256 with put(), result(), size(), and usize()
+as in SHA1. result() returns a 32 byte SHA-256 hash. It is used by scrypt.
+
+The libzpaq::AES_CTR class allows encryption in CTR mode with 128, 192,
+or 256 bit keys. The public members are:
 
 class AES_CTR {
 public:
@@ -732,7 +809,7 @@ with i = 0. For example:
   a.encrypt(buf, 400, 100);  // encrypt next 400 bytes
   a.encrypt(buf, 500, 0);    // decrypt in one step
 
-stretchKey(char* out, const char* in, const char* salt);
+libzpaq::stretchKey(char* out, const char* in, const char* salt);
 
 Generate a 32 byte key out[0..31] from key[0..31] and salt[0..31]
 using scrypt(key, salt, N=16384, r=8, p=1). key[0..31] should be
@@ -740,9 +817,17 @@ the SHA-256 hash of the password. With these parameters, the function
 uses 0.1 to 0.3 seconds and 16 MiB memory.
 Scrypt is defined in http://www.tarsnap.com/scrypt/scrypt.pdf
 
+void random(char* buf, int n);
+
+Puts n cryptographic random bytes in buf[0..n-1], where the first
+byte is never '7' or 'z' (start of a ZPAQ archive). For a pure
+random string, discard the first byte.
+
 Other classes and functions defined here are for internal use.
 Use at your own risk.
 */
+
+//////////////////////////////////////////////////////////////
 
 #ifndef LIBZPAQ_H
 #define LIBZPAQ_H
@@ -753,6 +838,8 @@ Use at your own risk.
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <algorithm>
 
 namespace libzpaq {
 
@@ -846,18 +933,19 @@ void Array<T>::resize(size_t sz, int ex) {
 class SHA1 {
 public:
   void put(int c) {  // hash 1 byte
-    U32& r=w[len0>>5&15];
+    U32& r=w[U32(len)>>5&15];
     r=(r<<8)|(c&255);
-    if (!(len0+=8)) ++len1;
-    if ((len0&511)==0) process();
+    len+=8;
+    if ((U32(len)&511)==0) process();
   }
-  double size() const {return len0/8+len1*536870912.0;} // size in bytes
-  uint64_t usize() const {return len0/8+(U64(len1)<<29);} // size in bytes
+  void write(const char* buf, int64_t n); // hash buf[0..n-1]
+  double size() const {return len/8;}     // size in bytes
+  uint64_t usize() const {return len/8;}  // size in bytes
   const char* result();  // get hash and reset
   SHA1() {init();}
 private:
   void init();      // reset, but don't clear hbuf
-  U32 len0, len1;   // length in bits (low, high)
+  U64 len;          // length in bits
   U32 h[5];         // hash state
   U32 w[16];        // input buffer
   char hbuf[20];    // result
@@ -919,11 +1007,18 @@ void scrypt(const char* pw, int pwlen,
 // Calls scrypt(key, 32, salt, 32, 16384, 8, 1, out, 32);
 void stretchKey(char* out, const char* key, const char* salt);
 
+//////////////////////////// random //////////////////////////
+
+// Fill buf[0..n-1] with n cryptographic random bytes. The first
+// byte is never '7' or 'z'.
+void random(char* buf, int n);
+
 //////////////////////////// ZPAQL ///////////////////////////
 
 // Symbolic constants, instruction size, and names
 typedef enum {NONE,CONS,CM,ICM,MATCH,AVG,MIX2,MIX,ISSE,SSE} CompType;
 extern const int compsize[256];
+class Decoder;  // forward
 
 // A ZPAQL machine COMP+HCOMP or PCOMP.
 class ZPAQL {
@@ -1038,6 +1133,7 @@ private:
   U32 h[256];           // unrolled copy of z.h
   ZPAQL& z;             // VM to compute context hashes, includes H, n
   Component comp[256];  // the model, includes P
+  bool initTables;      // are tables initialized?
 
   // Modeling support functions
   int predict0();       // default
@@ -1061,12 +1157,14 @@ private:
 
   // x -> floor(32768/(1+exp(-x/64)))
   int squash(int x) {
+    assert(initTables);
     assert(x>=-2048 && x<=2047);
     return squasht[x+2048];
   }
 
   // x -> round(64*log((x+0.5)/(32767.5-x))), approx inverse of squash
   int stretch(int x) {
+    assert(initTables);
     assert(x>=0 && x<=32767);
     return stretcht[x];
   }
@@ -1095,7 +1193,7 @@ private:
 //////////////////////////// Decoder /////////////////////////
 
 // Decoder decompresses using an arithmetic code
-class Decoder {
+class Decoder: public Reader {
 public:
   Reader* in;        // destination
   Decoder(ZPAQL& z);
@@ -1103,16 +1201,23 @@ public:
   int skip();        // skip to the end of the segment, return next byte
   void init();       // initialize at start of block
   int stat(int x) {return pr.stat(x);}
+  int get() {        // return 1 byte of buffered input or EOF
+    if (rpos==wpos) {
+      rpos=0;
+      wpos=in ? in->read(&buf[0], BUFSIZE) : 0;
+      assert(wpos<=BUFSIZE);
+    }
+    return rpos<wpos ? U8(buf[rpos++]) : -1;
+  }
+  int buffered() {return wpos-rpos;}  // how far read ahead?
 private:
   U32 low, high;     // range
-  U32 curr;          // last 4 bytes of archive
+  U32 curr;          // last 4 bytes of archive or remaining bytes in subblock
+  U32 rpos, wpos;    // read, write position in buf
   Predictor pr;      // to get p
-  enum {BUFSIZE=1<<16};
+  enum {BUFSIZE=1<<12};
   Array<char> buf;   // input buffer of size BUFSIZE bytes
-    // of unmodeled data. buf[low..high-1] is input with curr
-    // remaining in sub-block.
   int decode(int p); // return decoded bit (0..1) with prob. p (0..65535)
-  void loadbuf();    // read unmodeled data into buf to EOS
 };
 
 /////////////////////////// PostProcessor ////////////////////
@@ -1148,6 +1253,7 @@ public:
   bool pcomp(Writer* out2) {return pp.z.write(out2, true);}
   void readSegmentEnd(char* sha1string = 0);
   int stat(int x) {return dec.stat(x);}
+  int buffered() {return dec.buffered();}
 private:
   ZPAQL z;
   Decoder dec;
@@ -1248,7 +1354,7 @@ public:
   void postProcess(const char* pcomp = 0, int len = 0);  // byte code
   bool compress(int n = -1);  // n bytes, -1=all, return true until done
   void endSegment(const char* sha1string = 0);
-  char* endSegmentChecksum(int64_t* size = 0);
+  char* endSegmentChecksum(int64_t* size = 0, bool dosha1=true);
   int64_t getSize() {return sha1.usize();}
   const char* getChecksum() {return sha1.result();}
   void endBlock();
@@ -1263,9 +1369,140 @@ private:
   bool verify;  // if true then test by postprocessing
 };
 
+/////////////////////////// StringBuffer /////////////////////
+
+// For (de)compressing to/from a string. Writing appends bytes
+// which can be later read.
+class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
+  unsigned char* p;  // allocated memory, not NUL terminated, may be NULL
+  size_t al;         // number of bytes allocated, 0 iff p is NULL
+  size_t wpos;       // index of next byte to write, wpos <= al
+  size_t rpos;       // index of next byte to read, rpos < wpos or return EOF.
+  size_t limit;      // max size, default = -1
+  const size_t init; // initial size on first use after reset
+
+  // Increase capacity to a without changing size
+  void reserve(size_t a) {
+    assert(!al==!p);
+    if (a<=al) return;
+    unsigned char* q=0;
+    if (a>0) q=(unsigned char*)(p ? realloc(p, a) : malloc(a));
+    if (a>0 && !q) error("Out of memory");
+    p=q;
+    al=a;
+  }
+
+  // Enlarge al to make room to write at least n bytes.
+  void lengthen(unsigned n) {
+    assert(wpos<=al);
+    if (wpos+n>limit) error("StringBuffer overflow");
+    if (wpos+n<=al) return;
+    size_t a=al;
+    while (wpos+n>=a) a=a*2+init;
+    reserve(a);
+  }
+
+  // No assignment or copy
+  void operator=(const StringBuffer&);
+  StringBuffer(const StringBuffer&);
+
+public:
+
+  // Direct access to data
+  unsigned char* data() {assert(p || wpos==0); return p;}
+
+  // Allocate no memory initially
+  StringBuffer(size_t n=0):
+      p(0), al(0), wpos(0), rpos(0), limit(size_t(-1)), init(n>128?n:128) {}
+
+  // Set output limit
+  void setLimit(size_t n) {limit=n;}
+
+  // Free memory
+  ~StringBuffer() {if (p) free(p);}
+
+  // Return number of bytes written.
+  size_t size() const {return wpos;}
+
+  // Return number of bytes left to read
+  size_t remaining() const {return wpos-rpos;}
+
+  // Reset size to 0 and free memory.
+  void reset() {
+    if (p) free(p);
+    p=0;
+    al=rpos=wpos=0;
+  }
+
+  // Write a single byte.
+  void put(int c) {  // write 1 byte
+    lengthen(1);
+    assert(p);
+    assert(wpos<al);
+    p[wpos++]=c;
+    assert(wpos<=al);
+  }
+
+  // Write buf[0..n-1]. If buf is NULL then advance write pointer only.
+  void write(const char* buf, int n) {
+    if (n<1) return;
+    lengthen(n);
+    assert(p);
+    assert(wpos+n<=al);
+    if (buf) memcpy(p+wpos, buf, n);
+    wpos+=n;
+  }
+
+  // Read a single byte. Return EOF (-1) at end.
+  int get() {
+    assert(rpos<=wpos);
+    assert(rpos==wpos || p);
+    return rpos<wpos ? p[rpos++] : -1;
+  }
+
+  // Read up to n bytes into buf[0..] or fewer if EOF is first.
+  // Return the number of bytes actually read.
+  // If buf is NULL then advance read pointer without reading.
+  int read(char* buf, int n) {
+    assert(rpos<=wpos);
+    assert(wpos<=al);
+    assert(!al==!p);
+    if (rpos+n>wpos) n=wpos-rpos;
+    if (n>0 && buf) memcpy(buf, p+rpos, n);
+    rpos+=n;
+    return n;
+  }
+
+  // Return the entire string as a read-only array.
+  const char* c_str() const {return (const char*)p;}
+
+  // Truncate the string to size i.
+  void resize(size_t i) {
+    wpos=i;
+    if (rpos>wpos) rpos=wpos;
+  }
+
+  // Swap efficiently (init is not swapped)
+  void swap(StringBuffer& s) {
+    std::swap(p, s.p);
+    std::swap(al, s.al);
+    std::swap(wpos, s.wpos);
+    std::swap(rpos, s.rpos);
+    std::swap(limit, s.limit);
+  }
+};
+
 /////////////////////////// compress() ///////////////////////
 
-void compress(Reader* in, Writer* out, int level);
+// Compress in to out in multiple blocks. Default method is "14,128,0"
+// Default filename is "". Comment is appended to input size.
+// dosha1 means save the SHA-1 checksum.
+void compress(Reader* in, Writer* out, const char* method,
+     const char* filename=0, const char* comment=0, bool dosha1=true);
+
+// Same as compress() but output is 1 block, ignoring block size parameter.
+void compressBlock(StringBuffer* in, Writer* out, const char* method,
+     const char* filename=0, const char* comment=0, bool dosha1=true);
 
 }  // namespace libzpaq
 
