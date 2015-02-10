@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.00 implementation - Jan. 30, 2015.
+/* libzpaq.cpp - LIBZPAQ Version 7.01 implementation - Feb. 9, 2015.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -11,7 +11,7 @@
   The Salsa20/8 code for Scrypt is by D. Bernstein and is public domain.
 
   All of the remaining software is provided as-is, with no warranty.
-  I, Matt Mahoney, on behalf of Dell Inc., release this software into
+  I, Matt Mahoney, release this software into
   the public domain. This applies worldwide.
   In some countries this may not be legally possible; if so:
   I grant anyone the right to use this software for any purpose,

@@ -1,7 +1,7 @@
-/* libzpaq.h - LIBZPAQ Version 7.00 header - Jan. 30, 2015.
+/* libzpaq.h - LIBZPAQ Version 7.01 header - Feb. 9, 2015.
 
   This software is provided as-is, with no warranty.
-  I, Matt Mahoney, on behalf of Dell Inc., release this software into
+  I, Matt Mahoney, release this software into
   the public domain.   This applies worldwide.
   In some countries this may not be legally possible; if so:
   I grant anyone the right to use this software for any purpose,

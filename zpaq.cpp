@@ -1,21 +1,13 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.00"
-
-/*  Copyright (C) 2009-2015, Dell Inc. Written by Matt Mahoney.
-
-    LICENSE
-
-    This program is free software; you can redistribute it and/or
-    modify it under the terms of the GNU General Public License as
-    published by the Free Software Foundation; either version 3 of
-    the License, or (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful, but
-    WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    General Public License for more details at
-    Visit <http://www.gnu.org/copyleft/gpl.html>.
+#define ZPAQ_VERSION "7.01"
+/*
+  This software is provided as-is, with no warranty.
+  I, Matt Mahoney, release this software into
+  the public domain.   This applies worldwide.
+  In some countries this may not be legally possible; if so:
+  I grant anyone the right to use this software for any purpose,
+  without any conditions, unless such conditions are required by law.
 
 zpaq is a journaling (append-only) archiver for incremental backups.
 Files are added only when the last-modified date has changed. Both the old
@@ -24,6 +16,10 @@ archive by specifying a date or version number. zpaq supports 5
 compression levels, deduplication, AES-256 encryption, and multi-threading
 using an open, self-describing format for backward and forward
 compatibility in Windows and Linux. See zpaq.pod for usage.
+Undocumented options:
+
+  -method x...  Advanced compression modes, see libzpaq.h
+  -method s...  same as x but in streaming mode.
 
 TO COMPILE:
 
@@ -54,7 +50,7 @@ Possible options:
   -Dunix     Not Windows. Sometimes automatic in Linux. Needed for Mac OS/X.
   -fopenmp   Parallel divsufsort (faster, implies -pthread, broken in MinGW).
   -pthread   Required in Linux, implied by -fopenmp.
-  -DDEBUG    Turn on debugging checks.
+  -DDEBUG    Enable run time checks and help screen for undocumented options.
   -DPTHREAD  Use Pthreads instead of Windows threads. Requires pthreadGC2.dll
              or pthreadVC2.dll from http://sourceware.org/pthreads-win32/
   -Dunixtest To make -Dunix work in Windows with MinGW.
@@ -1447,6 +1443,7 @@ private:
   vector<string> files;     // filename args
   int all;                  // -all option
   bool force;               // -force option
+  int fragment;             // -fragment option
   char password_string[32]; // hash of -key argument
   const char* password;     // points to password_string or NULL
   bool last;                // -last option
@@ -1493,7 +1490,7 @@ private:
 void Jidac::usage() {
   printf(
 "zpaq archiver for incremental backups with rollback capability.\n"
-"(C) 2009-2014, Dell Inc. Free under GPL v3. http://mattmahoney.net/zpaq\n"
+"http://mattmahoney.net/zpaq\n"
 #ifndef NDEBUG
 "DEBUG version\n"
 #endif
@@ -1521,8 +1518,8 @@ void Jidac::usage() {
 "          LB      Use 2^B MB blocks (0..11, default 04, 14, 26..56).\n"
 "          i       Index (file metadata only).\n"
 #ifdef DEBUG
-"          {xsi}B[,N2]...[{ciawmst}[N1[,N2]...]]...  Advanced:\n"
-"  x=journaling (default). s=streaming (no dedupe). i=index (no data).\n"
+"          {xs}B[,N2]...[{ciawmst}[N1[,N2]...]]...  Advanced:\n"
+"  x=journaling (default). s=streaming (no dedupe).\n"
 "    N2: 0=no pre/post. 1,2=packed,byte LZ77. 3=BWT. 4..7=0..3 with E8E9.\n"
 "    N3=LZ77 min match. N4=longer match to try first (0=none). 2^N5=search\n"
 "    depth. 2^N6=hash table size (N6=B+21: suffix array). N7=lookahead.\n"
@@ -1539,6 +1536,7 @@ void Jidac::usage() {
 "  s8,32,255: SSE last model. N1 context bits, count range N2..N3.\n"
 "  t8,24: MIX2 last 2 models, N1 context bits, learning rate N2.\n"
 #endif
+"  -fragment N     Set average dedupe fragment size = 2^N KiB (default: 6).\n"
 "extract options:\n"
 "  -force          Overwrite existing files (default: skip).\n"
 "list (compare files) options:\n"
@@ -1586,7 +1584,7 @@ string Jidac::rename(string name) {
 string expandOption(const char* opt) {
   const char* opts[]={
     "add","extract","list","test",
-    "all","detailed","force","key","last","method",
+    "all","detailed","force","fragment","key","last","method",
     "noattributes","nodelete","not","only",
     "summary","to","threads","until",0};
   assert(opt);
@@ -1613,6 +1611,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   // Initialize options to default values
   command="";
   force=false;
+  fragment=6;
   all=0;
   last=false;
   password=0;  // no password
@@ -1655,6 +1654,7 @@ int Jidac::doCommand(int argc, const char** argv) {
     }
     else if (opt=="-detailed") summary=-1;
     else if (opt=="-force") force=true;
+    else if (opt=="-fragment" && i<argc-1) fragment=atoi(argv[++i]);
     else if (opt=="-key") {
       if (read_password(password_string, 2-exists(archive, 1),
           argc, argv, i))
@@ -2639,7 +2639,7 @@ int Jidac::add() {
         dhsize+index_pos+0.0, size(ver)-1);
   }
 
-  // Set method and block size
+  // Set method
   if (method=="") method="1";
   if (size(method)==1) {  // set default blocksize
     if (method[0]>='2' && method[0]<='9') method+="6";
@@ -2648,7 +2648,14 @@ int Jidac::add() {
   if (strchr("0123456789xsi", method[0])==0)
     error("-method must begin with 0..5, x, s, or i");
   assert(size(method)>=2);
-  unsigned blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+
+  // Set block and fragment sizes
+  if (fragment<0) fragment=0;
+  const unsigned blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+  const unsigned MAX_FRAGMENT=fragment>19 || (8128u<<fragment)>blocksize-12
+      ? blocksize-12 : 8128u<<fragment;
+  const unsigned MIN_FRAGMENT=fragment>25 || (64u<<fragment)>MAX_FRAGMENT
+      ? MAX_FRAGMENT : 64u<<fragment;
 
   // Don't mix archives and indexes
   if (method[0]=='i' && dcsize>0) error("archive is not an index");
@@ -2824,7 +2831,7 @@ int Jidac::add() {
   }
 
   // Build htinv for fast lookups of sha1 in ht
-  HTIndex htinv(ht, ht.size()+(total_size>>16)+vf.size());
+  HTIndex htinv(ht, ht.size()+(total_size>>(10+fragment))+vf.size());
 
   // reserve space for the header block
   const unsigned htsize=ht.size();  // fragments at start of update
@@ -2833,8 +2840,6 @@ int Jidac::add() {
 
   // Compress until end of last file
   assert(method!="");
-  const unsigned MIN_FRAGMENT=64<<6;   // fragment size limits
-  const unsigned MAX_FRAGMENT=8128<<6;
   StringBuffer sb(blocksize+4096-128);  // block to compress
   unsigned frags=0;    // number of fragments in sb
   unsigned redundancy=0;  // estimated bytes that can be compressed out of sb
@@ -2855,9 +2860,7 @@ int Jidac::add() {
       if (!in.open(p->first.c_str())) {  // skip if not found
         p->second.date=0;
         total_size-=p->second.size;
-        lock(job.mutex);
         printerr(p->first.c_str());
-        release(job.mutex);
         ++errors;
         continue;
       }
@@ -2888,7 +2891,9 @@ int Jidac::add() {
             sha1.put(c);
             fragbuf[sz++]=c;
           }
-          if (c==EOF || (h<65536 && sz>=MIN_FRAGMENT) || sz>=MAX_FRAGMENT)
+          if (c==EOF
+              || sz>=MAX_FRAGMENT
+              || (fragment<=22 && h<(1u<<(22-fragment)) && sz>=MIN_FRAGMENT))
             break;
         }
         assert(sz<=MAX_FRAGMENT);

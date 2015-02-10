@@ -1,4 +1,4 @@
-zpaq700.zip, Jan. 30, 2015.
+zpaq701.zip, Feb. 9, 2015.
 
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees in Windows and *nix. It supports AES-256
@@ -11,42 +11,32 @@ compression. zpaq uses a self-describing compressed format to allow
 for future improvements without breaking compatibility with older
 versions of the program. Contents:
 
-File          Ver.  License          Description
------------   ----  -------          -----------
-zpaq.exe      7.00   GPL v3           Archiver, 32 bit Windows.
-zpaq64.exe    7.00   GPL v3           Archiver, 64 bit Windows.
-zpaq.cpp      7.00   GPL v3           zpaq source code.
-zpaq.pod      7.00   GPL v3           zpaq documentation and man source.
-libzpaq.h     7.00   Public Domain    libzpaq API documentation and header.
-libzpaq.cpp   7.00   MIT and Public   libzpaq API source code.
-Makefile             Public Domain    To compile in Linux: make
+File          Ver.   Description
+-----------   ----   -----------
+zpaq.exe      7.01   Archiver, 32 bit Windows.
+zpaq64.exe    7.01   Archiver, 64 bit Windows.
+zpaq.cpp      7.01   zpaq source code.
+zpaq.pod      7.00   zpaq documentation and man source.
+libzpaq.h     7.00   libzpaq API documentation and header.
+libzpaq.cpp   7.00   libzpaq API source code.
+Makefile             To compile in Linux: make
 
 All versions of this software can be found at
 http://mattmahoney.net/dc/zpaq.html
 Please report bugs to Matt Mahoney at mattmahoneyfl@gmail.com
 
-zpaq is (C) 2011-2015, Dell Inc., written by Matt Mahoney.
-Licensed under GPL v3. http://www.gnu.org/copyleft/gpl.html
-zpaq is a journaling archiver for compression and incremental backups.
-
-Most of libzpaq is public domain, written by Matt Mahoney.
-It is an API in C++ providing streaming compression and decompression
-services in the ZPAQ format. It has some encryption functions (SHA1,
-SHA256, AES encryption, and Scrypt). See libzpaq.h for documentation.
-
 Code from divsufsort.c is embedded in libzpaq.cpp.
 divsufsort.c is (C) 2003-2008 Yuta Mori, MIT license (see source code).
 It is also available from libdivsufsort-lite 2.0 from
 http://code.google.com/p/libdivsufsort/
+All remaining code is public domain.
 
 zpaq.exe can run under either 32 or 64 bit Windows. zpaq64.exe runs only
 under 64 bit Windows. The 32 bit version defaults to using at most
 2 cores (you can select more) and can only use 2 GB memory.
 
 zpaq is a command line program. For a brief description of the commands,
-type "zpaq" with no arguments. Full documenation is in zpaq.cpp.
-(You do not have to read the code. I just put it there for convenience).
-
+type "zpaq" with no arguments. See zpaq.pod for details.
 
 TO COMPILE
 

@@ -1,23 +1,8 @@
-#   zpaq.pod - zpaq v7.00 man page source
+#   zpaq.pod - zpaq v7.01 man page source
 #
 #   Copyright
 #
-#      Copyright (C) 2014 Dell Inc.
-#
-#   License
-#
-#       This program is free software; you can redistribute it and/or modify
-#       it under the terms of the GNU General Public License as published by
-#       the Free Software Foundation; either version 3 of the License, or
-#       (at your option) any later version.
-#
-#       This program is distributed in the hope that it will be useful,
-#       but WITHOUT ANY WARRANTY; without even the implied warranty of
-#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-#       GNU General Public License for more details.
-#
-#       You should have received a copy of the GNU General Public License
-#       along with this program. If not, see <http://www.gnu.org/licenses/>.
+#       Released to public domain by Matt Mahoney.
 #
 #   Description
 #
@@ -337,6 +322,23 @@ With C<list>, compare files by computing SHA-1 fragment hashes
 and comparing with stored hashes. Ignore differences in dates and
 attributes.
 
+=item -fragment I<N>
+
+Set the dedupe fragment size range from 64 2^I<N> to 8128 2^I<N>
+bytes with an average size of 1024 2^I<N> bytes. The default is 6
+(range 4096..520192, average 65536). Smaller fragment sizes can
+improve compression through deduplication of similar files, but
+require more memory and more overhead. Each fragment adds about 28 bytes
+to the archive and requires about 40 bytes of memory. For the default,
+this is less than 0.1% of the archive size.
+
+Values other than 6 conform to the ZPAQ specification and will decompress
+correctly by all versions, but do not conform to the recommendation
+for best deduplication. Adding identical files with different values
+of I<N> will not deduplicate because the fragment boundaries will differ.
+C<list -summary> will not identify these files as identical for
+the same reason.
+
 =item -key [I<password>]
 
 This option is required for all commands operating on an encrypted archive.
@@ -564,12 +566,6 @@ C<unzip(1)>
 C<zip(1)>
 
 =head1 AUTHORS
-
-I<zpaq> v7.00 is copyright (C) 2009-2015, Dell Inc. It is written by Matt
-Mahoney. It is licensed under GPL v3, or at your option,
-any later version. For information on
-the license, see <http://www.gnu.org/copyleft/gpl.html>.
-Program was written by Matt Mahoney <matmahoney@yahoo.com>.
 
 I<zpaq> includes code from I<libzpaq> v7.00. I<libzpaq> includes code from
 I<libdivsufsort-lite> v2.01, copyright (C) 2003-2008,
