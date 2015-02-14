@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.01 implementation - Feb. 9, 2015.
+/* libzpaq.cpp - LIBZPAQ Version 7.02 implementation - Feb. 11, 2015.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -28,12 +28,12 @@ See libzpaq.h for additional documentation.
 #include <vector>
 #include <stdio.h>
 
-#ifndef NOJIT
 #ifdef unix
+#ifndef NOJIT
 #include <sys/mman.h>
+#endif
 #else
 #include <windows.h>
-#endif
 #endif
 
 namespace libzpaq {
@@ -2208,6 +2208,7 @@ int PostProcessor::write(int c) {
     case 3:  // PROG psize[0]
       if (c<0) error("Unexpected EOS");
       hsize+=c*256;  // high byte of psize
+      if (hsize<1) error("Empty PCOMP");
       z.header.resize(hsize+300);
       z.cend=8;
       z.hbegin=z.hend=z.cend+128;
@@ -3209,7 +3210,7 @@ int ZPAQL::assemble() {
     error("JIT supported only for x86-32 and x86-64");
 
   const U8* hcomp=&header[hbegin];
-  const int hlen=hend-hbegin+1;
+  const int hlen=hend-hbegin+2;
   const int msize=m.size();
   const int hsize=h.size();
   static const int regcode[8]={2,6,7,5}; // a,b,c,d.. -> edx,esi,edi,ebp,eax..
@@ -3318,8 +3319,8 @@ int ZPAQL::assemble() {
         if (op==39||op==47||op==63)next2=i+2+(hcomp[i+1]<<24>>24);// jt,jf,jmp
         if (op==63) next1=NONE;  // jmp
         if ((next2<0 || next2>=hlen) && next2!=NONE) next2=hlen-1; // error
-        if (next1!=NONE && !(it[next1]&1)) it[next1]|=1, ++done;
-        if (next2!=NONE && !(it[next2]&2)) it[next2]|=2, ++done;
+        if (next1>=0 && next1<hlen && !(it[next1]&1)) it[next1]|=1, ++done;
+        if (next2>=0 && next2<hlen && !(it[next2]&2)) it[next2]|=2, ++done;
       }
     }
   } while (done>0);

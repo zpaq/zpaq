@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.01 header - Feb. 9, 2015.
+/* libzpaq.h - LIBZPAQ Version 7.02 header - Feb. 11, 2015.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into

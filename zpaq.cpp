@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.01"
+#define ZPAQ_VERSION "7.02"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1454,6 +1454,7 @@ private:
   string nottype;           // -not =...
   vector<string> onlyfiles; // list of prefixes to include
   int summary;              // summary option if > 0, detailed if -1
+  bool dotest;              // -test option
   int threads;              // default is number of cores
   vector<string> tofiles;   // -to option
   int64_t date;             // now as decimal YYYYMMDDHHMMSS (UT)
@@ -1507,6 +1508,7 @@ void Jidac::usage() {
 "  -not files...   Exclude. * and ? match any string or char.\n"
 "  -only files...  Include only matches (default: *).\n"
 "  -summary        Be brief.\n"
+"  -test           Do not write to disk.\n"
 "  -threads N      Use N threads (default: %d).\n"
 "  -to out...      Rename files... to out... or all to out/all.\n"
 "  -until N        Roll back archive to N'th update or -N from end.\n"
@@ -1619,6 +1621,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   noattributes=false;
   nodelete=false;
   summary=0; // detailed: -1
+  dotest=false;  // -test
   threads=0; // 0 = auto-detect
   version=DEFAULT_VERSION;
   date=0;
@@ -1679,6 +1682,7 @@ int Jidac::doCommand(int argc, const char** argv) {
       summary=20;
       if (i<argc-1 && isdigit(argv[i+1][0])) summary=atoi(argv[++i]);
     }
+    else if (opt=="-test") dotest=true;
     else if (opt=="-threads" && i<argc-1) {
       threads=atoi(argv[++i]);
       if (threads<1) threads=1;
@@ -1765,6 +1769,8 @@ int Jidac::doCommand(int argc, const char** argv) {
   return 0;
 }
 
+/////////////////////////// read_archive //////////////////////////////
+
 // Read arc (default: archive) up to -date into ht, dt, ver. Return place to
 // append. If errors is not NULL then set it to number of errors found.
 int64_t Jidac::read_archive(int *errors, const char* arc) {
@@ -1827,10 +1833,10 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
       if (d.findBlock())
         found_data=true;
       else if (pass==ERR) {
+        pass=RECOVER;
         block_offset=32*(password!=0);
         in.seek(block_offset, SEEK_SET);
         if (!d.findBlock()) break;
-        pass=RECOVER;
         printf("Attempting to recover fragment tables...\n");
       }
       else
@@ -1838,7 +1844,8 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
 
       // Read the segments in the current block
       StringWriter filename, comment;
-      int segs=0;
+      int segs=0;  // segments in block
+      bool skip=false;  // skip decompression?
       while (d.findFilename(&filename)) {
         if (filename.s.size()) {
           for (unsigned i=0; i<filename.s.size(); ++i)
@@ -1880,8 +1887,7 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
 
         // Test for JIDAC format. Filename is jDC<fdate>[cdhi]<num>
         // and comment ends with " jDC\x01"
-        if (comment.s.size()>=4
-            && usize>=0
+        if (!skip && comment.s.size()>=4 && usize>=0
             && comment.s.substr(comment.s.size()-4)=="jDC\x01"
             && filename.s.size()==28
             && filename.s.substr(0, 3)=="jDC"
@@ -1919,8 +1925,10 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
               error("bad checksum");
             }
           }
-          else
+          else {
+            skip=true;
             d.readSegmentEnd();
+          }
 
           // Transaction header (type c).
           // If in the future then stop here, else read 8 byte data size
@@ -2105,7 +2113,7 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
                     filename.s.c_str(), comment.s.c_str());
             if (errors) ++*errors;
           }
-        }
+        }  // end if journaling
 
         // Streaming format
         else if (pass!=RECOVER) {
@@ -2124,6 +2132,7 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
 
           char sha1result[21]={0};
           d.readSegmentEnd(sha1result);
+          skip=true;
           string fn=lastfile;
           if (all) fn=append_path(itos(ver.size()-1, all), fn);
           if (isselected(fn.c_str(), renamed)) {
@@ -2145,6 +2154,10 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
           ht.push_back(HT(sha1result+1, usize>0x7fffffff ? -1 : usize,
                           segs ? -segs : block_offset));
           assert(size(ver)>0);
+        }
+        else {
+          d.readSegmentEnd();  // streaming and RECOVERY
+          skip=true;
         }
         ++segs;
         filename.s="";
@@ -2700,7 +2713,7 @@ int Jidac::add() {
   // Open index to append
   WriterPair wp;  // wp.a points to output, wp.b to index
   Archive index;
-  if (part0!=part1 && (exists(part0) || !exists(part1))) {
+  if (!dotest && part0!=part1 && (exists(part0) || !exists(part1))) {
     if (method[0]=='s')
       error("Cannot update indexed archive in streaming mode");
     if (!index.open(part0.c_str(), password, 'w', index_pos))
@@ -2712,7 +2725,7 @@ int Jidac::add() {
   // Open archive to append
   Archive out;
   Counter counter;
-  if (archive=="")
+  if (archive=="" || dotest)
     wp.a=&counter;
   else if (part0!=part1 && exists(part0) && !exists(part1)) {  // remote
     char salt[32]={0};
@@ -3454,7 +3467,7 @@ ThreadReturn decompressThread(void* arg) {
           filename=job.jd.rename(p->first);
           assert(!job.outf.isopen());
           if (p->second.data==0) {
-            makepath(filename);
+            if (!job.jd.dotest) makepath(filename);
             if (job.jd.summary<=0) {
               lock(job.mutex);
               print_progress(job.total_size, job.total_done, job.jd.summary);
@@ -3465,19 +3478,21 @@ ThreadReturn decompressThread(void* arg) {
               }
               release(job.mutex);
             }
-            if (job.outf.open(filename.c_str()))  // new file
-              job.outf.truncate();
-            else {
-              lock(job.mutex);
-              printerr(filename.c_str());
-              release(job.mutex);
+            if (!job.jd.dotest) {
+              if (job.outf.open(filename.c_str()))  // new file
+                job.outf.truncate();
+              else {
+                lock(job.mutex);
+                printerr(filename.c_str());
+                release(job.mutex);
+              }
             }
           }
-          else
+          else if (!job.jd.dotest)
             job.outf.open(filename.c_str());  // update existing file
-          if (!job.outf.isopen()) break;  // skip file if error
+          if (!job.jd.dotest && !job.outf.isopen()) break;  // skip errors
           job.lastdt=p;
-          assert(job.outf.isopen());
+          assert(job.jd.dotest || job.outf.isopen());
         }
         assert(job.lastdt==p);
 
@@ -3501,7 +3516,7 @@ ThreadReturn decompressThread(void* arg) {
         assert(q+usize<=out.size());
         int nz=q;  // first nonzero byte in fragments to be written
         while (nz<q+usize && out.c_str()[nz]==0) ++nz;
-        if (nz<q+usize) {  // not all zero bytes?
+        if (!job.jd.dotest && nz<q+usize) {  // not all zero bytes?
           job.outf.seek(offset, SEEK_SET);
           job.outf.write(out.c_str()+q, usize);
         }
@@ -3512,7 +3527,7 @@ ThreadReturn decompressThread(void* arg) {
         if (p->second.data==size(ptr)) {  // close file
           assert(p->second.date);
           assert(job.lastdt!=job.jd.dt.end());
-          assert(job.outf.isopen());
+          assert(job.jd.dotest || job.outf.isopen());
           lock(job.mutex);
           int64_t sz=p->second.size;
           if (sz<0) {
@@ -3525,8 +3540,10 @@ ThreadReturn decompressThread(void* arg) {
             }
           }
           release(job.mutex);
-          job.outf.truncate(sz);
-          job.outf.close(p->second.date, p->second.attr);
+          if (!job.jd.dotest) {
+            job.outf.truncate(sz);
+            job.outf.close(p->second.date, p->second.attr);
+          }
           job.lastdt=job.jd.dt.end();
         }
       } // end for j
@@ -3569,7 +3586,7 @@ int Jidac::extract() {
     if (p->second.date && p->first!="") {
       const string fn=rename(p->first);
       const bool isdir=p->first[size(p->first)-1]=='/';
-      if (force && !isdir && equal(p, fn.c_str())) {  // identical
+      if (!dotest && force && !isdir && equal(p, fn.c_str())) {  // identical
         if (summary<=0) {
           printf("= ");
           printUTF8(fn.c_str());
@@ -3580,7 +3597,7 @@ int Jidac::extract() {
         else printerr(fn.c_str());
         ++skipped;
       }
-      else if (!force && exists(fn.c_str())) {  // exists, skip
+      else if (!dotest && !force && exists(fn.c_str())) {  // exists, skip
         if (summary<=0) {
           printf("? ");
           printUTF8(fn.c_str());
@@ -3639,7 +3656,7 @@ int Jidac::extract() {
         printUTF8(s.c_str());
         printf("\n");
       }
-      makepath(s, p->second.date, p->second.attr);
+      if (!dotest) makepath(s, p->second.date, p->second.attr);
     }
   }
 
@@ -3963,8 +3980,7 @@ int Jidac::test() {
             if (n!=0 && n!=ffrag) error("bad fragment start");
 
             // Save sizes in HT
-            if (sb.size()<size_t(f*4+8))
-              error("block too small for frag list");
+            if (f>sb.size()/4-2) error("block too small for frag list");
             p=end-f*4-8;
             size_t sum=0;
             for (unsigned i=ffrag; i<ffrag+f; ++i) {
@@ -3977,6 +3993,7 @@ int Jidac::test() {
             libzpaq::SHA1 sha;
             p=sb.c_str();
             for (unsigned i=ffrag; i<ffrag+f; ++i) {
+              assert(i<ht.size());
               sha.write(p, ht[i].usize);
               p+=ht[i].usize;
               memcpy(ht[i].sha1, sha.result(), 20);

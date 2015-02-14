@@ -1,8 +1,8 @@
-#   zpaq.pod - zpaq v7.01 man page source
+#   zpaq.pod - zpaq v7.02 man page source
 #
 #   Copyright
 #
-#       Released to public domain by Matt Mahoney.
+#       Released to public domain by Matt Mahoney in 2015.
 #
 #   Description
 #
@@ -440,6 +440,15 @@ With C<add> and C<extract>, show percent completed and estimated
 time remaining on a 1 line display, but do not list files as they are
 added or extracted. I<N> has no effect.
 
+=item -test
+
+With C<add> and C<extract>, do not write to disk, but perform all
+other operations normally. C<add> will report the compressed size and
+time, but not update the archive. C<extract> will decompress, compute
+the SHA-1 hashes of the output, report if it differs from the stored
+value, but not create or update any files. It also will not compare
+to existing files, thus testing whether the output file exists or not.
+
 =item -threads I<N>
 
 Add or extract at most I<N> blocks in parallel. The default
@@ -567,12 +576,12 @@ C<zip(1)>
 
 =head1 AUTHORS
 
-I<zpaq> includes code from I<libzpaq> v7.00. I<libzpaq> includes code from
+C<zpaq> and C<libzpaq> are written by Matt Mahoney and released to the
+public domain in 2015. C<libzpaq> contains
 I<libdivsufsort-lite> v2.01, copyright (C) 2003-2008,
 Yuta Mori. It is licensed under the MIT license. See the source
-code for license text. The remainder of I<libzpaq> is public domain.
-The AES code is modified from libtomcrypt by Tom St Denis.
-The salsa20/8 code in Scrypt() is by D. J. Bernstein.
-The remaining code is written by Matt Mahoney.
+code for license text. The AES code is
+modified from libtomcrypt by Tom St Denis (public domain).
+The salsa20/8 code in Scrypt() is by D. J. Bernstein (public domain).
 
 =cut
