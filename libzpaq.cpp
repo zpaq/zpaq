@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.02 implementation - Feb. 11, 2015.
+/* libzpaq.cpp - LIBZPAQ Version 7.03 implementation - Feb. 16, 2015.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -1013,6 +1013,8 @@ void ZPAQL::init(int hbits, int mbits) {
   assert(header[0]+256*header[1]==cend-2+hend-hbegin);
   assert(bufptr==0);
   assert(outbuf.isize()>0);
+  if (hbits>32) error("H too big");
+  if (mbits>32) error("M too big");
   h.resize(1, hbits);
   m.resize(1, mbits);
   r.resize(256);

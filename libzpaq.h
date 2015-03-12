@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.02 header - Feb. 11, 2015.
+/* libzpaq.h - LIBZPAQ Version 7.03 header - Mar. 9, 2015.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1215,7 +1215,7 @@ private:
   U32 curr;          // last 4 bytes of archive or remaining bytes in subblock
   U32 rpos, wpos;    // read, write position in buf
   Predictor pr;      // to get p
-  enum {BUFSIZE=1<<12};
+  enum {BUFSIZE=1<<16};
   Array<char> buf;   // input buffer of size BUFSIZE bytes
   int decode(int p); // return decoded bit (0..1) with prob. p (0..65535)
 };

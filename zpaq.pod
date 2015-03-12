@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.02 man page source
+#   zpaq.pod - zpaq v7.03 man page source
 #
 #   Copyright
 #
@@ -134,7 +134,7 @@ For each added or updated file or directory, the following information is saved
 in the archive: the compressed contents, the file or directory name as it
 appears in I<files> plus any trailing path, the last-modified
 date with 1 second resolution, and the Unix/Linux permissions or Windows
-attributes. Other metadata such as owner, group, ACLs, alternate streams,
+attributes. Other metadata such as owner, group, ACLs,
 last access time, etc. are not saved. Symbolic links are not saved or followed.
 Hard links are followed as if they were ordinary files. Special file types
 such as devices, named pipes, and named sockets are not saved.
@@ -169,11 +169,19 @@ If I<archive> is C<""> (a quoted empty string), then C<zpaq> compresses
 I<files> as if creating a new archive, but discards the output without
 writing to disk.
 
-As the archive is updated, zpaq will report the percent complete, estimated
+As the archive is updated, the program will report the percent complete, estimated
 time remaining, the name and size of the file preceded by C<+> if the file
 is being added, C<#> if updated, or C<-> if deleted. If the file
 is deduplicated, then the new size after deduplication but before
 compression is shown.
+
+As each block is compressed, the program reports the range of fragments,
+input block size, and complete compression method like 
+C<-method 14,179,1>,
+where the first number is the level and block size, the second number
+is the estimated compressibility (0..255, where 0 means random),
+and the third is the detected type (1 for text, 2 for x86, 3 for both,
+or 0 for neither).
 
 =item e
 
@@ -247,31 +255,6 @@ result if the index is correct.
 
 I<archive> may be "", which is equivalent to comparing with an empty
 archive.
-
-=item t
-
-=item test I<archive>
-
-Test archive integrity by reading the archive in a single pass in a single
-thread. Verify that the decompressed data agrees with the stored SHA-1
-hashes and sizes and that the data otherwise conforms to the ZPAQ standard.
-The block hashes and the redundant list of fragment sizes are not
-required by the ZPAQ standard but are checked if present.
-
-For all blocks, report the filename field, stored uncompressed size from
-the comment field, and
-C<OK> or C<?> if the checksum matches or is not stored, respectivey.
-For streaming segments, report the whole comment field. For C blocks,
-report the new version number and size of the following data blocks.
-For D blocks, compute and remember the fragment hashes and report the range
-processed. For H blocks, compare the stored and remembered hashes and
-report OK if they match. For I blocks, report the number of files
-added and deleted (labeled + and - respectively) and OK if dates are
-valid (1900 to 2999) and fragment pointers are valid.
-
-I<files>, C<-not>, and C<-only> have no effect. C<-until> will stop
-after testing the first block detected to be in a later version.
-Testing is always single threaded.
 
 =back
 
@@ -446,8 +429,7 @@ With C<add> and C<extract>, do not write to disk, but perform all
 other operations normally. C<add> will report the compressed size and
 time, but not update the archive. C<extract> will decompress, compute
 the SHA-1 hashes of the output, report if it differs from the stored
-value, but not create or update any files. It also will not compare
-to existing files, thus testing whether the output file exists or not.
+value, but not compare, create or update any files.
 
 =item -threads I<N>
 
