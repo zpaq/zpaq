@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.03 man page source
+#   zpaq.pod - zpaq v7.04 man page source
 #
 #   Copyright
 #
@@ -138,6 +138,7 @@ attributes. Other metadata such as owner, group, ACLs,
 last access time, etc. are not saved. Symbolic links are not saved or followed.
 Hard links are followed as if they were ordinary files. Special file types
 such as devices, named pipes, and named sockets are not saved.
+The 64 bit Windows version will save alternate data streams.
 
 If any file cannot be read (e.g. permission denied), then it is skipped and
 an error is reported. However, other files are still added and the update

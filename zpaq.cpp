@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.03"
+#define ZPAQ_VERSION "7.04"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1242,8 +1242,9 @@ int numberOfProcessors() {
 #ifdef unix
 #ifdef BSD  // BSD or Mac OS/X
   size_t rclen=sizeof(rc);
-  if (sysctlbyname("hw.logicalcpu", &rc, &rclen, 0, 0)!=0)
-    perror("sysctlbyname");
+  int mib[2]={CTL_HW, HW_NCPU};
+  if (sysctl(mib, 2, &rc, &rclen, 0, 0)!=0)
+    perror("sysctl");
 
 #else  // Linux
   // Count lines of the form "processor\t: %d\n" in /proc/cpuinfo
@@ -2444,6 +2445,7 @@ ThreadReturn compressThread(void* arg) {
     fflush(stdout);
     fprintf(stderr, "job %d: %s\n", jobNumber+1, e.what());
     release(job.mutex);
+    exit(1);
   }
   return 0;
 }
