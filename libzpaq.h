@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.03 header - Mar. 9, 2015.
+/* libzpaq.h - LIBZPAQ Version 7.05 header - Apr. 3, 2015.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1039,8 +1039,8 @@ public:
   U32 H(int i) {return h(i);}  // get element of h
 
   void flush();           // write outbuf[0..bufptr-1] to output and sha1
-  void outc(int c) {      // output byte c (0..255) or -1 at EOS
-    if (c<0 || (outbuf[bufptr]=c, ++bufptr==outbuf.isize())) flush();
+  void outc(int ch) {     // output byte ch (0..255) or -1 at EOS
+    if (ch<0 || (outbuf[bufptr]=ch, ++bufptr==outbuf.isize())) flush();
   }
 
   // ZPAQ1 block header

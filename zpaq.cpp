@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.04"
+#define ZPAQ_VERSION "7.05"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -2476,7 +2476,15 @@ ThreadReturn writeThread(void* arg) {
       if (job.out && cj.out.size()>0) {
         release(job.mutex);
         assert(cj.out.c_str());
-        job.out->write(cj.out.c_str(), cj.out.size());
+        const char* p=cj.out.c_str();
+        int64_t n=cj.out.size();
+        const int64_t N=1<<30;
+        while (n>N) {
+          job.out->write(p, N);
+          p+=N;
+          n-=N;
+        }
+        job.out->write(p, n);
         lock(job.mutex);
       }
       cj.out.resize(0);

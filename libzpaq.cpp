@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.03 implementation - Feb. 16, 2015.
+/* libzpaq.cpp - LIBZPAQ Version 7.05 implementation - Apr. 16, 2015.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -6709,7 +6709,7 @@ void LZBuffer::fill() {
       if (!minMatch2 || blen<minMatch2) {
         for (unsigned k=0; k<=bucket; ++k) {
           unsigned p=ht[h1^k];
-          if (p && (p&mask)==(in[i+3]&mask)) {
+          if (p && i+3<n && (p&mask)==(in[i+3]&mask)) {
             p>>=checkbits;
             if (p<i && i+blen<=n && in[p+blen-1]==in[i+blen-1]) {
               unsigned l;
