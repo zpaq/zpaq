@@ -28,7 +28,7 @@ Please report bugs to Matt Mahoney at mattmahoneyfl@gmail.com
 Code from divsufsort.c is embedded in libzpaq.cpp.
 divsufsort.c is (C) 2003-2008 Yuta Mori, MIT license (see source code).
 It is also available from libdivsufsort-lite 2.0 from
-http://code.google.com/p/libdivsufsort/
+https://github.com/y-256/libdivsufsort
 All remaining code is public domain.
 
 zpaq.exe can run under either 32 or 64 bit Windows. zpaq64.exe runs only
