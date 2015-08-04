@@ -1848,14 +1848,12 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
   else printf(" -until %1.0f: ", version+0.0);
   fflush(stdout);
 
-  // Test password
-  if (password) {
-    char s[4]={0};
-    const int nr=in.read(s, 4);
-    if (nr>0 && memcmp(s, "7kSt", 4) && (memcmp(s, "zPQ", 3) || s[3]<1))
-      error("password incorrect");
-    in.seek(-nr, SEEK_CUR);
-  }
+  // ALWAYS test password, in case archive is encrypted but no password is supplied.
+  char s[4]={0};
+  const int nr=in.read(s, 4);
+  if (nr>0 && memcmp(s, "7kSt", 4) && (memcmp(s, "zPQ", 3) || s[3]<1))
+    error("password incorrect");
+  in.seek(-nr, SEEK_CUR);
 
   // Scan archive contents
   string lastfile=arc; // last named file in streaming format
