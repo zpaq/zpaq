@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.05 header - Apr. 3, 2015.
+/* libzpaq.h - LIBZPAQ Version 7.06 header - Mar. 9, 2016.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1393,9 +1393,9 @@ class StringBuffer: public libzpaq::Reader, public libzpaq::Writer {
   }
 
   // Enlarge al to make room to write at least n bytes.
-  void lengthen(unsigned n) {
+  void lengthen(size_t n) {
     assert(wpos<=al);
-    if (wpos+n>limit) error("StringBuffer overflow");
+    if (wpos+n>limit || wpos+n<wpos) error("StringBuffer overflow");
     if (wpos+n<=al) return;
     size_t a=al;
     while (wpos+n>=a) a=a*2+init;

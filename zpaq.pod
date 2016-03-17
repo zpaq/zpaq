@@ -1,8 +1,8 @@
-#   zpaq.pod - zpaq v7.04 man page source
+#   zpaq.pod - zpaq v7.06 man page source
 #
 #   Copyright
 #
-#       Released to public domain by Matt Mahoney in 2015.
+#       Released to public domain by Matt Mahoney in 2015-2016.
 #
 #   Description
 #
@@ -35,65 +35,18 @@ zpaq I<command> I<archive>[C<.zpaq>] [I<files>]... [-I<options>]...
 
 =head1 DESCRIPTION
 
-I<zpaq> manages journaling archives for incremental user-level backups
+I<zpaq> manages journaling archives for incremental user-level
+local or remote backups
 that conform to I<The ZPAQ Open Standard Format for Highly Compressed Data>
 (see I<AVAILABILITY>). The format supports encrypted, deduplicated, and
-compressed archives with rollback capability.
+compressed single or multi-part archives with rollback capability.
 It supports archives as large as 1000 times available memory or up to
 250 TB and 4 billion files, interoperable between Windows
 and Unix/Linux/OS X.
 
-A ZPAQ journaling archive is a sequence of timestamped updates,
-each listing the files and directories that have been added, changed, or
-deleted since the previous transacted update, normally based on changes to the
-last-modified dates. Each new or modified file is first deduplicated
-by splitting into fragments along
-content-dependent boundaries determined by a rolling hash function.
-The fragment SHA-1 hashes are computed and compared with previously stored
-fragments. Unmatched fragments are then grouped by file type and
-packed into blocks which are compressed or decompressed independently
-in parallel by separate threads. The fragment sizes and hashes and the file
-names with their
-last-modified dates, attributes, and fragment pointer lists are stored
-in a separate index at the end of each update, allowing this information
-to be read quickly in large archives by skipping over the data blocks.
-
-Blocks are compressed using LZ77, BWT, or context
-mixing with filters, depending on the compression level selected and on
-statistics collected during fragmentation. Already compressed data is
-detected and stored without further compression.
-The decompression algorithms are saved in the block
-headers using a sandboxed
-virtual machine language called ZPAQL. This allows older versions of C<zpaq>
-to read archives produced by newer versions when improved compression
-algorithms are developed. On x86 and x86-64 hardware, ZPAQL is translated
-into machine code and executed as an optimization.
-On other hardware, it is interpreted.
-
-To support remote backups, archives may be split into separate updates
-plus a small, local index file containing a copy of the history of
-file names, dates, and fragment hashes, but without any compressed data.
-If the archive is moved offsite,
-then you can still list, compare, and create updates with just the index.
-
-Archives are divided into blocks protected by scannable headers, SHA-1
-hashes, and redundant copies of fragment size lists to detect damage and
-allow partial recovery. Updates are transacted so they can be interrupted
-safely. No temporary files are created.
-
-Archives may be encrypted with AES-256 in CTR mode, providing
-secrecy but not tamper resistance. The key is strengthened by
-Scrypt(SHA-256(password), salt, N=16384, r=8, p=1) using
-a 32 byte random salt that is prefixed to the archive. This slows
-down brute force password searches by requiring over 206 million
-32-bit operations and 16 MiB memory per test. Multi-part archives
-are encrypted with a single keystream as if concatenated. The index,
-if present, is encrypted with the same password but a different
-salt and keystream.
-
 =head1 COMMANDS
 
-I<command> is one of C<add>, C<extract>, C<list>, or C<test>.
+I<command> is one of C<add>, C<extract>, C<list>.
 Commands may be abbreviated to one letter.
 
 I<archive> is assumed to have a C<.zpaq> extension if no extension is
@@ -124,15 +77,22 @@ are expanded by the shell, which has the same effect.
 A change is an addition, update, or deletion of any file or directory in
 I<files> or any of its subdirectories to any depth. A file or directory is
 considered changed if its size or last-modified date (with 1 second resolution),
-or Windows attributes or Unix/Linux permissions (if saved) and
+or Windows attributes or Unix/Linux permissions (if saved)
 differ between the internal
 and external versions. File contents are not compared. If the attributes
 but not the date has changed, then the attributes are updated in the
 archive with the assumption that the file contents have not changed.
 
+Files are added by splitting them into fragments along content-dependent
+boundaries, computing their SHA-1 hashes, and comparing with hashes already
+stored in the archive. If the hash matches, it is assumed that the fragments
+are identical and only a pointer to the previous compressed fragment is
+saved. Unmatched fragments are packed into blocks, compressed, and appended
+to the archive.
+
 For each added or updated file or directory, the following information is saved
-in the archive: the compressed contents, the file or directory name as it
-appears in I<files> plus any trailing path, the last-modified
+in the archive: the compressed contents, fragment hashes, the file or directory
+name as it appears in I<files> plus any trailing path, the last-modified
 date with 1 second resolution, and the Unix/Linux permissions or Windows
 attributes. Other metadata such as owner, group, ACLs,
 last access time, etc. are not saved. Symbolic links are not saved or followed.
@@ -188,12 +148,12 @@ or 0 for neither).
 
 =item x
 
-=item extract I<archive>
+=item extract
 
 Extract I<files> (including the contents of directories), or extract
 the whole archive contents if I<files> is omitted.
 The file names, last-modified date,
-and permissions or attributes are set as saved in the archive.
+and permissions or attributes are restored as saved in the archive.
 If there are multiple versions of a file stored, then only the latest
 version is extracted. If a stored file has been marked as deleted,
 then it is not extracted.
@@ -203,8 +163,7 @@ to overwrite).
 
 As files are extracted, the fragment SHA-1 hashes are computed and compared
 with the stored hashes. The program reports an error in case of mismatches.
-Blocks are only decompressed up to the last used fragment. Thus, the block
-SHA-1 hash is not normally checked.
+Blocks are only decompressed up to the last used fragment.
 If the archive is damaged, then C<zpaq> will extract as much as possible
 from the undamaged blocks.
 
@@ -218,10 +177,10 @@ extracted in this case.
 
 =item l
 
-=item list I<archive>
+=item list
 
 List the archive contents. With I<files>, list only the specified
-files and directories and compare them with files on disk.
+files and directories and compare them with the same files on disk.
 For each file or directory, show the comparison result,
 last modified date, uncompressed size,
 Windows attributes or Unix/Linux permissions,
@@ -286,10 +245,14 @@ With C<extract>, extract the files in each version as shown with C<list -all>.
 I<N> selects the number of digits in the directory name. The default is 4.
 More digits will be used when necessary. For example:
 
-    zpaq list archive -all 2 -not ??/?*
+    zpaq list archive -all 2 -not "??/?*"
 
 will show the dates when the archive was updated as C<01/>, C<02/>,
 etc. but not their contents.
+
+=item -detailed
+
+With C<list>, show file fragment IDs.
 
 =item -force
 
@@ -302,7 +265,7 @@ contents differ (tested by comparing SHA-1 hashes), then the file is
 decompressed and extracted. If the dates or attributes/permissions
 differ, then they are set to match those stored in the archive.
 
-With C<list>, compare files by computing SHA-1 fragment hashes
+With C<list> I<files>, compare files by computing SHA-1 fragment hashes
 and comparing with stored hashes. Ignore differences in dates and
 attributes.
 
@@ -336,7 +299,9 @@ to the screen. When creating a new archive, it will prompt until
 the same password is entered twice in a row.
 
 An archive is encrypted with AES-256 in CTR mode. The password is
-strengthened using Scrypt(SHA-256(password), salt, N=16384, r=8, p=1).
+strengthened using Scrypt(SHA-256(password), salt, N=16384, r=8, p=1),
+which would require 208M operations and 16 MB memory per test in a
+brute force key search.
 When creating a new archive, a 32 byte salt is generated
 using CryptGenRandom() in Windows or from /dev/urandom in Unix/Linux,
 such that the first byte is different from the normal header
@@ -345,30 +310,250 @@ is encrypted with a single keystream as if the parts were concatenated.
 The index is encrypted with the same password, where the first byte
 of the salt is modified by XOR with ('z' XOR '7').
 
-=item -method I<level>[I<blocksize>]
+Encryption provides secrecy but not authentication. An attacker
+who knows or can guess any bits of the plaintext can set them without
+knowing the key.
 
-With C<add>, select a compression level (0..5 or i) and optionally, a
-block size (0..11). The two numbers are written together. The
-default is C<-method 14> selecting level 1 and block size 4.
-For levels 2 and higher, the default I<blocksize> is 6.
+=item -method I<level>
 
-I<level> selects the compression ratio where higher numbers
-compress better but slower. Level 0 means to deduplicate with no
-further compression. Level 2 compresses slower but decompresses
-just as fast as 1. It is recommended for archives that will be
-compressed once and decompressed often. Level 1 is best for backups,
-which are compressed often but decompressed rarely. Levels 3 and
-higher compress and decompress slower.
+=item -method I<level>I<Blocksize>
 
-Files are compressed by splitting into fragments and packed into
-blocks of at most 2^I<blocksize> MiB. Blocks are compressed and
-decompressed in parallel by separate threads. Larger blocks
-compress better but require more memory and may be slower because
-there may be fewer blocks than threads. The recommended available
-memory is 8 times the block size per thread for levels up to 4 and 16 times
-block size per thread for level 5.
+=item -method I<type>I<Blocksize>.I<pre>[.I<arg>][I<comp>[.I<arg>]]...
 
-If the level is C<i>, then create or update an index. An index stores
+=item -method i
+
+With C<add>, select a compression method. In the first form, I<level>
+is a number from 0 to 5. Higher numbers compress better but are slower.
+The default is 1. It is recommended for backups. Level 2 compresses
+slower but decompresses just as fast as 1. It is recommended for
+archives to be compressed once and decompressed many times, such as
+downloads. Level 0 stores with deduplication but no further compression.
+
+In the second form, I<blocksize> is a number from 0 to 11 (for example,
+C<-method 14> or C<-method 511>). I<blocksize> says
+to pack fragments into blocks up to 2^I<blocksize> MiB. Using larger
+blocks can improve compression but require more memory and may be slower
+because each block is compressed or decompressed by a separate thread.
+The memory requirement is up to 8 times I<blocksize> per thread
+for levels up to 4 and 16 times block size per thread for level 5.
+The default I<blocksize> is 4 (16 MiB) for levels 0 and 1, and 6 (64 MiB)
+for levels 2 through 5.
+
+The third form selects a specific compression method for all blocks.
+This option is for experimental use.
+Normally, C<zpaq> selects different methods depending on the level
+and an analysis of the data (text, executable, or other binary,
+and degree of compressibility). I<type> is either C<x> or C<s>
+for journaling or streaming format, respectively.
+I<pre> is 0..7 selecting a preprocessing step (LZ77, BWT, E8E9),
+I<comp> is a series of context modeling components from the
+set {c,i,a,w,m,s,t} selecting a CM or ICM, ISSE chain, MATCH,
+word model, MIX, SSE, or MIX2. I<pre> and I<comp> may be followed
+by a list of numeric arguments (I<arg>) separated by periods or commas.
+For example:
+
+    -method x6.3ci1
+
+selects a journaling archive (x), block size 2^6 = 64 MiB, BWT transform (3),
+an order 0 ICM (c), and order 1 ISSE (i1). (C<zpaq> normally selects this method
+for level 3 text compression). I<type> is as follows.
+
+=over
+
+=item x
+
+Selects normal (journaling) mode. Files are split into fragments, deduplicated,
+packed into blocks, and compressed by the method described. The compressed
+blocks are preceded by a transaction header giving the date of the update.
+The blocks are followed by a list of fragment hashes and sizes and a list
+of files added, updated, or deleted. Each added or updated file lists
+the last-modifed date, attributes, and a list of fragment IDs.
+
+=item s
+
+Selectes streaming mode for single-pass extraction and compatibility with
+C<zpaq> versions prior to 6.00 (2012). Streaming archives do not support
+deduplication or rollback. Files are split into fragments of size
+2^I<blocksize> MiB - 4 KiB. Each file or fragment is compressed in a
+separate block with no attempt at deduplication. The file name, date,
+and attributes are stored in the header of the first fragment. The hashes
+are stored in the trailers of each block. There is no transaction block
+to allow rollback. Files are added to the previously dated update.
+
+=back
+
+I<pre> selects a pre/post processing step before context modeling as follows.
+
+=over
+
+=item C<0>
+
+Selects no modification to the data block before context modeling.
+
+=item C<4>
+
+Selects E8E9 transform to improve the compression of x86 executable
+files (.exe or .dll). The transform scans backward for 5 byte patterns of
+the form (E8|E9 xx xx xx 00|FF) hex and adds the block offset to the three
+middle bytes. The E8 and E9 opcodes are CALL and JMP, respectively. The
+transform replaces relative addresses with absolute addresses. Decompression
+reverses the transform.
+
+=item {1|2|5|6}.I<min1>.I<min2>.I<depth>.I<size>[.I<lookahead>]
+
+Selects LZ77 compression.
+LZ77 compresses by searching for matching strings using a hash table
+or suffix array and replacing them with pointers to the previous match.
+Types 1 and 2 select variable bit length coding or byte aligned coding
+respectively.
+Variable bit length encoding compresses better by itself, but byte aligned
+coding allows for further compression using a context model.
+Types 6 and 7 are the same as 1 and 2 respectively, except that the
+block is E8E9 transformed first.
+
+I<min1> selects the minimum match length, which must be at least 4 for
+types 1 and 5, or 1 for types 2 and 6. I<min2> selects a longer minimum
+match length to try first, or is 0 to skip this step. The block is encoded
+by testing 2^I<depth> locations indexed by a hash table of
+2^I<size> elements indexed by hashes of the next I<min2> and then I<min1>
+characters. If I<lookahead> is specified and greater than 0, then, the
+search is repeated I<lookahead> + 1 times to consider coding the next
+0 to I<lookahead> bytes as literals to find a longer match.
+
+If I<size> = I<blocksize> + 21, then matches are found using a suffix
+array instead of a hash table, scanning forward and backward 2^I<depth>
+elements to find the longest past match. I<min2> is ignored.
+A suffix array requires 4.5 x 2^I<blocksize> MiB memory. A hash table requires
+4 x 2^I<size> bytes memory. For example:
+
+    -method x6.1.4.0.5.27.1
+
+specifies 64 MiB blocks (6), variable length LZ77 without E8E9 (1), minimum
+match length 4, no secondary search, search depth 2^5 = 32 in each direction
+in the suffix array (27 = 6 + 21), and 1 byte lookahead.
+
+=item C<3>
+
+Specifies BWT (Burrows Wheeler Transform). The input block is sorted by suffix,
+which brings bytes with similar contexts together. It does not compress
+by itself, but makes the input suited to compression
+with a fast adapting low order context model.
+
+=item C<7>
+
+Specifies E8E9 followed by BWT.
+
+=back
+
+I<comp> specifies a component of a context model. If this section is
+empty, then no further compression is performed. Otherwise the block
+is compressed by an array of components. Each component takes a context
+and possibly the outputs of earlier components, and outputs
+a prediction, a probability that the next bit of input is a 1.
+The final prediction is used to arithmetic code the bit.
+Components normally allocate memory equal to the block size, or less for
+smaller contexts as needed. Components are as follows:
+
+=over
+
+=item c[.I<maxcount>[.I<offset>[.I<mask>]...]]
+
+Specifies a context model (CM), or indirect context model (ICM). A CM
+maps a context hash to a prediction by looking up the context in a table,
+and then adjusts the prediction to reduce the coding error by 1/count,
+where count is bounded by I<maxcount> x 4, and I<maxcount> is in 1..255.
+
+If I<maxcount> is 0, then specify an ICM. An ICM maps a context to
+a state representing two bit counts and the most recent bit. That state
+is mapped to a prediction and updated at a slow rate. An ICM adapts faster
+to changing statistics. A CM with a high count compresses stationary
+data better. The default is 0 (ICM).
+
+If I<maxcount> has the form 1000I<m> + n, then the effect is the same
+as I<maxcount> = n while reducing memory to 1/2^m of block size.
+
+The remaining arguments represent contexts, all of which are hashed
+together. If I<offset> is 1..255, then the block offset mod I<offset>
+is hashed in. If I<offset> is 1000..1255, then the distance to the last
+occurrance of I<offset> - 1000 is hashed in. For example, C<c0.1010>
+specifies an ICM taking the text column number (distance back to the last
+linefeed = 10) as context. The default is 0 (no context).
+
+Each I<mask> is ANDed with previous bytes. For example, C<c0.0.255.255.255>
+is an ICM with order 3 context. A value in 256..511 specifies a context
+of I<mask> - 256 hashed together with the byte aligned LZ77 parse state
+(whether a literal or match code is expected). For example,
+C<-method x6.2.12.0.8.27c0.0.511.255> specifes block size 2^6 MiB,
+byte aligned LZ77 (2), minimum match length 12, search depth 2^8,
+suffix array search (27 = 6 + 21), an ICM (c0), no offset context (0),
+and order 2 context plus LZ77 state (511.255).
+
+A mask greater than 1000 is shorthand for I<mask> - 1000 zeros. For example,
+the sparse context C<c0.0.255.1003.255> is equivalent to C<c0.0.255.0.0.0.255>.
+
+=item m[I<size>[.I<rate>]]
+
+Specifies a MIX (mixer). A MIX computes a weighted average of the predictions
+of all previous components. (The averaging is in the logistic domain:
+log(p / (1 - p))). The weights are then adjusted in proportion to I<rate>
+(0..255) to reduce the prediction error. A I<size> bit context can be
+used to select a set of weights to be used. The first 8 bits of context
+are the previously coded bits of the current byte. The default is C<m8.24>.
+A MIX with n inputs requires 4n x 2^I<size> bytes of memory.
+
+=item t[I<size>[.I<rate>]]
+
+Specifies a MIX2. A MIX2 is like a MIX except that it takes only the
+last 2 components as input, and its weights are constrained to add to 1.
+A MIX2 requires 4 x 2^I<size> bytes of memory. The default is C<t8.24>.
+
+=item s[I<size>[.I<mincount>[.I<maxcount>]]]
+
+Specifes a SSE (secondary symbol estimator). A SSE takes the last I<size>
+bits of context and the quantized and interpolated prediction of the
+previous component as input to output an adjusted prediction. The output
+is adjusted to reduce the prediction error by 1/count, where the count
+is constrained between I<mincount> and 4 x I<maxcount>. The default
+is C<s8.32.255>.
+
+=item iI<order>[.I<increment>]...
+
+Specifies an ISSE (indirect secondary symbol estimator) chain. An ISSE adjusts
+the predition of the previous component by mixing it with a constant 1.
+The pair of mixing weights is selected by a bit history state (like an ICM).
+The bit history is selected by a hash of the last I<order> bytes hashed
+together with the context of the previous component. Each I<increment>
+specifies an additional ISSE whose context order is increased
+by I<increment>. For example, C<ci1.1.2> specifies an order 0 ICM
+and order 1, 2, and 4 ISSEs.
+
+=item w[I<order>[.I<A>[.I<Z>[.I<cap>[.I<mul>[.I<mem>]]]]]]
+
+Specifies an ICM-ISSE chain of length I<order> taking as contexts the
+hashes of the last 1, 2, 3..., I<order> whole words. A word is defined
+as a sequence of characters in the range I<A> to I<A> + I<Z> - 1, ANDed
+with I<cap> before hashing. The hash H is updated by byte c as
+H := (H x I<mul> + c) (mod 2^(I<blocksize> + 24 - I<mem>)).
+Each component requires 2^(I<blocksize>
+- I<mem>) MiB. The default is C<w1.65.26.223.20.0>, which defines a
+word as 65..90 (A..Z). ANDing with 223 converts to upper case before
+hashing. I<mul> = 20 has the effect of shifting 2 bits left. For typical
+block sizes (28 or 30 bit H), the word hash depends on the last
+14 or 15 letters.
+
+=item a[I<mul>[.I<bmem>][.I<hmem>]]]
+
+Specifies a MATCH. A MATCH searches for a past matching context and predicts
+whatever bit came next. The search is done by updating a context hash H
+with byte c by H := H x I<mul> + c (mod 2^(I<blocksize> + 18 - I<hmem>)).
+A MATCH uses 2^(I<blocksize> - I<bmem>) MiB history buffer and a
+2^(I<blocksize> - I<hmem>) MiB hash table. The default is I<a24.0.0>.
+If I<blocksize> is 6, then H is 24 bits. I<mul> = 24 shifts 4 bits
+left, making the context hash effectively order 6.
+
+=back
+
+C<-method i>, creates or updates an index. An index stores
 a history of file names, dates, attributes, and fragment hashes, but
 no compressed data. It is like the index of a multi-part archive, but
 without the other parts. It is an error to update a regular archive
@@ -377,7 +562,7 @@ with C<-method i>, or an index with a method other than C<i>.
 =item -noattributes
 
 With C<add>, do not save Windows attributes or Unix/Linux permissions
-to the archive. With <extract>, ignore the saved values and extract using
+to the archive. With C<extract>, ignore the saved values and extract using
 default values. With C<list>, do not list or compare attributes.
 
 =item -nodelete
@@ -408,6 +593,9 @@ internal files with C<+>, and duplicates (C<list -summary>) with C<^>.
 Do not add, extract, or list any files unless they match
 at least one argument. The rules for matching wildcards are the
 same as C<-not>. The default is C<*> which matches everything.
+
+If a file matches an argument to both C<-only> and C<-not>, then
+C<-not> takes precedence.
 
 =item -summary [I<N>]
 
@@ -444,7 +632,7 @@ usage but run slower. Selecting more threads than cores does not help.
 With C<add> and C<list> rename external I<files> to respective
 internal I<names>. With C<extract>, rename internal I<files>
 to external I<names>. When I<files> is empty, prefix the extracted
-files with the first name> in I<names>, inserting C</> if needed
+files with the first name in I<names>, inserting C</> if needed
 and removing C<:> from drive letters. For example:
 
     zpaq extract archive file dir -to newfile newdir
@@ -496,11 +684,7 @@ not matter if any files are dated in the future).
 
 deletes backup.zpaq and creates a new archive.
 
-With comparing two archives, C<-until> rolls back both archives to
-the indicated date or version. If the version is negative, it means
-the number of versions from the end of the first archive.
-
-If an archive contains a mix of file compressed in journaling and
+If an archive contains a mix of files compressed in journaling and
 streaming format (C<-method s>...), then any streaming files are
 considered to be part of the previous journaling update.
 
@@ -508,10 +692,7 @@ Truncating and appending an encrypted archive with C<add -until>
 (even C<-until 0>)
 does not change the salt or keystream. Thus, it is possible for an attacker
 with the old and new versions to obtain the XOR of the trailing
-plaintexts without a password. If this is a concern, then the
-attack can be prevented by changing the keystream after updating using
-C<zpaq extract backup -to new_backup.zpaq -all -key -newkey>
-(same password is OK) and securely deleting C<backup.zpaq>.
+plaintexts without a password.
 
 =back
 
@@ -560,7 +741,7 @@ C<zip(1)>
 =head1 AUTHORS
 
 C<zpaq> and C<libzpaq> are written by Matt Mahoney and released to the
-public domain in 2015. C<libzpaq> contains
+public domain in 2015-2016. C<libzpaq> contains
 I<libdivsufsort-lite> v2.01, copyright (C) 2003-2008,
 Yuta Mori. It is licensed under the MIT license. See the source
 code for license text. The AES code is

@@ -1,4 +1,4 @@
-zpaq705.zip, Apr. 17, 2015.
+zpaq706.zip, Mar. 16, 2016
 
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees in Windows and *nix. It supports AES-256
@@ -13,13 +13,15 @@ versions of the program. Contents:
 
 File          Ver.   Description
 -----------   ----   -----------
-zpaq.exe      7.05   Archiver, 32 bit Windows.
-zpaq64.exe    7.05   Archiver, 64 bit Windows.
-zpaq.cpp      7.05   zpaq source code.
-zpaq.pod      7.03   zpaq documentation and man source.
-libzpaq.h     7.03   libzpaq API documentation and header.
-libzpaq.cpp   7.05   libzpaq API source code.
-Makefile             To compile in Linux: make
+zpaqxp.exe    7.06   Archiver, 32 bit Windows XP or later
+zpaq.exe      7.06   Archiver, 32 bit Windows Vista or later.
+zpaq64.exe    7.06   Archiver, 64 bit Windows Vista or later
+zpaq.cpp      7.06   zpaq source code.
+zpaq.pod      7.06   zpaq man page in pod2man format.
+libzpaq.h     7.06   libzpaq API documentation and header.
+libzpaq.cpp   7.06   libzpaq API source code.
+Makefile             To compile in Linux: make {install|check|clean}
+COPYING              Unlicense.
 
 All versions of this software can be found at
 http://mattmahoney.net/dc/zpaq.html
@@ -29,11 +31,13 @@ Code from divsufsort.c is embedded in libzpaq.cpp.
 divsufsort.c is (C) 2003-2008 Yuta Mori, MIT license (see source code).
 It is also available from libdivsufsort-lite 2.0 from
 http://code.google.com/p/libdivsufsort/
-All remaining code is public domain.
+All remaining code is public domain. See COPYING.
 
-zpaq.exe can run under either 32 or 64 bit Windows. zpaq64.exe runs only
-under 64 bit Windows. The 32 bit version defaults to using at most
-2 cores (you can select more) and can only use 2 GB memory.
+zpaq.exe can run under either 32 or 64 bit Windows Vista or later
+(7, 8, 8.1, 10). zpaq64.exe runs only under 64 bit Windows Vista or later.
+The 32 bit versions default to using at most 2 cores (you can select more)
+and can only use 2 GB memory. zpaqxp.exe will run under all Windows
+versions XP or later but will not update alternate streams (visible by dir/r).
 
 zpaq is a command line program. For a brief description of the commands,
 type "zpaq" with no arguments. See zpaq.pod for details.
@@ -52,7 +56,8 @@ zpaq for Windows was compiled with MinGW g++ 4.8.1 (MinGW-W64 project,
 rev5, sjlj, Windows threads) as follows:
 
   g++ -O3 -s -m64 -static zpaq.cpp libzpaq.cpp -o zpaq64
-  g++ -O3 -s -m32 -static -DXP zpaq.cpp libzpaq.cpp -o zpaq
+  g++ -O3 -s -m32 -static zpaq.cpp libzpaq.cpp -o zpaq
+  g++ -O3 -s -m32 -static -DXP zpaq.cpp libzpaq.cpp -o zpaqxp
 
 To compile using Visual Studio:
 (tested with ver. 10.0 (2010), cl version 16.00.30319.01 for 80x86)
@@ -66,7 +71,7 @@ To generate a man page in Linux or Cygwin:
 Options have the following meanings:
 
 -Dunix   = select Unix or Linux target in zpaq and libzpaq. The default is
-           Windows. Some Linux compilers automatically define unix.
+           Windows. Most Linux compilers automatically define unix.
 -DXP     = turn off features not supported in Windows XP (alternate streams).
 -DDEBUG  = turn on run time checks.
 -DNOJIT  = turn off run time optimization of ZPAQL to 32 or 64 bit x86

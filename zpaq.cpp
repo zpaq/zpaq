@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.05"
+#define ZPAQ_VERSION "7.06"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -567,21 +567,6 @@ void makepath(string path, int64_t date=0, int64_t attr=0) {
 #endif
 }
 
-// abstract Writer with tell()
-class CounterBase: public libzpaq::Writer {
-public:
-  virtual int64_t tell() const = 0;
-};
-
-// Count bytes written and discard them
-struct Counter: public CounterBase {
-  int64_t pos;  // count of written bytes
-  Counter(): pos(0) {}
-  void put(int c) {++pos;}
-  void write(const char* bufp, int size) {pos+=size;}
-  int64_t tell() const {return pos;}
-};
-
 // Base class of InputFile and OutputFile (OS independent)
 class File {
 protected:
@@ -656,7 +641,7 @@ public:
   ~InputFile() {close();}
 };
 
-class OutputFile: public File, public CounterBase {
+class OutputFile: public File, public libzpaq::Writer {
   FILE* out;
   string filename;
 public:
@@ -835,7 +820,7 @@ public:
   ~InputFile() {close();}
 };
 
-class OutputFile: public File, public CounterBase {
+class OutputFile: public File, public libzpaq::Writer {
   HANDLE out;               // output file handle
   std::wstring filename;
 public:
@@ -990,7 +975,7 @@ void OutputFile::write(const char* bufp, int sz) {
 /////////////////////////////// Archive ///////////////////////////////
 
 // An Archive is a multi-part file that supports encrypted input
-class Archive: public libzpaq::Reader, public CounterBase {
+class Archive: public libzpaq::Reader, public libzpaq::Writer {
   libzpaq::AES_CTR* aes;  // NULL if not encrypted
   struct FE {  // File element for multi-part archives
     string fn;    // file name
@@ -1001,7 +986,7 @@ class Archive: public libzpaq::Reader, public CounterBase {
   vector<FE> files;  // list of parts. only last part is writable.
   int fi;  // current file in files
   int64_t off;  // total offset over all files
-  int mode;     // 'r' or 'w' for reading or writing or 0 if closed
+  int mode;     // 'r', 'w', 't' for reading, writing, test, or 0 if closed
   InputFile in; // currently open input file
   OutputFile out;  // currently open output file
 public:
@@ -1021,6 +1006,7 @@ public:
   // non-existing file, else to filename. If newsize>=0 then truncate
   // the output to newsize bytes. If password and offset>0 then encrypt
   // output as if previous parts had size offset and salt salt.
+  // Test mode 't' is like 'w' but without writing to disk.
   bool open(const char* filename, const char* password=0, int mode_='r',
             int64_t newsize=-1, int64_t offset=0, const char* salt=0);
 
@@ -1061,26 +1047,33 @@ public:
   // Write one byte
   void put(int c) {
     assert(fi==size(files)-1);
-    assert(fi>0 || out.tell()==off);
-    assert(fi==0 || out.tell()+files[fi-1].end==off);
-    assert(mode=='w');
-    out.put(c);
+    if (mode=='w') {
+      assert(fi>0 || out.tell()==off);
+      assert(fi==0 || out.tell()+files[fi-1].end==off);
+      assert(mode=='w');
+      out.put(c);
+    }
     ++off;
   }
 
   // Write buf[0..n-1]
   void write(const char* buf, int n) {
     assert(fi==size(files)-1);
-    assert(fi>0 || out.tell()==off);
-    assert(fi==0 || out.tell()+files[fi-1].end==off);
-    assert(mode=='w');
-    out.write(buf, n);
+    if (mode=='w') {
+      assert(fi>0 || out.tell()==off);
+      assert(fi==0 || out.tell()+files[fi-1].end==off);
+      out.write(buf, n);
+    }
     off+=n;
   }
 
   // Close any open part
   void close() {
-    if (out.isopen()) out.close();
+    if (out.isopen()) {
+      int64_t sz=out.tell();
+      out.close();
+      if (sz==0 && fi+1u==files.size()) delete_file(files[fi].fn.c_str());
+    }
     if (in.isopen()) in.close();
     if (aes) {
       delete aes;
@@ -1091,12 +1084,18 @@ public:
     off=0;
     mode=0;
   }
+
+  // Seek to newsize and truncate. Must be in the last part open for writing.
+  void truncate(int64_t newsize) {
+    seek(newsize, SEEK_SET);
+    if (mode=='w' && out.isopen()) out.truncate(out.tell());
+  }
 };
 
 bool Archive::open(const char* filename, const char* password, int mode_,
                    int64_t newsize, int64_t offset, const char* salt) {
   assert(filename);
-  assert(mode_=='r' || mode_=='w');
+  assert(mode_=='r' || mode_=='w' || mode_=='t');
   mode=mode_;
 
   // Read part files and get sizes. Get salt from the first part.
@@ -1148,10 +1147,12 @@ bool Archive::open(const char* filename, const char* password, int mode_,
     while (files.size()>0 && files.back().end>newsize) {
       if (newsize==0 || (files.size()>1 &&
           files[files.size()-2].end>=newsize)) {
-        printUTF8(files.back().fn.c_str());
-        printf(" deleted.\n");
-        next=files.back().fn.c_str();
-        delete_file(files.back().fn.c_str());
+        if (mode=='w') {
+          printUTF8(files.back().fn.c_str());
+          printf(" deleted.\n");
+          next=files.back().fn.c_str();
+          delete_file(files.back().fn.c_str());
+        }
         files.pop_back();
       }
       else if (files.size()>0) {
@@ -1159,12 +1160,14 @@ bool Archive::open(const char* filename, const char* password, int mode_,
           ioerr("cannot open archive part to truncate");
         int64_t newlen=newsize;
         if (files.size()>=2) newlen-=files[files.size()-2].end;
-        printUTF8(files.back().fn.c_str());
-        printf(" truncated from %1.0f to %1.0f bytes.\n",
-          out.tell()+0.0, newlen+0.0);
         assert(newlen>=0);
-        out.truncate(newlen);
-        out.close();
+        if (mode=='w') {
+          printUTF8(files.back().fn.c_str());
+          printf(" truncated from %1.0f to %1.0f bytes.\n",
+            out.tell()+0.0, newlen+0.0);
+          out.truncate(newlen);
+          out.close();
+        }
         files.back().end=newsize;
       }
     }
@@ -1181,29 +1184,36 @@ bool Archive::open(const char* filename, const char* password, int mode_,
   if (password && !aes) {
     assert(fi==0);
     assert(files.size()==1);
-    if (!out.open(files[fi].fn.c_str()))
-      error("cannot write salt to archive");
-    out.seek(0, SEEK_SET);
+    if (mode=='w') {
+      if (!out.open(files[fi].fn.c_str()))
+        error("cannot write salt to archive");
+      out.seek(0, SEEK_SET);
+    }
     char key[32]={0};
     char slt[32]={0};
     if (salt) memcpy(slt, salt, 32);
     else libzpaq::random(slt, 32);
     libzpaq::stretchKey(key, password, slt);
     aes=new libzpaq::AES_CTR(key, 32, slt);
-    out.write(slt, 32);
-    files[fi].end=out.tell();  // 32
-    out.close();
+    if (mode=='w') {
+      out.write(slt, 32);
+      files[fi].end=out.tell();  // 32
+      out.close();
+    }
+    else files[fi].end=32;
   }
 
   // Open for output
   assert(fi+1==size(files));
   assert(fi>=0);
-  makepath(files[fi].fn.c_str());
-  if (!out.open(files[fi].fn.c_str(), aes, fi>0 ? files[fi-1].end : 0))
-    error("cannot open archive for output");
+  if (mode=='w') {
+    makepath(files[fi].fn.c_str());
+    if (!out.open(files[fi].fn.c_str(), aes, fi>0 ? files[fi-1].end : 0))
+      error("cannot open archive for output");
+  }
   off=files.back().end;
-  assert(fi>0 || files[fi].end==out.tell());
-  assert(fi==0 || files[fi].end==out.tell()+files[fi-1].end);
+  assert(mode=='t' || fi>0 || files[fi].end==out.tell());
+  assert(mode=='t' || fi==0 || files[fi].end==out.tell()+files[fi-1].end);
   return true;
 }
 
@@ -1230,7 +1240,7 @@ void Archive::seek(int64_t p, int whence) {
     p=off;
     if (files.size()>=2) p-=files[files.size()-2].end;
     if (p<0) error("seek before start of output");
-    out.seek(p, SEEK_SET);
+    if (mode=='w') out.seek(p, SEEK_SET);
   }
 }
 
@@ -1279,10 +1289,13 @@ int numberOfProcessors() {
 
 ////////////////////////////// misc ///////////////////////////////////
 
-// For libzpaq output to a string
+// For libzpaq output to a string less than 64K chars
 struct StringWriter: public libzpaq::Writer {
   string s;
-  void put(int c) {s+=char(c);}
+  void put(int c) {
+    if (s.size()>=65535) error("string too long");
+    s+=char(c);
+  }
 };
 
 // In Windows convert upper case to lower case.
@@ -1321,15 +1334,15 @@ bool ispath(const char* a, const char* b) {
 }
 
 // Read 4 byte little-endian int and advance s
-int btoi(const char* &s) {
+unsigned btoi(const char* &s) {
   s+=4;
   return (s[-4]&255)|((s[-3]&255)<<8)|((s[-2]&255)<<16)|((s[-1]&255)<<24);
 }
 
 // Read 8 byte little-endian int and advance s
 int64_t btol(const char* &s) {
-  int64_t r=unsigned(btoi(s));
-  return r+(int64_t(btoi(s))<<32);
+  uint64_t r=btoi(s);
+  return r+(uint64_t(btoi(s))<<32);
 }
 
 /////////////////////////// read_password ////////////////////////////
@@ -1441,7 +1454,7 @@ struct DT {
   int64_t date;          // decimal YYYYMMDDHHMMSS (UT) or 0 if deleted
   int64_t size;          // size or -1 if unknown
   int64_t attr;          // first 8 attribute bytes
-  int64_t data;          // sort key or frags written
+  int64_t data;          // sort key or frags written. -1 = do not write
   vector<unsigned> ptr;  // fragment list
   DT(): date(0), size(0), attr(0), data(0) {}
 };
@@ -1450,21 +1463,19 @@ typedef map<string, DT> DTMap;
 // list of blocks to extract
 struct Block {
   int64_t offset;       // location in archive
-  int64_t usize;        // uncompressed size, -1 if unknown
+  int64_t usize;        // uncompressed size, -1 if unknown (streaming)
   vector<DTMap::iterator> files;  // list of files pointing here
   unsigned start;       // index in ht of first fragment
-  int size;             // number of fragments to decompress
-  int extracted;        // number of fragments decompressed OK
-  bool streaming;       // must decompress sequentially?
+  unsigned size;        // number of fragments to decompress
+  unsigned extracted;   // number of fragments decompressed OK
   enum {READY, WORKING, GOOD, BAD} state;
-  Block(unsigned s, int64_t o): offset(o), usize(0), start(s),
-      size(0), extracted(0), streaming(false), state(READY) {}
+  Block(unsigned s, int64_t o): offset(o), usize(-1), start(s),
+      size(0), extracted(0), state(READY) {}
 };
 
 // Version info
 struct VER {
   int64_t date;          // 0 if not JIDAC
-  int64_t usize;         // uncompressed size of files
   int64_t offset;        // start of transaction
   int64_t csize;         // size of compressed data, -1 = no index
   int updates;           // file updates
@@ -1565,9 +1576,9 @@ void Jidac::usage() {
 "  -force          Add files even if the date is unchanged.\n"
 "  -nodelete       Do not mark unmatched files as deleted.\n"
 "  -method L       Compress level L (0..5 = faster..better, default 1).\n"
+#ifdef DEBUG
 "          LB      Use 2^B MB blocks (0..11, default 04, 14, 26..56).\n"
 "          i       Index (file metadata only).\n"
-#ifdef DEBUG
 "          {xs}B[,N2]...[{ciawmst}[N1[,N2]...]]...  Advanced:\n"
 "  x=journaling (default). s=streaming (no dedupe).\n"
 "    N2: 0=no pre/post. 1,2=packed,byte LZ77. 3=BWT. 4..7=0..3 with E8E9.\n"
@@ -1585,8 +1596,8 @@ void Jidac::usage() {
 "  m8,24: MIX all previous models, N1 context bits, learning rate N2.\n"
 "  s8,32,255: SSE last model. N1 context bits, count range N2..N3.\n"
 "  t8,24: MIX2 last 2 models, N1 context bits, learning rate N2.\n"
-#endif
 "  -fragment N     Set average dedupe fragment size = 2^N KiB (default: 6).\n"
+#endif
 "extract options:\n"
 "  -force          Overwrite existing files (default: skip).\n"
 "list (compare files) options:\n"
@@ -1893,32 +1904,6 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
           }
           comment.s="";
           d.readComment(&comment);
-          int64_t usize=0;  // read uncompressed size from comment or -1
-          int64_t fdate=0;  // read date from filename or -1
-          int64_t fattr=0;  // read attributes from comment as wN or uN
-          int64_t num=0;    // read fragment ID from filename
-          const char* p=comment.s.c_str();
-          for (; isdigit(*p); ++p) usize=usize*10+*p-'0';  // read size
-          if (p==comment.s.c_str()) usize=-1;  // size not found
-          for (; *p && fdate<19000000000000LL; ++p)  // read date
-            if (isdigit(*p)) fdate=fdate*10+*p-'0';
-          if (fdate<19000000000000LL || fdate>=30000000000000LL) fdate=-1;
-
-          // Read the comment attribute wN or uN where N is a number
-          int attrchar=0;
-          for (; true; ++p) {
-            if (*p=='u' || *p=='w') {
-              attrchar=*p;
-              fattr=0;
-            }
-            else if (isdigit(*p) && (attrchar=='u' || attrchar=='w'))
-              fattr=fattr*10+*p-'0';
-            else if (attrchar) {
-              fattr=fattr*256+attrchar;
-              attrchar=0;
-            }
-            if (!*p) break;
-          }
 
           // Test for JIDAC format. Filename is jDC<fdate>[cdhi]<num>
           // and comment ends with " jDC\x01". Skip d (data) blocks.
@@ -1926,24 +1911,28 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
               && comment.s.substr(comment.s.size()-4)=="jDC\x01") {
             if (filename.s.size()!=28 || filename.s.substr(0, 3)!="jDC")
               error("bad journaling block name");
-            if (usize<0) error("missing journaling block size");
             if (skip) error("mixed journaling and streaming block");
 
-            // Read the date and number in the filename
-            fdate=0;
+            // Read uncompressed size from comment
+            int64_t usize=0;
             unsigned i;
+            for (i=0; i<comment.s.size() && isdigit(comment.s[i]); ++i) {
+              usize=usize*10+comment.s[i]-'0';
+              if (usize>0xffffffff) error("journaling block too big");
+            }
+
+            // Read the date and number in the filename
+            int64_t fdate=0, num=0;
             for (i=3; i<17 && isdigit(filename.s[i]); ++i)
               fdate=fdate*10+filename.s[i]-'0';
             if (i!=17 || fdate<19000000000000LL || fdate>=30000000000000LL)
               error("bad date");
-            num=0;
             for (i=18; i<28 && isdigit(filename.s[i]); ++i)
               num=num*10+filename.s[i]-'0';
             if (i!=28 || num>0xffffffff) error("bad fragment");
 
             // Decompress the block.
             os.resize(0);
-            if (usize>0xffffffff) error("block too big");
             os.setLimit(usize);
             d.setOutput(&os);
             libzpaq::SHA1 sha1;
@@ -1958,7 +1947,8 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
               if (sha1result[0] && memcmp(sha1result+1, sha1.result(), 20))
                 error("bad checksum");
             }
-            else d.readSegmentEnd();
+            else
+              d.readSegmentEnd();
 
             // Transaction header (type c).
             // If in the future then stop here, else read 8 byte data size
@@ -2021,7 +2011,9 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
                 memcpy(ht[num+i].sha1, s, 20);
                 s+=20;
                 assert(block.size()>0);
-                block.back().usize+=(ht[num+i].usize=btoi(s))+4;
+                unsigned f=btoi(s);
+                if (f>0x7fffffff) error("fragment too big");
+                block.back().usize+=(ht[num+i].usize=f)+4u;
               }
               data_offset+=bsize;
             }
@@ -2040,22 +2032,22 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
                 if (dtr.date) ++ver.back().updates;
                 else ++ver.back().deletes;
                 const int64_t len=strlen(s);
+                if (len>65535) error("filename too long");
                 string fn=s;  // filename renamed
                 if (all) fn=append_path(itos(ver.size()-1, all), fn);
                 const bool issel=isselected(fn.c_str(), renamed);
                 s+=len+1;  // skip filename
                 if (s>end) error("filename too long");
-                int64_t na=0, ni=0;
                 if (dtr.date) {
                   if (s+4>end) error("missing attr");
-                  na=btoi(s);  // attr bytes
-                  if (s+na>end) error("attr too long");
+                  unsigned na=btoi(s);  // attr bytes
+                  if (s+na>end || na>65535) error("attr too long");
                   for (unsigned i=0; i<na; ++i, ++s)  // read attr
                     if (i<8) dtr.attr+=int64_t(*s&255)<<(i*8);
                   if (noattributes) dtr.attr=0;
                   if (s+4>end) error("missing ptr");
-                  ni=btoi(s);  // ptr list size
-                  if (s+ni*4>end) error("ptr list too long");
+                  unsigned ni=btoi(s);  // ptr list size
+                  if (ni>(end-s)/4u) error("ptr list too long");
                   if (issel) dtr.ptr.resize(ni);
                   for (unsigned i=0; i<ni; ++i) {  // read ptr
                     const unsigned j=btoi(s);
@@ -2068,6 +2060,7 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
             else {
               printf("Skipping %s %s\n",
                   filename.s.c_str(), comment.s.c_str());
+              error("Unexpected journaling block");
             }
           }  // end if journaling
 
@@ -2094,20 +2087,18 @@ int64_t Jidac::read_archive(int *errors, const char* arc) {
             if (isselected(fn.c_str(), renamed)) {
               DT& dtr=dt[fn];
               if (filename.s.size()>0 || first) {
-                dtr.date=fdate;
-                if (dtr.date==0) dtr.date=date;
-                dtr.attr=noattributes?0:fattr;
+                dtr.date=date;
+                dtr.attr=0;
                 dtr.ptr.resize(0);
                 ++ver.back().updates;
               }
               dtr.ptr.push_back(size(ht));
             }
-            if (usize>=0) ver.back().usize+=usize;
-            if (segs==0) block.push_back(Block(ht.size(), block_offset));
-            if (usize<0) block.back().usize=-1;
-            else block.back().usize+=usize;
-            ht.push_back(HT(sha1result+1, usize>0x7fffffff ? -1 : usize));
             assert(size(ver)>0);
+            if (segs==0 || block.size()==0)
+              block.push_back(Block(ht.size(), block_offset));
+            assert(block.size()>0);
+            ht.push_back(HT(sha1result+1, -1));
           }  // end else streaming
           ++segs;
           filename.s="";
@@ -2206,7 +2197,7 @@ void Jidac::scandir(string filename) {
     // Traverse directory
     if (S_ISDIR(sb.st_mode)) {
       addfile(filename=="/" ? "/" : filename+"/", decimal_time(sb.st_mtime),
-              0, 'u'+(sb.st_mode<<8));
+              0, 'u'+(int64_t(sb.st_mode)<<8));
       DIR* dirp=opendir(filename.c_str());
       if (dirp) {
         for (dirent* dp=readdir(dirp); dp; dp=readdir(dirp)) {
@@ -2328,10 +2319,9 @@ struct CJ {
   string filename;       // to write in filename field
   string comment;        // if "" use default
   string method;         // compression level or "" to mark end of data
-  bool dosha1;           // save hash?
   Semaphore full;        // 1 if in is FULL of data ready to compress
   Semaphore compressed;  // 1 if out contains COMPRESSED data
-  CJ(): state(EMPTY), dosha1(true) {}
+  CJ(): state(EMPTY) {}
 };
 
 // Instructions to a compression job
@@ -2372,13 +2362,13 @@ public:
     delete[] q;
   }      
   void write(StringBuffer& s, const char* filename, string method,
-             const char* comment=0, bool dosha1=true);
+             const char* comment=0);
   vector<int> csize;  // compressed block sizes
 };
 
 // Write s at the back of the queue. Signal end of input with method=""
 void CompressJob::write(StringBuffer& s, const char* fn, string method,
-                        const char* comment, bool dosha1) {
+                        const char* comment) {
   for (unsigned k=(method=="")?qsize:1; k>0; --k) {
     empty.wait();
     lock(mutex);
@@ -2388,7 +2378,6 @@ void CompressJob::write(StringBuffer& s, const char* fn, string method,
         q[j].filename=fn?fn:"";
         q[j].comment=comment?comment:"jDC\x01";
         q[j].method=method;
-        q[j].dosha1=dosha1;
         q[j].in.resize(0);
         q[j].in.swap(s);
         q[j].state=CJ::FULL;
@@ -2432,12 +2421,13 @@ ThreadReturn compressThread(void* arg) {
       release(job.mutex);
       job.compressors.wait();
       libzpaq::compressBlock(&cj.in, &cj.out, cj.method.c_str(),
-          cj.filename.c_str(), cj.comment=="" ? 0 : cj.comment.c_str(),
-          cj.dosha1);
+          cj.filename.c_str(), cj.comment=="" ? 0 : cj.comment.c_str());
       cj.in.resize(0);
+      lock(job.mutex);
       cj.state=CJ::COMPRESSED;
       cj.compressed.signal();
       job.compressors.signal();
+      release(job.mutex);
     }
   }
   catch (std::exception& e) {
@@ -2575,7 +2565,7 @@ bool compareFilename(DTMap::iterator ap, DTMap::iterator bp) {
 
 // For writing to two archives at once
 struct WriterPair: public libzpaq::Writer {
-  CounterBase *a, *b;
+  Archive *a, *b;
   void put(int c) {
     if (a) a->put(c);
     if (b) b->put(c);
@@ -2596,8 +2586,10 @@ int Jidac::add() {
   int64_t index_pos=0;   // end of index
   const string part1=subpart(archive, 1);
   const string part0=subpart(archive, 0);
-  if (exists(part1)) {
-    if (part0!=part1 && exists(part0)) {  // compare archive with index
+  const bool part0exists=exists(part0);
+  const bool part1exists=exists(part1);
+  if (part1exists) {
+    if (part0!=part1 && part0exists) {  // compare archive with index
       Jidac jidac(*this);
       header_pos=read_archive(&errors);
       index_pos=jidac.read_archive(&errors, part0.c_str());
@@ -2617,7 +2609,7 @@ int Jidac::add() {
       index_pos=header_pos-dhsize;
     }
   }
-  else if (exists(part0)) {  // read index of remote archive
+  else if (part0exists) {  // read index of remote archive
     index_pos=read_archive(&errors, part0.c_str());
     if (dcsize!=0) error("index contains data");
     dcsize=dhsize;  // assumed
@@ -2639,7 +2631,9 @@ int Jidac::add() {
 
   // Set block and fragment sizes
   if (fragment<0) fragment=0;
-  const unsigned blocksize=(1u<<(20+atoi(method.c_str()+1)))-4096;
+  const int log_blocksize=20+atoi(method.c_str()+1);
+  if (log_blocksize<20 || log_blocksize>31) error("blocksize must be 0..11");
+  const unsigned blocksize=(1u<<log_blocksize)-4096;
   const unsigned MAX_FRAGMENT=fragment>19 || (8128u<<fragment)>blocksize-12
       ? blocksize-12 : 8128u<<fragment;
   const unsigned MIN_FRAGMENT=fragment>25 || (64u<<fragment)>MAX_FRAGMENT
@@ -2648,6 +2642,16 @@ int Jidac::add() {
   // Don't mix archives and indexes
   if (method[0]=='i' && dcsize>0) error("archive is not an index");
   if (method[0]!='i' && dcsize!=dhsize) error("archive is an index");
+
+  // Don't mix streaming and journaling
+  for (unsigned i=0; i<block.size(); ++i) {
+    if (method[0]=='s') {
+      if (block[i].usize>=0)
+        error("cannot update journaling archive in streaming format");
+    }
+    else if (block[i].usize<0)
+      error("cannot update streaming archive in journaling format");
+  }
 
   // Make list of files to add or delete
   for (int i=0; i<size(files); ++i)
@@ -2685,10 +2689,14 @@ int Jidac::add() {
   }
   std::sort(vf.begin(), vf.end(), compareFilename);
 
+  // Test if archive appeared or disappeared while scanning files
+  if (exists(part0)!=part0exists || exists(part1)!=part1exists)
+    error("Access to archive is intermittent");
+
   // Open index to append
   WriterPair wp;  // wp.a points to output, wp.b to index
   Archive index;
-  if (!dotest && part0!=part1 && (exists(part0) || !exists(part1))) {
+  if (part0!=part1 && (part0exists || !part1exists)) {
     if (method[0]=='s')
       error("Cannot update indexed archive in streaming mode");
     if (!index.open(part0.c_str(), password, 'w', index_pos))
@@ -2699,10 +2707,8 @@ int Jidac::add() {
 
   // Open archive to append
   Archive out;
-  Counter counter;
-  if (archive=="" || dotest)
-    wp.a=&counter;
-  else if (part0!=part1 && exists(part0) && !exists(part1)) {  // remote
+  char mode=(archive=="" || dotest) ? 't' : 'w';
+  if (part0!=part1 && part0exists && !part1exists) {  // remote
     char salt[32]={0};
     if (password) {  // get salt from index
       index.close();
@@ -2720,13 +2726,13 @@ int Jidac::add() {
     printf(" dated %s assuming %1.0f prior bytes\n",
          dateToString(date).c_str(), header_pos+0.0);
     if (exists(part)) error("output archive part exists");
-    if (!out.open(part.c_str(), password, 'w', header_pos, header_pos, salt))
+    if (!out.open(part.c_str(), password, mode, header_pos, header_pos, salt))
       ioerr("Archive open failed");
     header_pos=out.tell();
     wp.a=&out;  
   }
   else {
-    if (!out.open(archive.c_str(), password, 'w', header_pos))
+    if (!out.open(archive.c_str(), password, mode, header_pos))
       ioerr("Archive open failed");
     header_pos=out.tell();
     wp.a=&out;
@@ -2735,7 +2741,6 @@ int Jidac::add() {
     wp.b=wp.a;
     wp.a=0;
   }
-  counter.pos=header_pos;
 
   // Start compress and write jobs
   vector<ThreadID> tid(threads*2-1);
@@ -2799,7 +2804,7 @@ int Jidac::add() {
     join(wid);
 
     // Done
-    const int64_t outsize=out.isopen() ? out.tell() : counter.pos;
+    const int64_t outsize=out.tell();
     printf("%1.0f + (%1.0f -> %1.0f) = %1.0f\n",
         double(header_pos),
         double(total_size),
@@ -2825,7 +2830,7 @@ int Jidac::add() {
   // reserve space for the header block
   const unsigned htsize=ht.size();  // fragments at start of update
   writeJidacHeader(&wp, date, -1, htsize);
-  const int64_t header_end=out.isopen() ? out.tell() : counter.pos;
+  const int64_t header_end=out.tell();
 
   // Compress until end of last file
   assert(method!="");
@@ -3046,7 +3051,7 @@ int Jidac::add() {
   join(wid);
 
   // Append compressed fragment tables to archive
-  int64_t cdatasize=(out.isopen() ? out.tell() : counter.pos)-header_end;
+  int64_t cdatasize=out.tell()-header_end;
   StringBuffer is;
   assert(blocklist.size()==job.csize.size());
   blocklist.push_back(ht.size());
@@ -3138,10 +3143,13 @@ int Jidac::add() {
 
   // Back up and write the header
   int64_t archive_end=0;
-  if (!out.isopen())
-    archive_end=counter.tell();
-  else {
+  archive_end=out.tell();
+  if (added+removed==0 && archive_end-header_pos==104) {  // no update
+    out.truncate(header_pos);
+    if (wp.b) index.truncate(index_pos);
     archive_end=out.tell();
+  }
+  else {
     out.seek(header_pos, SEEK_SET);
     if (wp.b) index.seek(index_pos, SEEK_SET);
     writeJidacHeader(wp.a, date, cdatasize, htsize);
@@ -3246,22 +3254,20 @@ ThreadReturn decompressThread(void* arg) {
   if (!in.open(job.jd.archive.c_str(), job.jd.password)) return 0;
   StringBuffer out;
 
-  // Look for next READY job. Only job 1 can take streaming jobs and
-  // must do so in order.
+  // Look for next READY job.
   int next=0;  // current job
   while (true) {
     lock(job.mutex);
     for (int i=0; i<=size(job.jd.block); ++i) {
       int k=i+next;
       if (k>=size(job.jd.block)) k-=size(job.jd.block);
-      if (i==size(job.jd.block) || (jobNumber==1 && k<i)) {  // no more jobs?
+      if (i==size(job.jd.block)) {  // no more jobs?
         release(job.mutex);
         in.close();
         return 0;
       }
       Block& b=job.jd.block[k];
-      if (b.state==Block::READY && b.size>0
-          && (jobNumber==1 || !b.streaming)) {
+      if (b.state==Block::READY && b.size>0 && b.usize>=0) {
         b.state=Block::WORKING;
         release(job.mutex);
         next=k;
@@ -3271,15 +3277,10 @@ ThreadReturn decompressThread(void* arg) {
     Block& b=job.jd.block[next];
 
     // Get uncompressed size of block
-    const unsigned MAX_SIZE=0xffffffff;
     unsigned output_size=0;  // minimum size to decompress
     assert(b.start>0);
-    for (int j=0; j<b.size; ++j) {
+    for (unsigned j=0; j<b.size; ++j) {
       assert(b.start+j<job.jd.ht.size());
-      if (job.jd.ht[b.start+j].usize<0) {
-        output_size=MAX_SIZE;
-        break;
-      }
       assert(job.jd.ht[b.start+j].usize>=0);
       output_size+=job.jd.ht[b.start+j].usize;
     }
@@ -3295,13 +3296,12 @@ ThreadReturn decompressThread(void* arg) {
       libzpaq::Decompresser d;
       d.setInput(&in);
       out.resize(0);
-      out.setLimit(MAX_SIZE);
-      if (b.usize>=0 && b.usize<MAX_SIZE) out.setLimit(b.usize);
+      assert(b.usize>=0);
+      assert(b.usize<=0xffffffffu);
+      out.setLimit(b.usize);
       d.setOutput(&out);
       if (!d.findBlock(&mem)) error("archive block not found");
       if (mem>job.maxMemory) job.maxMemory=mem;
-      unsigned oldsize=0;
-      unsigned j=b.start;
       while (d.findFilename()) {
         d.readComment();
         while (out.size()<output_size && d.decompress(1<<14));
@@ -3311,23 +3311,10 @@ ThreadReturn decompressThread(void* arg) {
           printf("[%d..%d] -> %1.0f\n", b.start, b.start+b.size-1,
               out.size()+0.0);
         release(job.mutex);
-
-        // fill in missing streaming fragment sizes
-        if (j>0 && j<job.jd.ht.size() && job.jd.ht[j].usize<0) {
-          assert(jobNumber==1);
-          assert(b.streaming);
-          lock(job.mutex);
-          job.jd.ht[j].usize=out.size()-oldsize;
-          printf("Job 1: Fragment %d size adjusted to %u\n",
-              j, job.jd.ht[j].usize);
-          release(job.mutex);
-          oldsize=out.size();
-        }
-        ++j;
         if (out.size()>=output_size) break;
         d.readSegmentEnd();
       }
-      if (output_size!=MAX_SIZE && out.size()<output_size) {
+      if (out.size()<output_size) {
         fflush(stdout);
         fprintf(stderr, "output [%d..%d] %d of %d bytes\n",
              b.start, b.start+b.size-1, size(out), output_size);
@@ -3335,26 +3322,26 @@ ThreadReturn decompressThread(void* arg) {
       }
 
       // Verify fragment checksums if present
-      int64_t q=0;  // fragment start
+      uint64_t q=0;  // fragment start
       libzpaq::SHA1 sha1;
       assert(b.extracted==0);
       for (unsigned j=b.start; j<b.start+b.size; ++j) {
+        assert(j>0 && j<job.jd.ht.size());
+        assert(job.jd.ht[j].usize>=0);
+        assert(job.jd.ht[j].usize<=0x7fffffff);
+        if (q+job.jd.ht[j].usize>out.size())
+          error("Incomplete decompression");
         char sha1result[20];
         sha1.write(out.c_str()+q, job.jd.ht[j].usize);
         memcpy(sha1result, sha1.result(), 20);
         q+=job.jd.ht[j].usize;
         if (memcmp(sha1result, job.jd.ht[j].sha1, 20)) {
-          for (int k=0; k<20; ++k) {
-            if (job.jd.ht[j].sha1[k]) {  // all zeros is OK
-              lock(job.mutex);
-              fflush(stdout);
-              fprintf(stderr, 
-                     "Job %d: fragment %d size %d checksum failed\n",
-                     jobNumber, j, job.jd.ht[j].usize);
-              release(job.mutex);
-              error("bad checksum");
-            }
-          }
+          lock(job.mutex);
+          fflush(stdout);
+          fprintf(stderr, "Job %d: fragment %u size %d checksum failed\n",
+                 jobNumber, j, job.jd.ht[j].usize);
+          release(job.mutex);
+          error("bad checksum");
         }
         ++b.extracted;
       }
@@ -3367,6 +3354,7 @@ ThreadReturn decompressThread(void* arg) {
       fprintf(stderr, "Job %d killed: %s\n", jobNumber, e.what());
       b.state=Block::READY;
       b.extracted=0;
+      out.resize(0);
       release(job.mutex);
       in.close();
       return 0;
@@ -3376,7 +3364,7 @@ ThreadReturn decompressThread(void* arg) {
     catch (std::exception& e) {
       lock(job.mutex);
       fflush(stdout);
-      fprintf(stderr, "Job %d: skipping frags [%u..%u] at offset %1.0f: %s\n",
+      fprintf(stderr, "Job %d: skipping [%u..%u] at %1.0f: %s\n",
               jobNumber, b.start+b.extracted, b.start+b.size-1,
               b.offset+0.0, e.what());
       release(job.mutex);
@@ -3448,24 +3436,34 @@ ThreadReturn decompressThread(void* arg) {
         assert(job.lastdt==p);
 
         // Find block offset of fragment
-        int64_t q=0;  // fragment offset from start of block
-        for (unsigned k=b.start; k<ptr[j]; ++k)
+        uint64_t q=0;  // fragment offset from start of block
+        for (unsigned k=b.start; k<ptr[j]; ++k) {
+          assert(k>0);
+          assert(k<job.jd.ht.size());
+          if (job.jd.ht[k].usize<0) error("streaming fragment in file");
+          assert(job.jd.ht[k].usize>=0);
           q+=job.jd.ht[k].usize;
-        assert(q>=0);
-        assert(q<=out.size()-job.jd.ht[ptr[j]].usize);
+        }
+        assert(q+job.jd.ht[ptr[j]].usize<=out.size());
 
         // Write the fragment and any consecutive fragments that follow
         assert(offset>=0);
         ++p->second.data;
-        int usize=job.jd.ht[ptr[j]].usize;
+        uint64_t usize=job.jd.ht[ptr[j]].usize;
+        assert(usize<=0x7fffffff);
+        assert(b.start+b.size<=job.jd.ht.size());
         while (j+1<ptr.size() && ptr[j+1]==ptr[j]+1
-               && ptr[j+1]<b.start+b.size) {
+               && ptr[j+1]<b.start+b.size
+               && job.jd.ht[ptr[j+1]].usize>=0
+               && usize+job.jd.ht[ptr[j+1]].usize<=0x7fffffff) {
           ++p->second.data;
           assert(p->second.data<=size(ptr));
+          assert(job.jd.ht[ptr[j+1]].usize>=0);
           usize+=job.jd.ht[ptr[++j]].usize;
         }
+        assert(usize<=0x7fffffff);
         assert(q+usize<=out.size());
-        int nz=q;  // first nonzero byte in fragments to be written
+        uint64_t nz=q;  // first nonzero byte in fragments to be written
         while (nz<q+usize && out.c_str()[nz]==0) ++nz;
         if (!job.jd.dotest && nz<q+usize) {  // not all zero bytes?
           job.outf.seek(offset, SEEK_SET);
@@ -3516,7 +3514,6 @@ int Jidac::extract() {
   if (!read_archive()) error("archive not found");
 
   // test blocks
-  if (block.size()<1) error("archive is empty");
   for (unsigned i=1; i<block.size(); ++i) {
     if (block[i].start<block[i-1].start) error("unordered blocks");
     if (block[i].start==block[i-1].start) error("empty block");
@@ -3554,16 +3551,16 @@ int Jidac::extract() {
       }
       else if (isdir)  // update directories later
         p->second.data=0;
-      else {  // files to decompress
+      else if (block.size()>0) {  // files to decompress
         p->second.data=0;
-        assert(block.size()>0);
         unsigned lo=0, hi=block.size()-1;  // block indexes for binary search
-        for (unsigned i=0; i<p->second.ptr.size(); ++i) {
+        for (unsigned i=0; p->second.data>=0 && i<p->second.ptr.size(); ++i) {
           unsigned j=p->second.ptr[i];  // fragment index
           if (j==0 || j>=ht.size() || ht[j].usize<-1) {
             fflush(stdout);
             printUTF8(p->first.c_str(), stderr);
             fprintf(stderr, ": bad frag IDs, skipping...\n");
+            p->second.data=-1;  // skip
             continue;
           }
           assert(j>0 && j<ht.size());
@@ -3583,11 +3580,10 @@ int Jidac::extract() {
           assert(lo>=0 && lo<block.size());
           assert(j>=block[lo].start);
           assert(lo+1==block.size() || j<block[lo+1].start);
-          int c=j-block[lo].start+1;
+          unsigned c=j-block[lo].start+1;
           if (block[lo].size<c) block[lo].size=c;
           if (block[lo].files.size()==0 || block[lo].files.back()!=p)
             block[lo].files.push_back(p);
-          if (p->second.size<0) block[lo].streaming=true;
         }
         ++total_files;
         job.total_size+=p->second.size;
@@ -3604,6 +3600,88 @@ int Jidac::extract() {
       job.total_size/1000000.0, total_files, threads);
   vector<ThreadID> tid(threads);
   for (int i=0; i<size(tid); ++i) run(tid[i], decompressThread, &job);
+
+  // Extract streaming files
+  Archive in;
+  if (in.open(job.jd.archive.c_str(), job.jd.password)) {
+    OutputFile outf;
+    DTMap::iterator dtptr=dt.end();
+    for (int i=0; i<size(block); ++i) {
+      if (block[i].usize<0 && block[i].size>0) {
+        Block& b=block[i];
+        try {
+          in.seek(b.offset, SEEK_SET);
+          libzpaq::Decompresser d;
+          d.setInput(&in);
+          if (!d.findBlock()) error("block not found");
+          StringWriter filename;
+          for (unsigned j=0; j<b.size; ++j) {
+            if (!d.findFilename(&filename)) error("segment not found");
+            d.readComment();
+
+            // Start of new output file
+            if (filename.s!="") {
+              unsigned k;
+              for (k=0; k<b.files.size(); ++k) {  // find in dt
+                if (b.files[k]->second.ptr.size()>0
+                    && b.files[k]->second.ptr[0]==b.start+j
+                    && b.files[k]->second.date>0
+                    && b.files[k]->second.data==0)
+                  break;
+              }
+              if (k<b.files.size()) {  // found new file
+                outf.close();
+                string outname=rename(b.files[k]->first);
+                dtptr=b.files[k];
+                lock(job.mutex);
+                if (summary<=0) {
+                  printf("> ");
+                  printUTF8(outname.c_str());
+                  printf("\n");
+                }
+                if (!dotest) {
+                  makepath(outname);
+                  outf.open(outname.c_str());
+                  if (!outf.isopen()) printerr(outname.c_str());
+                  else outf.truncate();
+                }
+                release(job.mutex);
+              }
+              else {  // end of file
+                outf.close();
+                dtptr=dt.end();
+              }
+            }
+
+            // Decompress segment
+            libzpaq::SHA1 sha1;
+            d.setSHA1(&sha1);
+            d.setOutput(outf.isopen() ? &outf : 0);
+            d.decompress();
+
+            // Verify checksum
+            char sha1result[21];
+            d.readSegmentEnd(sha1result);
+            if (sha1result[0]==1) {
+              if (memcmp(sha1result+1, sha1.result(), 20)!=0)
+                error("checksum failed");
+            }
+            else if (sha1result[0]!=0)
+              error("unknown checksum type");
+            ++b.extracted;
+            if (dtptr!=dt.end()) ++dtptr->second.data;
+            filename.s="";
+          }
+        }
+        catch(std::exception& e) {
+          lock(job.mutex);
+          printf("Skipping block: %s\n", e.what());
+          release(job.mutex);
+        }
+      }
+    }
+    outf.close();
+  }
 
   // Wait for threads to finish
   for (int i=0; i<size(tid); ++i) join(tid[i]);
@@ -3790,6 +3868,9 @@ int Jidac::list() {
           && v<size(ver)) {  // version info
         printf(" +%d -%d -> %1.0f", ver[v].updates, ver[v].deletes,
             (v+1<size(ver) ? ver[v+1].offset : csize)-ver[v].offset+0.0);
+        if (summary<0)  // print fragment range
+          printf(" %u-%u", ver[v].firstFragment,
+              v+1<size(ver) ? ver[v+1].firstFragment-1 : size(ht)-1);
       }
       printf("\n");
     }

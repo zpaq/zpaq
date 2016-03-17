@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.05 implementation - Apr. 16, 2015.
+/* libzpaq.cpp - LIBZPAQ Version 7.06f implementation - Mar. 7, 2016.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -684,7 +684,7 @@ void stretchKey(char* out, const char* in, const char* salt) {
 void random(char* buf, int n) {
 #ifdef unix
   FILE* in=fopen("/dev/urandom", "rb");
-  if (in && fread(buf, 1, n, in)==n)
+  if (in && int(fread(buf, 1, n, in))==n)
     fclose(in);
   else {
     error("key generation failed");
@@ -898,11 +898,11 @@ int ZPAQL::read(Reader* in2) {
   int n=header[cend-1];
   for (int i=0; i<n; ++i) {
     int type=in2->get();  // component type
-    if (type==-1) error("unexpected end of file");
+    if (type<0 || type>255) error("unexpected end of file");
     header[cend++]=type;  // component type
     int size=compsize[type];
     if (size<1) error("Invalid component type");
-    if (cend+size>header.isize()-8) error("COMP list too big");
+    if (cend+size>hsize) error("COMP overflows header");
     for (int j=1; j<size; ++j)
       header[cend++]=in2->get();
   }
@@ -910,6 +910,7 @@ int ZPAQL::read(Reader* in2) {
 
   // Insert a guard gap and read HCOMP
   hbegin=hend=cend+128;
+  if (hend>hsize+129) error("missing HCOMP");
   while (hend<hsize+129) {
     assert(hend<header.isize()-8);
     int op=in2->get();
@@ -1121,7 +1122,7 @@ int ZPAQL::execute() {
     case 97: m(b) = b; break; // *B=B
     case 98: m(b) = c; break; // *B=C
     case 99: m(b) = d; break; // *B=D
-    case 100: m(b) = m(b); break; // *B=*B
+    case 100: break; // *B=*B
     case 101: m(b) = m(c); break; // *B=*C
     case 102: m(b) = h(d); break; // *B=*D
     case 103: m(b) = header[pc++]; break; // *B= N
@@ -1130,7 +1131,7 @@ int ZPAQL::execute() {
     case 106: m(c) = c; break; // *C=C
     case 107: m(c) = d; break; // *C=D
     case 108: m(c) = m(b); break; // *C=*B
-    case 109: m(c) = m(c); break; // *C=*C
+    case 109: break; // *C=*C
     case 110: m(c) = h(d); break; // *C=*D
     case 111: m(c) = header[pc++]; break; // *C= N
     case 112: h(d) = a; break; // *D=A
@@ -1139,7 +1140,7 @@ int ZPAQL::execute() {
     case 115: h(d) = d; break; // *D=D
     case 116: h(d) = m(b); break; // *D=*B
     case 117: h(d) = m(c); break; // *D=*C
-    case 118: h(d) = h(d); break; // *D=*D
+    case 118: break; // *D=*D
     case 119: h(d) = header[pc++]; break; // *D= N
     case 128: a += a; break; // A+=A
     case 129: a += b; break; // A+=B
@@ -1828,7 +1829,7 @@ void Predictor::init() {
         cr.cm.resize(512);
         for (int j=0; j<256; ++j) {
           cr.cm[j*2]=1<<15;
-          cr.cm[j*2+1]=clamp512k(stretch(st.cminit(j)>>8)<<10);
+          cr.cm[j*2+1]=clamp512k(stretch(st.cminit(j)>>8)*1024);
         }
         break;
       case SSE: // sizebits j start limit
@@ -2312,6 +2313,7 @@ void Decompresser::readComment(Writer* comment) {
 // Decompress n bytes, or all if n < 0. Return false if done
 bool Decompresser::decompress(int n) {
   assert(state==DATA);
+  if (decode_state==SKIP) error("decompression after skipped segment");
   assert(decode_state!=SKIP);
 
   // Initialize models to start decompressing block
@@ -2797,23 +2799,23 @@ void Compressor::startBlock(int level) {
   // Model 2 - mid.cfg
   69,0,3,3,0,0,8,3,5,8,13,0,8,17,1,8,
   18,2,8,18,3,8,19,4,4,22,24,7,16,0,7,24,
-  -1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
+  (char)-1,0,17,104,74,4,95,1,59,112,10,25,59,112,10,25,
   59,112,10,25,59,112,10,25,59,112,10,25,59,10,59,112,
-  25,69,-49,8,112,56,0,
+  25,69,(char)-49,8,112,56,0,
 
   // Model 3 - max.cfg
-  -60,0,5,9,0,0,22,1,-96,3,5,8,13,1,8,16,
+  (char)-60,0,5,9,0,0,22,1,(char)-96,3,5,8,13,1,8,16,
   2,8,18,3,8,19,4,8,19,5,8,20,6,4,22,24,
   3,17,8,19,9,3,13,3,13,3,13,3,14,7,16,0,
-  15,24,-1,7,8,0,16,10,-1,6,0,15,16,24,0,9,
-  8,17,32,-1,6,8,17,18,16,-1,9,16,19,32,-1,6,
+  15,24,(char)-1,7,8,0,16,10,(char)-1,6,0,15,16,24,0,9,
+  8,17,32,(char)-1,6,8,17,18,16,(char)-1,9,16,19,32,(char)-1,6,
   0,19,20,16,0,0,17,104,74,4,95,2,59,112,10,25,
   59,112,10,25,59,112,10,25,59,112,10,25,59,112,10,25,
-  59,10,59,112,10,25,59,112,10,25,69,-73,32,-17,64,47,
-  14,-25,91,47,10,25,60,26,48,-122,-105,20,112,63,9,70,
-  -33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
-  10,4,59,112,25,10,4,59,112,25,65,-113,-44,72,4,59,
-  112,8,-113,-40,8,68,-81,60,60,25,69,-49,9,112,25,25,
+  59,10,59,112,10,25,59,112,10,25,69,(char)-73,32,(char)-17,64,47,
+  14,(char)-25,91,47,10,25,60,26,48,(char)-122,(char)-105,20,112,63,9,70,
+  (char)-33,0,39,3,25,112,26,52,25,25,74,10,4,59,112,25,
+  10,4,59,112,25,10,4,59,112,25,65,(char)-113,(char)-44,72,4,59,
+  112,8,(char)-113,(char)-40,8,68,(char)-81,60,60,25,69,(char)-49,9,112,25,25,
   25,25,25,112,56,0,
 
   0,0}; // 0,0 = end of list
@@ -3038,9 +3040,9 @@ code in rcode[0..rcode_size-1]. Execution begins at rcode[0]. It will not
 write beyond the end of rcode, but in any case it returns the number of
 bytes that would have been written. It returns 0 in case of error.
 
-The assembled code implements run() and returns 1 if successful or
-0 if the ZPAQL code executes an invalid instruction or jumps out of
-bounds.
+The assembled code implements int run() and returns 0 if successful,
+1 if the ZPAQL code executes an invalid instruction or jumps out of
+bounds, or 2 if OUT throws bad_alloc, or 3 for other OUT exceptions.
 
 A ZPAQL virtual machine has the following state. All values are
 unsigned and initially 0:
@@ -3154,14 +3156,36 @@ In 64 bit mode, the following additional registers are used:
 */
 
 // Called by out
-static void flush1(ZPAQL* z) {
-  z->flush();
+static int flush1(ZPAQL* z) {
+  try {
+    z->flush();
+    return 0;
+  }
+  catch(std::bad_alloc& x) {
+    return 2;
+  }
+  catch(...) {
+    return 3;
+  }
 }
 
 // return true if op is an undefined ZPAQL instruction
 static bool iserr(int op) {
   return op==0 || (op>=120 && op<=127) || (op>=240 && op<=254)
     || op==58 || (op<64 && (op%8==5 || op%8==6));
+}
+
+// Return length of ZPAQL instruction at hcomp[0]. Assume 0 padding at end.
+// A run of identical ++ or -- is counted as 1 instruction.
+int oplen(const U8* hcomp) {
+  if (*hcomp==255) return 3;
+  if (*hcomp%8==7) return 2;
+  if (*hcomp<51 && (*hcomp%8-1)/2==0) {  // ++ or -- opcode
+    int i;
+    for (i=1; i<127 && hcomp[i]==hcomp[0]; ++i);
+    return i;
+  }
+  return 1;
 }
 
 // Write k bytes of x to rcode[o++] MSB first
@@ -3233,7 +3257,7 @@ int ZPAQL::assemble() {
     put2(0x8929);             // mov [rcx], ebp
     put2l(0x48b9, &f);        // mov rcx, f
     put2(0x8919);             // mov [rcx], ebx
-    put4(0x4883c438);         // add rsp, 56
+    put4(0x4883c408);         // add rsp, 8
     put2(0x415f);             // pop r15
     put2(0x415e);             // pop r14
     put2(0x415d);             // pop r13
@@ -3245,12 +3269,12 @@ int ZPAQL::assemble() {
     put2a(0x893d, &c);        // mov [c], edi
     put2a(0x892d, &d);        // mov [d], ebp
     put2a(0x891d, &f);        // mov [f], ebx
-    put3(0x83c43c);           // add esp, 60
+    put3(0x83c40c);           // add esp, 12
   }
-  put1(0x5d);                 // pop ebp
   put1(0x5b);                 // pop ebx
   put1(0x5f);                 // pop edi
   put1(0x5e);                 // pop esi
+  put1(0x5d);                 // pop ebp
   put1(0xc3);                 // ret
 
   // Code for the out instruction.
@@ -3264,13 +3288,17 @@ int ZPAQL::assemble() {
     put2(0xffc1);             // inc rcx
     put3(0x41890a);           // mov [r10], ecx
     put2a(0x81f9, outbuf.size());  // cmp rcx, outbuf.size()
-    put2(0x7401);             // jz L1
+    put2(0x7403);             // jz L1
+    put2(0x31c0);             // xor eax, eax
     put1(0xc3);               // ret
-    put4(0x4883ec48);         // L1: sub rsp, 72  ; call flush1(this)
-    put5(0x48897c24,64);      // mov [rsp+64], rdi
-    put5(0x48897424,56);      // mov [rsp+56], rsi
-    put5(0x48895424,48);      // mov [rsp+48], rdx
-    put5(0x48894c24,40);      // mov [rsp+40], rcx
+
+    put1(0x55);               // L1: push rbp ; call flush1(this)
+    put1(0x57);               // push rdi
+    put1(0x56);               // push rsi
+    put1(0x52);               // push rdx
+    put1(0x51);               // push rcx
+    put3(0x4889e5);           // mov rbp, rsp
+    put4(0x4883c570);         // add rbp, 112
 #if defined(unix) && !defined(__CYGWIN__)
     put2l(0x48bf, this);      // mov rdi, this
 #else  // Windows
@@ -3278,12 +3306,11 @@ int ZPAQL::assemble() {
 #endif
     put2l(0x49bb, &flush1);   // mov r11, &flush1
     put3(0x41ffd3);           // call r11
-    put5(0x488b4c24,40);      // mov rcx, [rsp+40]
-    put5(0x488b5424,48);      // mov rdx, [rsp+48]
-    put5(0x488b7424,56);      // mov rsi, [rsp+56]
-    put5(0x488b7c24,64);      // mov rdi, [rsp+64]
-    put4(0x4883c448);         // add rsp, 72
-    put1(0xc3);               // ret
+    put1(0x59);               // pop rcx
+    put1(0x5a);               // pop rdx
+    put1(0x5e);               // pop rsi
+    put1(0x5f);               // pop rdi
+    put1(0x5d);               // pop rbp
   }
   else {
     put1a(0xb8, &outbuf[0]);  // mov eax, outbuf.p
@@ -3292,7 +3319,8 @@ int ZPAQL::assemble() {
     put2(0xffc1);             // inc ecx
     put2a(0x890d, &bufptr);   // mov [bufptr], ecx
     put2a(0x81f9, outbuf.size());  // cmp ecx, outbuf.size()
-    put2(0x7401);             // jz L1
+    put2(0x7403);             // jz L1
+    put2(0x31c0);             // xor eax, eax
     put1(0xc3);               // ret
     put3(0x83ec0c);           // L1: sub esp, 12
     put4(0x89542404);         // mov [esp+4], edx
@@ -3301,8 +3329,8 @@ int ZPAQL::assemble() {
     put2(0xffd0);             // call eax
     put4(0x8b542404);         // mov edx, [esp+4]
     put3(0x83c40c);           // add esp, 12
-    put1(0xc3);               // ret
   }
+  put1(0xc3);               // ret
 
   // Set it[i]=1 for each ZPAQL instruction reachable from the previous
   // instruction + 2 if reachable by a jump (or 3 if both).
@@ -3314,7 +3342,7 @@ int ZPAQL::assemble() {
     for (int i=0; i<hlen; ++i) {
       int op=hcomp[i];
       if (it[i]) {
-        int next1=i+1+(op%8==7), next2=NONE; // next and jump targets
+        int next1=i+oplen(hcomp+i), next2=NONE; // next and jump targets
         if (iserr(op)) next1=NONE;  // error
         if (op==56) next1=NONE, next2=0;  // halt
         if (op==255) next1=NONE, next2=hcomp[i+1]+256*hcomp[i+2]; // lj
@@ -3366,16 +3394,16 @@ int ZPAQL::assemble() {
   // Start of run(): Save x86 and load ZPAQL registers
   const int start=o;
   assert(start>=16);
+  put1(0x55);          // push ebp/rbp
   put1(0x56);          // push esi/rsi
   put1(0x57);          // push edi/rdi
   put1(0x53);          // push ebx/rbx
-  put1(0x55);          // push ebp/rbp
   if (S==8) {
     put2(0x4154);      // push r12
     put2(0x4155);      // push r13
     put2(0x4156);      // push r14
     put2(0x4157);      // push r15
-    put4(0x4883ec38);  // sub rsp, 56
+    put4(0x4883ec08);  // sub rsp, 8
     put2l(0x48b8, &a); // mov rax, a
     put2(0x8b10);      // mov edx, [rax]
     put2l(0x48b8, &b); // mov rax, b
@@ -3392,7 +3420,7 @@ int ZPAQL::assemble() {
     put2l(0x49bf, &m[0]);   // mov r15, m
   }
   else {
-    put3(0x83ec3c);    // sub esp, 60
+    put3(0x83ec0c);    // sub esp, 12
     put2a(0x8b15, &a); // mov edx, [a]
     put2a(0x8b35, &b); // mov esi, [b]
     put2a(0x8b3d, &c); // mov edi, [c]
@@ -3402,8 +3430,10 @@ int ZPAQL::assemble() {
 
   // Assemble in multiple passes until every byte of hcomp has a translation
   for (int istart=0; istart<hlen; ++istart) {
-    for (int i=istart; i<hlen&&it[i]; i=i+1+(hcomp[i]%8==7)+(hcomp[i]==255)) {
+    int inc=0;
+    for (int i=istart; i<hlen && it[i]; i+=inc) {
       const int code=it[i];
+      inc=oplen(hcomp+i);
 
       // If already assembled, then assemble a jump to it
       U32 t;
@@ -3420,7 +3450,7 @@ int ZPAQL::assemble() {
         break;
       }
 
-      // Else assemble the instruction at hcode[i] to rcode[o]
+      // Else assemble the instruction at hcomp[i] to rcode[o]
       else {
         assert(i>=0 && i<it.isize());
         assert(it[i]>0 && it[i]<16);
@@ -3432,9 +3462,9 @@ int ZPAQL::assemble() {
         const int ddd=op/8%8;
         const int sss=op%8;
 
-        // error instruction: return 0
+        // error instruction: return 1
         if (iserr(op)) {
-          put2(0x31c0);           // xor eax, eax
+          put1a(0xb8, 1);         // mov eax, 1
           put1a(0xe9, halt-o-4);  // jmp near halt
           continue;
         }
@@ -3473,19 +3503,6 @@ int ZPAQL::assemble() {
           else { // *b, *c
             if (S==8) put4(0x498d0c0f);     // lea rcx, [r15+rcx]
             else put2a(0x8d89, &m[0]);      // lea ecx, [ecx+h]
-          }
-        }
-
-        // Code runs of up to 127 identical ++ or -- operations that are not
-        // otherwise jump targets as a single instruction. Mark all but
-        // the first as not reachable.
-        int inc=0;  // run length of identical ++ or -- instructions
-        if (op<=50 && (op%8==1 || op%8==2)) {
-          assert(code>=1 && code<=3);
-          inc=1;
-          for (int j=i+1; inc<127 && j<hlen && it[j]==1 && hcomp[j]==op; ++j){
-            ++inc;
-            it[j]=0;
           }
         }
 
@@ -3581,11 +3598,14 @@ int ZPAQL::assemble() {
           case 7:  // special
             switch(op) {
               case 56: // halt
-                put1a(0xb8, 1);           // mov eax, 1
+                put2(0x31c0);             // xor eax, eax  ; return 0
                 put1a(0xe9, halt-o-4);    // jmp near halt
                 break;
               case 57:  // out
                 put1a(0xe8, outlabel-o-4);// call outlabel
+                put3(0x83f800);           // cmp eax, 0  ; returned error code
+                put2(0x7405);             // je L1:
+                put1a(0xe9, halt-o-4);    // jmp near halt ; L1:
                 break;
               case 59:  // hash: a = (a + *b + 512) * 773
                 put3a(0x8d8410, 512);     // lea edx, [eax+edx+512]
@@ -3738,12 +3758,6 @@ int ZPAQL::assemble() {
           case 31:  // 255 = lj
             if (op==255) put1a(0xe9, 0);             // jmp near
             break;
-        }
-        if (inc>1) {  // skip run of identical ++ or --
-          i+=inc-1;
-          assert(i<hlen);
-          assert(it[i]==0);
-          assert(hcomp[i]==op);
         }
       }
     }
@@ -4330,9 +4344,9 @@ int Predictor::assemble_p() {
           put1a(0x3d, (1<<19)-1);      // cmp eax, (1<<19)-1
           put2(0x7e05);                // jle L1
           put1a(0xb8, (1<<19)-1);      // mov eax, (1<<19)-1
-          put1a(0x3d, -1<<19);         // cmp eax, -1<<19
+          put1a(0x3d, 0xfff80000);     // cmp eax, -1<<19
           put2(0x7d05);                // jge L2
-          put1a(0xb8, -1<<19);         // mov eax, -1<<19
+          put1a(0xb8, 0xfff80000);     // mov eax, -1<<19
           put3(0x8904d6);              // L2: mov [esi+edx*8], eax
           put3(0x83c110);              // add ecx, 16 ; err
           put3(0xc1f905);              // sar ecx, 5
@@ -4340,9 +4354,9 @@ int Predictor::assemble_p() {
           put2a(0x81f9, (1<<19)-1);    // cmp ecx, (1<<19)-1
           put2(0x7e05);                // jle L3
           put1a(0xb9, (1<<19)-1);      // mov ecx, (1<<19)-1
-          put2a(0x81f9, -1<<19);       // cmp ecx, -1<<19
+          put2a(0x81f9, 0xfff80000);   // cmp ecx, -1<<19
           put2(0x7d05);                // jge L4
-          put1a(0xb9, -1<<19);         // mov ecx, -1<<19
+          put1a(0xb9, 0xfff80000);     // mov ecx, -1<<19
           put4(0x894cd604);            // L4: mov [esi+edx*8+4], ecx
         }
         break;
@@ -4541,9 +4555,9 @@ int Predictor::assemble_p() {
           put1a(0x3d, (1<<19)-1);      // cmp eax, (1<<19)-1
           put2(0x7e05);                // jge L1
           put1a(0xb8, (1<<19)-1);      // mov eax, (1<<19)-1
-          put1a(0x3d, -1<<19);         // cmp eax, -1<<19
+          put1a(0x3d, 0xfff80000);     // cmp eax, -1<<19
           put2(0x7d05);                // jle L2
-          put1a(0xb8, -1<<19);         // mov eax, -1<<19
+          put1a(0xb8, 0xfff80000);     // mov eax, -1<<19
           put2(0x8906);                // L2: mov [esi], eax
           if (k<cp[3]-1) {
             if (S==8) put1(0x48);      // rex.w
@@ -4631,8 +4645,12 @@ void ZPAQL::run(U32 input) {
       error("run JIT failed");
   }
   a=input;
-  if (!((int(*)())(&rcode[0]))())
-    libzpaq::error("Bad ZPAQL opcode");
+  const U32 rc=((int(*)())(&rcode[0]))();
+  if (rc==0) return;
+  else if (rc==1) libzpaq::error("Bad ZPAQL opcode");
+  else if (rc==2) libzpaq::error("Out of memory");
+  else if (rc==3) libzpaq::error("Write error");
+  else libzpaq::error("ZPAQL execution error");
 #endif
 }
 
@@ -6752,10 +6770,10 @@ void LZBuffer::fill() {
           if (minMatch2) {
             ht[h2^ih]=p;
             h2=(((h2*9)<<shift2)
-                +(in[i+minMatch2+lookahead]+1)*23456789)&(htsize-1);
+                +(in[i+minMatch2+lookahead]+1)*23456789u)&(htsize-1);
           }
           ht[h1^ih]=p;
-          h1=(((h1*5)<<shift1)+(in[i+minMatch]+1)*123456791)&(htsize-1);
+          h1=(((h1*5)<<shift1)+(in[i+minMatch]+1)*123456791u)&(htsize-1);
         }
         ++i;
       }
