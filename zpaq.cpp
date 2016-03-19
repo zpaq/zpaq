@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.06"
+#define ZPAQ_VERSION "7.07"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -2708,7 +2708,7 @@ int Jidac::add() {
   // Open archive to append
   Archive out;
   char mode=(archive=="" || dotest) ? 't' : 'w';
-  if (part0!=part1 && part0exists && !part1exists) {  // remote
+  if (part0!=part1 && exists(part0) && !part1exists) {  // remote
     char salt[32]={0};
     if (password) {  // get salt from index
       index.close();
