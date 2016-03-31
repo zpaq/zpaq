@@ -18,18 +18,19 @@ $(SONAME): libzpaq.o
 	$(CXX) $(LDFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $<
 
 libzpaq.so: $(SONAME)
+	rm -f libzpaq.so
 	ln -s $(SONAME) libzpaq.so
 
 zpaq.o: zpaq.cpp libzpaq.h
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c zpaq.cpp -pthread
 
-zpaq: zpaq.o libzpaq.so
-	$(CXX) $(LDFLAGS) -o $@ zpaq.o -L. -lzpaq -pthread
+zpaq: zpaq.o libzpaq.o
+	$(CXX) $(LDFLAGS) -o $@ zpaq.o libzpaq.o -pthread
 
 zpaq.1: zpaq.pod
 	pod2man $< >$@
 
-install: libzpaq.so libzpaq.h zpaq zpaq.1
+install: libzpaq.so libzpaq.h zpaq zpaq.1 libzpaq.so
 	install -m 0755 -d $(DESTDIR)$(LIBDIR)
 	install -m 0755 -t $(DESTDIR)$(LIBDIR) $(SONAME)
 	rm -f $(DESTDIR)$(LIBDIR)/libzpaq.so
@@ -45,7 +46,7 @@ clean:
 	rm -f *.o *.so *.so.* zpaq *.1 archive.zpaq zpaq.new
 
 check: zpaq $(SONAME)
-	LD_LIBRARY_PATH=. ./zpaq add archive.zpaq zpaq
-	LD_LIBRARY_PATH=. ./zpaq extract archive.zpaq zpaq -to zpaq.new
+	./zpaq add archive.zpaq zpaq
+	./zpaq extract archive.zpaq zpaq -to zpaq.new
 	cmp zpaq zpaq.new
 	rm archive.zpaq zpaq.new
