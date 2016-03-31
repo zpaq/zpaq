@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.06 man page source
+#   zpaq.pod - zpaq v7.08 man page source
 #
 #   Copyright
 #
@@ -48,17 +48,8 @@ and Unix/Linux/OS X.
 
 I<command> is one of C<add>, C<extract>, C<list>.
 Commands may be abbreviated to one letter.
-
 I<archive> is assumed to have a C<.zpaq> extension if no extension is
-specified. Wildcards C<*> or C<?> in I<archive> specify a multi-part archive
-to support remote backups. C<*> and C<?> are replaced with part numbers
-or single digits of the part number, respectively. Parts 1
-and higher are interpreted as if they were concatenated in consecutive
-numerical order. Part 0 is an optional index containing a copy of the archive
-except for file contents. For example, C<part??> would refer
-to C<part00.zpaq> (index), C<part01.zpaq> (first update), C<part02.zpaq>
-(second update), etc. The index is only needed if the other parts
-are removed. Otherwise it is ignored.
+specified.
 
 =over
 
@@ -109,22 +100,6 @@ the update, then the partially appended data is ignored and overwritten on the
 next update. This is accomplished by first appending a temporary update header,
 appending the compressed data and index, then updating the header as the
 last step.
-
-If I<archive>
-contains wildcards indicating a multi-part archive, then C<zpaq> will create
-a new part using the next available part number starting with 1.
-If an index (part 0) is present, then it is also checked for consistency (number
-of versions and archive size) and updated. An index is created only if
-part 1 is also created. Thus, if you do not intend to move the archive parts
-to a remote server then you may safely delete the index and it will not
-be re-created.
-
-If the index is present but part 1 is not, then it is assumed that all
-of the parts have been moved.
-The number of versions in the index is counted and a new part is created
-using the next available version number, and the index is updated.
-In Unix/Linux, wildcards must be quoted or escaped to protect them from
-the shell.
 
 If I<archive> is C<""> (a quoted empty string), then C<zpaq> compresses
 I<files> as if creating a new archive, but discards the output without
@@ -208,11 +183,6 @@ normal C<F>ile, C<T>emporary, sC<p>arse file, C<r>eparse point,
 C<C>ompressed, C<o>ffline, not content C<I>indexed, C<E>ncrypted,
 C<i>ntegrity stream, C<v>irtual, no C<s>crub data.
 
-If I<archive> is multi-part (like C<part??.zpaq>), then parts 1 and higher
-are listed, ignoring the index. To list the index (C<part00.zpaq>),
-specify the index file (like C<zpaq list part00>). This should give the same
-result if the index is correct.
-
 I<archive> may be "", which is equivalent to comparing with an empty
 archive.
 
@@ -286,17 +256,12 @@ of I<N> will not deduplicate because the fragment boundaries will differ.
 C<list -summary> will not identify these files as identical for
 the same reason.
 
-=item -key [I<password>]
+=item -key I<password>
 
 This option is required for all commands operating on an encrypted archive.
 When creating a new archive with C<add>, the new archive will be encrypted
 with I<password> and all subsequent operations will require the same
-password. A password may contain multiple words separated by single spaces
-provided no word begins with "-" indicating the start of the next option.
-
-If I<password> is omitted then C<zpaq> will prompt for it without echoing
-to the screen. When creating a new archive, it will prompt until
-the same password is entered twice in a row.
+password.
 
 An archive is encrypted with AES-256 in CTR mode. The password is
 strengthened using Scrypt(SHA-256(password), salt, N=16384, r=8, p=1),
@@ -555,8 +520,8 @@ left, making the context hash effectively order 6.
 
 C<-method i>, creates or updates an index. An index stores
 a history of file names, dates, attributes, and fragment hashes, but
-no compressed data. It is like the index of a multi-part archive, but
-without the other parts. It is an error to update a regular archive
+no compressed data. Thus, it takes much less space but files cannot
+be extracted. It is an error to update a regular archive
 with C<-method i>, or an index with a method other than C<i>.
 
 =item -noattributes
@@ -564,12 +529,6 @@ with C<-method i>, or an index with a method other than C<i>.
 With C<add>, do not save Windows attributes or Unix/Linux permissions
 to the archive. With C<extract>, ignore the saved values and extract using
 default values. With C<list>, do not list or compare attributes.
-
-=item -nodelete
-
-With C<add>, do not mark files in the archive as deleted when the
-corresponding external file does not exist. This makes C<zpaq>
-consistent with the behavior of most non-journaling archivers.
 
 =item -not [I<file>]...
 
@@ -614,9 +573,8 @@ added or extracted. I<N> has no effect.
 
 =item -test
 
-With C<add> and C<extract>, do not write to disk, but perform all
-other operations normally. C<add> will report the compressed size and
-time, but not update the archive. C<extract> will decompress, compute
+With C<extract>, do not write to disk, but perform all
+other operations normally. C<extract> will decompress, compute
 the SHA-1 hashes of the output, report if it differs from the stored
 value, but not compare, create or update any files.
 
