@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.08"
+#define ZPAQ_VERSION "7.09"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -2946,6 +2946,7 @@ int Jidac::extract() {
   for (unsigned i=0; i<tid.size(); ++i) run(tid[i], decompressThread, &job);
 
   // Extract streaming files
+  unsigned segments=0;  // count
   Archive in(job.jd.archive.c_str(), job.jd.password);
   if (in.isopen()) {
     FP outf=FPNULL;
@@ -2964,7 +2965,7 @@ int Jidac::extract() {
             d.readComment();
 
             // Start of new output file
-            if (filename.s!="") {
+            if (filename.s!="" || segments==0) {
               unsigned k;
               for (k=0; k<b.files.size(); ++k) {  // find in dt
                 if (b.files[k]->second.ptr.size()>0
@@ -3017,6 +3018,7 @@ int Jidac::extract() {
             ++b.extracted;
             if (dtptr!=dt.end()) ++dtptr->second.data;
             filename.s="";
+            ++segments;
           }
         }
         catch(std::exception& e) {
