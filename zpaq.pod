@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.08 man page source
+#   zpaq.pod - zpaq v7.10 man page source
 #
 #   Copyright
 #
@@ -47,9 +47,16 @@ and Unix/Linux/OS X.
 =head1 COMMANDS
 
 I<command> is one of C<add>, C<extract>, C<list>.
-Commands may be abbreviated to one letter.
+Commands may be abbreviated to C<a>, C<x>, or C<l>, respectively.
 I<archive> is assumed to have a C<.zpaq> extension if no extension is
 specified.
+
+If I<archive> contains wildcards C<*> or C<?>, then the archive is
+in multiple parts where C<*> matches the part number and C<?> matches
+single digits. zpaq will consider the concatenation of the parts in
+numerical order starting with 1 to be equivalent to a single archive.
+For example, C<arc??> would match the concatenation of C<arc01.zpaq>,
+C<arc02.zpaq>, etc. up to the last existing part.
 
 =over
 
@@ -92,34 +99,32 @@ such as devices, named pipes, and named sockets are not saved.
 The 64 bit Windows version will save alternate data streams.
 
 If any file cannot be read (e.g. permission denied), then it is skipped and
-an error is reported. However, other files are still added and the update
+a warning is reported. However, other files are still added and the update
 is still valid.
 
-Updates are transacted. If C<zpaq> is interrupted before completing
+If I<archive> is C<""> (a quoted empty string), then zpaq compresses
+I<files> as if creating a new archive, but discards the output without
+writing to disk.
+
+If I<archive> is multi-part, the zpaq will create a new part using
+the next available part number. For example:
+
+    zpaq add "arc??" files   (creates arc01.zpaq)
+    zpaq add "arc??" files   (creates arc02.zpaq)
+    zpaq add "arc??" files   (creates arc03.zpaq)
+    zpaq extract "arc??"     (extracts all parts)
+
+Updates are transacted. If zpaq is interrupted before completing
 the update, then the partially appended data is ignored and overwritten on the
 next update. This is accomplished by first appending a temporary update header,
 appending the compressed data and index, then updating the header as the
 last step.
-
-If I<archive> is C<""> (a quoted empty string), then C<zpaq> compresses
-I<files> as if creating a new archive, but discards the output without
-writing to disk.
 
 As the archive is updated, the program will report the percent complete, estimated
 time remaining, the name and size of the file preceded by C<+> if the file
 is being added, C<#> if updated, or C<-> if deleted. If the file
 is deduplicated, then the new size after deduplication but before
 compression is shown.
-
-As each block is compressed, the program reports the range of fragments,
-input block size, and complete compression method like 
-C<-method 14,179,1>,
-where the first number is the level and block size, the second number
-is the estimated compressibility (0..255, where 0 means random),
-and the third is the detected type (1 for text, 2 for x86, 3 for both,
-or 0 for neither).
-
-=item e
 
 =item x
 
@@ -139,7 +144,7 @@ to overwrite).
 As files are extracted, the fragment SHA-1 hashes are computed and compared
 with the stored hashes. The program reports an error in case of mismatches.
 Blocks are only decompressed up to the last used fragment.
-If the archive is damaged, then C<zpaq> will extract as much as possible
+If the archive is damaged, then zpaq will extract as much as possible
 from the undamaged blocks.
 
 As files are extracted, the program reports the percent completed,
@@ -190,8 +195,6 @@ archive.
 
 =head1 OPTIONS
 
-Options may be abbreviated as long as it is not ambiguous.
-
 =over
 
 =item -all [I<N>]
@@ -220,9 +223,7 @@ More digits will be used when necessary. For example:
 will show the dates when the archive was updated as C<01/>, C<02/>,
 etc. but not their contents.
 
-=item -detailed
-
-With C<list>, show file fragment IDs.
+=item -f
 
 =item -force
 
@@ -256,6 +257,40 @@ of I<N> will not deduplicate because the fragment boundaries will differ.
 C<list -summary> will not identify these files as identical for
 the same reason.
 
+=item -index I<indexfile>
+
+With C<add>, create I<archive>C<.zpaq> as a suffix to append to a remote
+archive which is assumed to be identical to I<indexfile> except that
+I<indexfile> contains no compressed file contents (D blocks).
+Then update I<indexfile> by appending a copy of I<archive>C<.zpaq>
+without the D blocks.
+
+The purpose is to maintain a backup offsite without using much
+local disk space. The normal usage is to append the suffix at the
+remote site and delete it locally, keeping only the much smaller index.
+For example:
+
+    zpaq add part files -index index.zpaq
+    cat part.zpaq >> remote.zpaq
+    rm part.zpaq
+
+I<indexfile> has no default extension. However, with a C<.zpaq>
+extension it can be listed to show the contents of the remote archive
+or compare with local files. It cannot be extracted or updated as
+a regular archive. Thus, the following should produce identical output:
+
+    zpaq list remote.zpaq
+    zpaq list index.zpaq
+
+If I<archive> is multi-part (contains C<*> or C<?>), then zpaq will
+substitute a part number equal to 1 plus the number of previous updates.
+The parts may then be accessed as a multi-part archive without
+appending or renaming.
+
+It is an error if the I<archive> to be created already exists, or if
+I<indexfile> is a regular archive. C<-index> cannot be used with
+C<-until> or a streaming archive C<-method s...>.
+
 =item -key I<password>
 
 This option is required for all commands operating on an encrypted archive.
@@ -272,55 +307,54 @@ using CryptGenRandom() in Windows or from /dev/urandom in Unix/Linux,
 such that the first byte is different from the normal header
 of an unencrypted archive (C<z> or C<7>). A multi-part archive
 is encrypted with a single keystream as if the parts were concatenated.
-The index is encrypted with the same password, where the first byte
+An index is encrypted with the same password, where the first byte
 of the salt is modified by XOR with ('z' XOR '7').
 
 Encryption provides secrecy but not authentication. An attacker
 who knows or can guess any bits of the plaintext can set them without
 knowing the key.
 
-=item -method I<level>
+=item -mI<type>[I<Blocksize>[.I<pre>[.I<arg>][I<comp>[.I<arg>]]...]]
 
-=item -method I<level>I<Blocksize>
+=item -method I<type>[I<Blocksize>[.I<pre>[.I<arg>][I<comp>[.I<arg>]]...]]
 
-=item -method I<type>I<Blocksize>.I<pre>[.I<arg>][I<comp>[.I<arg>]]...
+With C<add>, select a compression method. I<type> may be 0, 1, 2, 3, 4,
+5, C<x>, or C<s>. The optional I<Blocksize> may be 0..11, written with
+no space after the type, like C<-m10> or C<-method 511>. The remaining
+arguments, separated by periods or commas without spaces, are only allowed for
+types C<x> or C<s>, for example C<-mx4.3ci1>.
 
-=item -method i
-
-With C<add>, select a compression method. In the first form, I<level>
-is a number from 0 to 5. Higher numbers compress better but are slower.
-The default is 1. It is recommended for backups. Level 2 compresses
+If I<type> is numeric, then higher numbers compress better but are slower.
+The default is C<-m1>. It is recommended for backups. C<-m2> compresses
 slower but decompresses just as fast as 1. It is recommended for
 archives to be compressed once and decompressed many times, such as
-downloads. Level 0 stores with deduplication but no further compression.
+downloads. C<-m0> stores with deduplication but no further compression.
 
-In the second form, I<blocksize> is a number from 0 to 11 (for example,
-C<-method 14> or C<-method 511>). I<blocksize> says
-to pack fragments into blocks up to 2^I<blocksize> MiB. Using larger
+I<Blocksize> says
+to pack fragments into blocks up to 2^I<Blocksize> MiB. Using larger
 blocks can improve compression but require more memory and may be slower
 because each block is compressed or decompressed by a separate thread.
-The memory requirement is up to 8 times I<blocksize> per thread
+The memory requirement is up to 8 times I<Blocksize> per thread
 for levels up to 4 and 16 times block size per thread for level 5.
-The default I<blocksize> is 4 (16 MiB) for levels 0 and 1, and 6 (64 MiB)
-for levels 2 through 5.
+The default I<Blocksize> is 4 (16 MiB) for types 0 and 1, and 6 (64 MiB)
+otherwise.
 
-The third form selects a specific compression method for all blocks.
-This option is for experimental use.
-Normally, C<zpaq> selects different methods depending on the level
+Types C<x> and C<s> are for experimental use. Normally, zpaq selects
+different methods depending on the compression level
 and an analysis of the data (text, executable, or other binary,
-and degree of compressibility). I<type> is either C<x> or C<s>
-for journaling or streaming format, respectively.
+and degree of compressibility).
+I<type> selects journaling or streaming format.
 I<pre> is 0..7 selecting a preprocessing step (LZ77, BWT, E8E9),
 I<comp> is a series of context modeling components from the
 set {c,i,a,w,m,s,t} selecting a CM or ICM, ISSE chain, MATCH,
-word model, MIX, SSE, or MIX2. I<pre> and I<comp> may be followed
+word model, MIX, SSE, or MIX2 respectively. I<pre> and I<comp> may be followed
 by a list of numeric arguments (I<arg>) separated by periods or commas.
 For example:
 
     -method x6.3ci1
 
 selects a journaling archive (x), block size 2^6 = 64 MiB, BWT transform (3),
-an order 0 ICM (c), and order 1 ISSE (i1). (C<zpaq> normally selects this method
+an order 0 ICM (c), and order 1 ISSE (i1). (zpaq normally selects this method
 for level 3 text compression). I<type> is as follows.
 
 =over
@@ -337,13 +371,14 @@ the last-modifed date, attributes, and a list of fragment IDs.
 =item s
 
 Selectes streaming mode for single-pass extraction and compatibility with
-C<zpaq> versions prior to 6.00 (2012). Streaming archives do not support
+zpaq versions prior to 6.00 (2012). Streaming archives do not support
 deduplication or rollback. Files are split into fragments of size
 2^I<blocksize> MiB - 4 KiB. Each file or fragment is compressed in a
 separate block with no attempt at deduplication. The file name, date,
 and attributes are stored in the header of the first fragment. The hashes
 are stored in the trailers of each block. There is no transaction block
 to allow rollback. Files are added to the previously dated update.
+Streaming mode with C<-index> is an error.
 
 =back
 
@@ -518,12 +553,6 @@ left, making the context hash effectively order 6.
 
 =back
 
-C<-method i>, creates or updates an index. An index stores
-a history of file names, dates, attributes, and fragment hashes, but
-no compressed data. Thus, it takes much less space but files cannot
-be extracted. It is an error to update a regular archive
-with C<-method i>, or an index with a method other than C<i>.
-
 =item -noattributes
 
 With C<add>, do not save Windows attributes or Unix/Linux permissions
@@ -556,9 +585,11 @@ same as C<-not>. The default is C<*> which matches everything.
 If a file matches an argument to both C<-only> and C<-not>, then
 C<-not> takes precedence.
 
-=item -summary [I<N>]
+=item -sI<N>
 
-With C<list>, sort by decreasing size and show only the N (default 20)
+=item -summary I<N>
+
+With C<list>, sort by decreasing size and show only the I<N>
 largest files and directories. Label duplicates of the previous
 file with C<^>. A file is a duplicate if its contents are identical
 (based on stored hashes)
@@ -567,9 +598,13 @@ is specified, then these are included in the listing but not compared
 with internal files or each other.
 Internal and external files are labeled with C<-> and C<+> respectively.
 
-With C<add> and C<extract>, show percent completed and estimated
-time remaining on a 1 line display, but do not list files as they are
-added or extracted. I<N> has no effect.
+If I<N> is negative as in C<-s-1> then list normally but show
+fragment IDs after each file name. Files with identical fragment IDs have
+identical contents.
+
+With C<add> and C<extract>, when I<N> > 0, do not list files as they
+are added or extracted. Show only percent completed and estimated
+time remaining on a 1 line display.
 
 =item -test
 
@@ -578,10 +613,12 @@ other operations normally. C<extract> will decompress, compute
 the SHA-1 hashes of the output, report if it differs from the stored
 value, but not compare, create or update any files.
 
+=item -tI<N>
+
 =item -threads I<N>
 
-Add or extract at most I<N> blocks in parallel. The default
-is the number of processor cores, except not more than 2 when when C<zpaq>
+Add or extract at most I<N> blocks in parallel. The default is 0, which
+uses the number of processor cores, except not more than 2 when when zpaq
 is compiled to 32-bit code. Selecting fewer threads will reduce memory
 usage but run slower. Selecting more threads than cores does not help.
 
@@ -642,9 +679,9 @@ not matter if any files are dated in the future).
 
 deletes backup.zpaq and creates a new archive.
 
-If an archive contains a mix of files compressed in journaling and
-streaming format (C<-method s>...), then any streaming files are
-considered to be part of the previous journaling update.
+C<add -until> is an error on multi-part archives or with an index.
+A multi-part archive can be rolled back by deleting the highest numbered
+parts.
 
 Truncating and appending an encrypted archive with C<add -until>
 (even C<-until 0>)

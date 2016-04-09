@@ -1,4 +1,4 @@
-/* libzpaq.h - LIBZPAQ Version 7.08 header - Mar. 29, 2016.
+/* libzpaq.h - LIBZPAQ Version 7.10 header - Apr. 6, 2016.
 
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -916,10 +916,11 @@ void Array<T>::resize(size_t sz, int ex) {
     ::free((char*)data-offset);
   }
   n=0;
+  offset=0;
   if (sz==0) return;
   n=sz;
   const size_t nb=128+n*sizeof(T);  // test for overflow
-  if (nb<=128 || (nb-128)/sizeof(T)!=n) error("Array too big");
+  if (nb<=128 || (nb-128)/sizeof(T)!=n) n=0, error("Array too big");
   data=(T*)::calloc(nb, 1);
   if (!data) n=0, error("Out of memory");
   offset=64-(((char*)data-(char*)0)&63);
