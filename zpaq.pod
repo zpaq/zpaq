@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.10 man page source
+#   zpaq.pod - zpaq v7.11 man page source
 #
 #   Copyright
 #
@@ -46,8 +46,8 @@ and Unix/Linux/OS X.
 
 =head1 COMMANDS
 
-I<command> is one of C<add>, C<extract>, C<list>.
-Commands may be abbreviated to C<a>, C<x>, or C<l>, respectively.
+I<command> is one of C<add>, C<extract>, or C<list>
+Commands may be abbreviated to C<a>, C<x>, or C<l> respectively.
 I<archive> is assumed to have a C<.zpaq> extension if no extension is
 specified.
 
@@ -223,6 +223,19 @@ More digits will be used when necessary. For example:
 will show the dates when the archive was updated as C<01/>, C<02/>,
 etc. but not their contents.
 
+=item encrypt I<password>
+
+With C<extract>, do not extract any files. Instead,
+encrypt I<archive>C<.zpaq> to the first file in I<files> with I<password>.
+If I<password> is C<"">, then decrypt. It is an error if the output file exists
+unless C<-force> is used to overwrite it.
+If I<archive> is multi-part, then the output is a concatenation as
+a single file. If I<archive> has an index, then it will need to be
+re-created from the output archive.
+
+Encryption works with any files, not just archives.
+Encryption is in the format described in C<-key> with a new random salt.
+
 =item -f
 
 =item -force
@@ -263,7 +276,8 @@ With C<add>, create I<archive>C<.zpaq> as a suffix to append to a remote
 archive which is assumed to be identical to I<indexfile> except that
 I<indexfile> contains no compressed file contents (D blocks).
 Then update I<indexfile> by appending a copy of I<archive>C<.zpaq>
-without the D blocks.
+without the D blocks. With C<extract>, specify the index to create
+for I<archive>C<.zpaq> and do not extract any files.
 
 The purpose is to maintain a backup offsite without using much
 local disk space. The normal usage is to append the suffix at the
@@ -287,9 +301,11 @@ substitute a part number equal to 1 plus the number of previous updates.
 The parts may then be accessed as a multi-part archive without
 appending or renaming.
 
-It is an error if the I<archive> to be created already exists, or if
-I<indexfile> is a regular archive. C<-index> cannot be used with
-C<-until> or a streaming archive C<-method s...>.
+With C<add>, it is an error if the I<archive> to be created
+already exists, or if I<indexfile> is a regular archive. C<-index>
+cannot be used with C<-until> or a streaming archive C<-method s...>.
+With C<extract>, it is an error if I<indexfile> exists and C<-force>
+is not used to overwrite.
 
 =item -key I<password>
 
@@ -585,6 +601,26 @@ same as C<-not>. The default is C<*> which matches everything.
 If a file matches an argument to both C<-only> and C<-not>, then
 C<-not> takes precedence.
 
+=item -repack I<new_archive>
+
+With C<extract>, store the extracted files in I<new_archive> instead
+of writing them individually to disk. It is an error if I<new_archive>
+exists unless C<-force> is used to allow it to be overwritten.
+I<new_archive> does not automatically get a C<.zpaq> extension.
+
+Repacking is implemented by copying those D blocks (compressed file contents)
+which are referenced by at least one selected file. This can result in
+a larger archive than a new one because unreferenced fragments in the
+same block are also copied.
+
+The repacked archive block dates range from the first to last
+update of the input archive. Using C<add -until> with a date between these
+two dates will result in the date being adjust to 1 second after the
+last update.
+
+If the input is encrypted, then the output is encrypted with the
+same password but a new salt and keystream.
+
 =item -sI<N>
 
 =item -summary I<N>
@@ -611,7 +647,8 @@ time remaining on a 1 line display.
 With C<extract>, do not write to disk, but perform all
 other operations normally. C<extract> will decompress, compute
 the SHA-1 hashes of the output, report if it differs from the stored
-value, but not compare, create or update any files.
+value, but not compare, create or update any files. With C<-index>,
+test for errors but do not create an index file.
 
 =item -tI<N>
 
@@ -693,7 +730,7 @@ plaintexts without a password.
 
 =head1 EXIT STATUS
 
-Returns 0 if successful or 1 in case of an error.
+Returns 0 if successful, 1 in case of warnings, or 2 in case of an error.
 
 =head1 ENVIRONMENT
 

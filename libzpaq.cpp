@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.08 implementation - Mar. 29, 2016.
+/* libzpaq.cpp - LIBZPAQ Version 7.11 implementation - Apr. 12, 2016.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -3177,7 +3177,7 @@ static bool iserr(int op) {
 
 // Return length of ZPAQL instruction at hcomp[0]. Assume 0 padding at end.
 // A run of identical ++ or -- is counted as 1 instruction.
-int oplen(const U8* hcomp) {
+static int oplen(const U8* hcomp) {
   if (*hcomp==255) return 3;
   if (*hcomp%8==7) return 2;
   if (*hcomp<51 && (*hcomp%8-1)/2==0) {  // ++ or -- opcode
