@@ -1,4 +1,4 @@
-#   zpaq.pod - zpaq v7.11 man page source
+#   zpaq.pod - zpaq v7.12 man page source
 #
 #   Copyright
 #
@@ -223,19 +223,6 @@ More digits will be used when necessary. For example:
 will show the dates when the archive was updated as C<01/>, C<02/>,
 etc. but not their contents.
 
-=item encrypt I<password>
-
-With C<extract>, do not extract any files. Instead,
-encrypt I<archive>C<.zpaq> to the first file in I<files> with I<password>.
-If I<password> is C<"">, then decrypt. It is an error if the output file exists
-unless C<-force> is used to overwrite it.
-If I<archive> is multi-part, then the output is a concatenation as
-a single file. If I<archive> has an index, then it will need to be
-re-created from the output archive.
-
-Encryption works with any files, not just archives.
-Encryption is in the format described in C<-key> with a new random salt.
-
 =item -f
 
 =item -force
@@ -396,39 +383,44 @@ are stored in the trailers of each block. There is no transaction block
 to allow rollback. Files are added to the previously dated update.
 Streaming mode with C<-index> is an error.
 
-=back
+=item I<pre>[.I<min1>.I<min2>.I<depth>.I<size>[.I<lookahead>]]
 
 I<pre> selects a pre/post processing step before context modeling as follows.
 
-=over
+    0 = no preprocessing
+    1 = Packed LZ77
+    2 = Byte aligned LZ77
+    3 = BWT (Burrows-Wheeler Transform)
+    4 = E8E9
+    5 = E8E9 + packed LZ77 
+    6 = E8E9 + byte aligned LZ77
+    7 = E8E9 + BWT
 
-=item C<0>
-
-Selects no modification to the data block before context modeling.
-
-=item C<4>
-
-Selects E8E9 transform to improve the compression of x86 executable
+The E8E9 transform (4..7) improves the compression of x86 executable
 files (.exe or .dll). The transform scans backward for 5 byte patterns of
 the form (E8|E9 xx xx xx 00|FF) hex and adds the block offset to the three
 middle bytes. The E8 and E9 opcodes are CALL and JMP, respectively. The
-transform replaces relative addresses with absolute addresses. Decompression
-reverses the transform.
+transform replaces relative addresses with absolute addresses. The transform
+is applied prior to LZ77 or BWT. Decompression reverses the transforms
+in the opposite order.
 
-=item {1|2|5|6}.I<min1>.I<min2>.I<depth>.I<size>[.I<lookahead>]
-
-Selects LZ77 compression.
-LZ77 compresses by searching for matching strings using a hash table
-or suffix array and replacing them with pointers to the previous match.
-Types 1 and 2 select variable bit length coding or byte aligned coding
+LZ77 (1, 2, 5, 6) compresses by searching for matching strings using a
+hash table or suffix array and replacing them with pointers to the previous
+match. Types 1 and 2 select variable bit length coding or byte aligned coding
 respectively.
 Variable bit length encoding compresses better by itself, but byte aligned
 coding allows for further compression using a context model.
 Types 6 and 7 are the same as 1 and 2 respectively, except that the
 block is E8E9 transformed first.
 
+BWT (Burrows Wheeler Transform, 3 or 7), sorts the input block by
+context, which brings bytes with similar contexts together. It does not
+compress by itself, but makes the input suited to compression
+with a fast adapting low order context model.
+
+The remaining arguments apply only to LZ77.
 I<min1> selects the minimum match length, which must be at least 4 for
-types 1 and 5, or 1 for types 2 and 6. I<min2> selects a longer minimum
+packed LZ77 or 1 for byte aligned LZ77. I<min2> selects a longer minimum
 match length to try first, or is 0 to skip this step. The block is encoded
 by testing 2^I<depth> locations indexed by a hash table of
 2^I<size> elements indexed by hashes of the next I<min2> and then I<min1>
@@ -438,26 +430,15 @@ search is repeated I<lookahead> + 1 times to consider coding the next
 
 If I<size> = I<blocksize> + 21, then matches are found using a suffix
 array instead of a hash table, scanning forward and backward 2^I<depth>
-elements to find the longest past match. I<min2> is ignored.
+elements to find the longest past match. I<min2> has no effect.
 A suffix array requires 4.5 x 2^I<blocksize> MiB memory. A hash table requires
 4 x 2^I<size> bytes memory. For example:
 
     -method x6.1.4.0.5.27.1
 
 specifies 64 MiB blocks (6), variable length LZ77 without E8E9 (1), minimum
-match length 4, no secondary search, search depth 2^5 = 32 in each direction
-in the suffix array (27 = 6 + 21), and 1 byte lookahead.
-
-=item C<3>
-
-Specifies BWT (Burrows Wheeler Transform). The input block is sorted by suffix,
-which brings bytes with similar contexts together. It does not compress
-by itself, but makes the input suited to compression
-with a fast adapting low order context model.
-
-=item C<7>
-
-Specifies E8E9 followed by BWT.
+match length 4, no secondary search (0), search depth 2^5 = 32 in each
+direction in the suffix array (27 = 6 + 21), and 1 byte lookahead.
 
 =back
 
@@ -481,7 +462,7 @@ where count is bounded by I<maxcount> x 4, and I<maxcount> is in 1..255.
 
 If I<maxcount> is 0, then specify an ICM. An ICM maps a context to
 a state representing two bit counts and the most recent bit. That state
-is mapped to a prediction and updated at a slow rate. An ICM adapts faster
+is mapped to a prediction and updated at a fixed rate. An ICM adapts faster
 to changing statistics. A CM with a high count compresses stationary
 data better. The default is 0 (ICM).
 
@@ -601,10 +582,14 @@ same as C<-not>. The default is C<*> which matches everything.
 If a file matches an argument to both C<-only> and C<-not>, then
 C<-not> takes precedence.
 
-=item -repack I<new_archive>
+=item -repack I<new_archive> [I<new_password>]
 
 With C<extract>, store the extracted files in I<new_archive> instead
-of writing them individually to disk. It is an error if I<new_archive>
+of writing them individually to disk. If I<new_password> is specified,
+then the output is encrypted with this password. Otherwise the
+output is not encrypted, even if the input is.
+
+It is an error if I<new_archive>
 exists unless C<-force> is used to allow it to be overwritten.
 I<new_archive> does not automatically get a C<.zpaq> extension.
 
@@ -618,8 +603,10 @@ update of the input archive. Using C<add -until> with a date between these
 two dates will result in the date being adjust to 1 second after the
 last update.
 
-If the input is encrypted, then the output is encrypted with the
-same password but a new salt and keystream.
+With C<-all>, the input archive is simply copied without modification
+except to decrypt and encrypt. Thus, the input may be any file, not
+just an archive. I<files> and the options C<-to>, C<-not>, C<-only>,
+C<-until>, C<-noattributes>, and C<-method> are not valid with C<-repack -all>.
 
 =item -sI<N>
 
