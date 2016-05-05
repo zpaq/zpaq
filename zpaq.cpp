@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.12"
+#define ZPAQ_VERSION "7.13"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -2977,6 +2977,14 @@ ThreadReturn decompressThread(void* arg) {
                 printerr(filename.c_str());
                 release(job.mutex);
               }
+#ifndef unix
+              else if ((p->second.attr&0x200ff)==0x20000+'w') {  // sparse?
+                DWORD br=0;
+                if (!DeviceIoControl(job.outf, FSCTL_SET_SPARSE,
+                    NULL, 0, NULL, 0, &br, NULL))  // set sparse attribute
+                  printerr(filename.c_str());
+              }
+#endif
             }
           }
           else if (!job.jd.dotest)

@@ -1,4 +1,4 @@
-zpaq712g.zip, Apr. 26, 2016. Added zpaq-gcc481.exe on Apr. 29, 2016.
+zpaq713.zip, May 4, 2016.
 
 zpaq is a journaling archiver optimized for user-level incremental
 backup of directory trees in Windows and *nix. It supports AES-256
@@ -13,10 +13,9 @@ versions of the program. Contents:
 
 File            Ver.   Description
 -----------     ----   -----------
-zpaq.exe        7.12   Archiver, 32 bit Windows XP or later.
-zpaq64.exe      7.12   Archiver, 64 bit Windows XP or later.
-zpaq-gcc481.exe 7.12   32 bit, for older processors not supporting SSSE3.
-zpaq.cpp        7.12   zpaq source code.
+zpaq.exe        7.13   Archiver, 32 bit Windows XP or later.
+zpaq64.exe      7.13   Archiver, 64 bit Windows XP or later.
+zpaq.cpp        7.13   zpaq source code.
 zpaq.pod        7.12   zpaq man page in pod2man format.
 libzpaq.h       7.12   libzpaq API documentation and header.
 libzpaq.cpp     7.11   libzpaq API source code.
@@ -51,12 +50,12 @@ or compile like this:
 To compile for non x86 or x86-64 hardware use option -DNOJIT
 Some compilers complain about "-march=native" option. If so, take it out.
 
-zpaq for Windows was compiled with MinGW-w64 g++ 6.0.0-20160412 (for zpaq.exe)
-and g++ 4.8.1 (for zpaq64.exe and zpaq-gcc481.exe) as follows:
+zpaq for Windows was compiled with MinGW-w64 g++ 4.8.1 (-m64) and
+g++ 5.3 from http://files.1f0.de/mingw/mingw-w64-gcc-5.3-stable-r18.7z (-m32)
+as follows:
 
   g++ -O3 -s -m64 -msse2 -static zpaq.cpp libzpaq.cpp -o zpaq64
   g++ -O3 -s -m32 -msse2 -static zpaq.cpp libzpaq.cpp -o zpaq
-  g++ -O3 -s -m32 -msse2 -static zpaq.cpp libzpaq.cpp -o zpaq-gcc481
 
 To compile using Visual Studio:
 (tested with ver. 10.0 (2010), cl version 16.00.30319.01 for 80x86)
@@ -83,5 +82,6 @@ General options:
 /EHsc        = enable C++ exception handling (VC++).
 -s           = strip debugging symbols. (Some compilers ignore this).
 -m32 or -m64 = select a 32 or 64 bit executable.
+-msse2       = assume x86 SSE2 support (minimum level without -DNOJIT).
 -static      = use this if you plan to run the program on a different
                machine than you compiled it on. Makes the executable bigger.
