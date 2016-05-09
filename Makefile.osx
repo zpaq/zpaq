@@ -1,0 +1,52 @@
+CXX=g++
+CPPFLAGS+=-Dunix
+# CPPFLAGS+=NOJIT
+CXXFLAGS=-O3 -march=native
+PREFIX=/usr/local
+LIBDIR=$(PREFIX)/lib
+INCLUDEDIR=$(PREFIX)/include
+BINDIR=$(PREFIX)/bin
+MANDIR=$(PREFIX)/share/man
+SONAME=libzpaq.0.1.dylib
+
+all: $(SONAME) zpaq zpaq.1
+
+libzpaq.o: libzpaq.cpp libzpaq.h
+	$(CXX) -fPIC -DPIC $(CPPFLAGS) $(CXXFLAGS) -o $@ -c libzpaq.cpp
+
+$(SONAME): libzpaq.o zpaq.o
+	$(CXX) $(LDFLAGS) -shared -Wl -dynamiclib libzpaq.o zpaq.o -o $(SONAME)
+
+libzpaq.dylib: $(SONAME)
+	rm -f libzpaq.dylib
+	ln -s $(SONAME) libzpaq.dylib
+
+zpaq.o: zpaq.cpp libzpaq.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c zpaq.cpp -pthread
+
+zpaq: zpaq.o libzpaq.o
+	$(CXX) $(LDFLAGS) -o $@ zpaq.o libzpaq.o -pthread
+
+zpaq.1: zpaq.pod
+	pod2man $< >$@
+
+install: libzpaq.dylib libzpaq.h zpaq zpaq.1 libzpaq.dylib
+	install -m 0755 -d $(DESTDIR)$(LIBDIR)
+	install -m 0755  $(SONAME) $(DESTDIR)$(LIBDIR)
+	rm -f $(DESTDIR)$(LIBDIR)/libzpaq.dylib
+	ln -s $(SONAME) $(DESTDIR)$(LIBDIR)/libzpaq.dylib
+	install -m 0755 -d $(DESTDIR)$(INCLUDEDIR)
+	install -m 0644  libzpaq.h $(DESTDIR)$(INCLUDEDIR)
+	install -m 0755 -d $(DESTDIR)$(BINDIR)
+	install -m 0755  zpaq $(DESTDIR)$(BINDIR)
+	install -m 0755 -d $(DESTDIR)$(MANDIR)/man1
+	install -m 0644  zpaq.1 $(DESTDIR)$(MANDIR)/man1
+
+clean:
+	rm -f *.o *.dylib zpaq *.1 archive.zpaq zpaq.new
+
+check: zpaq $(SONAME)
+	./zpaq add archive.zpaq zpaq
+	./zpaq extract archive.zpaq zpaq -to zpaq.new
+	cmp zpaq zpaq.new
+	rm archive.zpaq zpaq.new
