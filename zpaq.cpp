@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.13"
+#define ZPAQ_VERSION "7.14"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -739,7 +739,7 @@ InputArchive::InputArchive(const char* filename, const char* password):
 class OutputArchive: public ArchiveBase, public libzpaq::Writer {
   int64_t off;    // preceding multi-part bytes
   unsigned ptr;   // write pointer in buf: 0 <= ptr <= BUFSIZE
-  enum {BUFSIZE=1<<12};
+  enum {BUFSIZE=1<<16};
   char buf[BUFSIZE];  // I/O buffer
 public:
 
