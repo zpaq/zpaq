@@ -1,4 +1,4 @@
-/* libzpaq.cpp - LIBZPAQ Version 7.14 implementation - July 18, 2016.
+/* libzpaq.cpp - LIBZPAQ Version 7.15 implementation - Aug. 17, 2016.
 
   libdivsufsort.c for divsufsort 2.00, included within, is
   (C) 2003-2008 Yuta Mori, all rights reserved.
@@ -3658,7 +3658,7 @@ int ZPAQL::assemble() {
               else put3a(0x031485, &h[0]);           // add edx, [h+eax*4]
             }
             else if (sss<7) put2(0x01c2+8*regcode[sss]);// add edx, sss
-            else if (arg>128) put2a(0x81c2, arg);    // add edx, n
+            else if (arg>=128) put2a(0x81c2, arg);   // add edx, n
             else put3(0x83c200+arg);                 // add edx, byte n
             break;
           case 17:  // a-=

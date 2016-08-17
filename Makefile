@@ -22,9 +22,9 @@ zpaq.1: zpaq.pod
 
 install: zpaq zpaq.1
 	install -m 0755 -d $(DESTDIR)$(BINDIR)
-	install -m 0755 -t $(DESTDIR)$(BINDIR) zpaq
+	install -m 0755 zpaq $(DESTDIR)$(BINDIR)
 	install -m 0755 -d $(DESTDIR)$(MANDIR)/man1
-	install -m 0644 -t $(DESTDIR)$(MANDIR)/man1 zpaq.1
+	install -m 0644 zpaq.1 $(DESTDIR)$(MANDIR)/man1
 
 clean:
 	rm -f zpaq.o libzpaq.o zpaq zpaq.1 archive.zpaq zpaq.new
