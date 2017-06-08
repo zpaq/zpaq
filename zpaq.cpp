@@ -1764,12 +1764,19 @@ void Jidac::scandir(string filename) {
     const int64_t eattr='w'+(int64_t(ffd.dwFileAttributes)<<8);
 
     // Ignore links, the names "." and ".." or any unselected file
-    t=wtou(ffd.cFileName);
-    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
-        || t=="." || t=="..") edate=0;  // don't add
-    string fn=path(filename)+t;
-
-    // Save directory names with a trailing / and scan their contents
+    t = wtou(ffd.cFileName);
+    if ((ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+         && (ffd.dwReserved0 & IO_REPARSE_TAG_SYMLINK)
+        // The SIS or DEDUP flag points to a MS deduplication feature of
+        // certain file storage products. It is not a normal symlink
+        // that should be ignored.
+        && (!(ffd.dwReserved0 & IO_REPARSE_TAG_SIS))
+        && (!(ffd.dwReserved0 & IO_REPARSE_TAG_DEDUP))
+    || t == "." || t == "..") edate = 0;  // don't add
+    
+	string fn = path(filename) + t;
+		
+	// Save directory names with a trailing / and scan their contents
     // Otherwise, save plain files
     if (edate) {
       if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) fn+="/";
