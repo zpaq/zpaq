@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.15"
+#define ZPAQ_VERSION "7.16T"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -70,6 +70,7 @@ Possible options:
 #include <algorithm>
 #include <stdexcept>
 #include <fcntl.h>
+#include <limits>
 
 #ifndef DEBUG
 #define NDEBUG 1
@@ -1014,6 +1015,10 @@ class CompressJob;
 // Do everything
 class Jidac {
 public:
+  bool unfinished_multipart_add=false;
+#undef max
+  int64_t max_part_size = std::numeric_limits<int64_t>::max();
+
   int doCommand(int argc, const char** argv);
   friend ThreadReturn decompressThread(void* arg);
   friend ThreadReturn testThread(void* arg);
@@ -1218,7 +1223,11 @@ int Jidac::doCommand(int argc, const char** argv) {
     }
     else if (opt=="-force" || opt=="-f") force=true;
     else if (opt=="-fragment" && i<argc-1) fragment=atoi(argv[++i]);
-    else if (opt=="-index" && i<argc-1) index=argv[++i];
+	else if (opt == "-partsize" && i < argc - 1) {
+		int MB = atoi(argv[++i]);
+		max_part_size = MB * 1024 * 950; // given in MB. Reduce by ~5% for bookkeeping structs
+	}
+	else if (opt == "-index" && i < argc - 1) index = argv[++i];
     else if (opt=="-key" && i<argc-1) {
       libzpaq::SHA256 sha256;
       for (const char* p=argv[++i]; *p; ++p) sha256.put(*p);
@@ -1768,7 +1777,7 @@ void Jidac::scandir(string filename) {
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
         || t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
-
+    
     // Save directory names with a trailing / and scan their contents
     // Otherwise, save plain files
     if (edate) {
@@ -2244,6 +2253,13 @@ int Jidac::add() {
       vf.push_back(p);
     }
   }
+
+  // Avoid creating useless empty part files. And avoid divide by zero (VC2015) in case of empty file list
+  if(vf.size()==0) {
+	  printf( "No changed files found. Nothing to do.\n");
+	  return 0;
+  }
+
   std::sort(vf.begin(), vf.end(), compareFilename);
 
   // Test for reliable access to archive
@@ -2369,16 +2385,26 @@ int Jidac::add() {
       assert(vf[fi]->second.ptr.size()==0);
       DTMap::iterator p=vf[fi];
 
+	  // Enforce a maximum per archive part size (only for multipart)
+	  // Extra check to speed up. The main intra file check is done in the fragment loop below
+	  if (dedupesize > max_part_size) {
+		  p->second.date = 0;
+		  total_size -= p->second.size;
+		  unfinished_multipart_add=true;
+		  continue;
+	  }
+
       // Open input file
       bufptr=buflen=0;
       in=fopen(p->first.c_str(), RB);
-      if (in==FPNULL) {  // skip if not found
+      if (in==FPNULL) {  // skip if not found  
         p->second.date=0;
         total_size-=p->second.size;
         printerr(p->first.c_str());
         ++errors;
         continue;
       }
+
       p->second.data=1;  // add
     }
 
@@ -2535,17 +2561,31 @@ int Jidac::add() {
 
       // Update HT and ptr list
       if (fi<vf.size()) {
-        if (htptr==0) {
-          htptr=ht.size();
-          ht.push_back(HT(sha1result, sz));
-          htinv.update();
-          fsize+=sz;
-        }
+
+		  if (htptr==0) {
+			  htptr=ht.size();
+			  ht.push_back(HT(sha1result, sz));
+			  htinv.update();
+			  fsize+=sz;
+		}
         vf[fi]->second.ptr.push_back(htptr);
+
+	    // Max archive part size (only for multipart)
+		if (dedupesize + fsize > max_part_size) {
+			vf[fi]->second.date = 0;
+			total_size -= vf[fi]->second.size;
+			vf[fi]->second.size = fsize; // todo verify potential sideeffects
+			unfinished_multipart_add = true;
+		}
+
       }
       if (c==EOF) break;
+
+	  if (dedupesize + fsize > max_part_size) break;
+
     }  // end for each fragment fj
-    if (fi<vf.size()) {
+    
+	if (fi<vf.size()) {
       dedupesize+=fsize;
       DTMap::iterator p=vf[fi];
       print_progress(total_size, total_done, summary);
@@ -2567,6 +2607,7 @@ int Jidac::add() {
       fclose(in);
       in=FPNULL;
     }
+
   }  // end for each file fi
   assert(sb.size()==0);
 
@@ -3721,8 +3762,12 @@ int main() {
   global_start=mtime();  // get start time
   int errorcode=0;
   try {
-    Jidac jidac;
-    errorcode=jidac.doCommand(argc, argv);
+	  while (true) {
+		  Jidac jidac;
+		  errorcode = jidac.doCommand(argc, argv);
+		  if(errorcode) break;
+		  if(!jidac.unfinished_multipart_add) break;
+	  }
   }
   catch (std::exception& e) {
     fflush(stdout);
