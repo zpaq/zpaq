@@ -1,6 +1,6 @@
 // zpaq.cpp - Journaling incremental deduplicating archiver
 
-#define ZPAQ_VERSION "7.16T"
+#define ZPAQ_VERSION "7.16A"
 /*
   This software is provided as-is, with no warranty.
   I, Matt Mahoney, release this software into
@@ -1159,6 +1159,7 @@ string Jidac::rename(string name) {
     const int n=name.size();
     for (unsigned i=0; i<files.size() && i<tofiles.size(); ++i) {
       const int fn=files[i].size();
+	  // TODO case sensitiv windows!!
       if (fn<=n && files[i]==name.substr(0, fn))
         return tofiles[i]+name.substr(fn);
     }
@@ -3765,8 +3766,9 @@ int main() {
 	  while (true) {
 		  Jidac jidac;
 		  errorcode = jidac.doCommand(argc, argv);
-		  if(errorcode) break;
-		  if(!jidac.unfinished_multipart_add) break;
+
+		  if(!jidac.unfinished_multipart_add) 
+			  break;
 	  }
   }
   catch (std::exception& e) {
