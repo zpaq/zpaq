@@ -27,6 +27,7 @@ See libzpaq.h for additional documentation.
 #include <string>
 #include <vector>
 #include <stdio.h>
+#include <iostream>
 
 #ifdef unix
 #ifndef NOJIT
@@ -56,6 +57,13 @@ void Writer::write(const char* buf, int n) {
   for (int i=0; i<n; ++i)
     put(U8(buf[i]));
 }
+
+  /*
+void error(const char* msg) //Uncomment this block if getting error of undefined reference to "error"
+{
+    std::clog<<"libzpaq error: " << msg << std::endl;
+}
+*/
 
 ///////////////////////// allocx //////////////////////
 
