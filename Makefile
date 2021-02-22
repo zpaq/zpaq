@@ -1,6 +1,6 @@
 CXX=g++
 CPPFLAGS+=-Dunix
-# CPPFLAGS+=NOJIT
+# CPPFLAGS+=-DNOJIT
 CXXFLAGS=-O3 -march=native
 PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
