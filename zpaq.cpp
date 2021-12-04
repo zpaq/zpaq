@@ -1701,26 +1701,27 @@ string path(const string& fn) {
 wchar_t* lastUNCpath = NULL;
 wchar_t* cwd = NULL;    // last Current Working Directory (constant while application is running)
 int lcwd=0;     // length cache
-bool canUseUNC = false;
+bool cwdInit = false;
 
 // In Windows, when dealing with deep folder structures and/or long file names, MAX_PATH gets
 // too small to contain them. In these cases UNC paths are used. This function checks if a
 // relative path can be turned into absolute and then into UNC
 wchar_t* Get_UNC_IfPossible(const char* s) {
-    if (!cwd) {
+    if (!cwdInit && !cwd) {
+        cwdInit = true;
         cwd = _wgetcwd(NULL, 1);
         if (cwd) {
             lcwd = lstrlenW(cwd);
-            canUseUNC = (lcwd >= 2) && (cwd[1] == ':');
-        } else
-            canUseUNC = false;
+            if ((lcwd < 2) || (cwd[1] != ':'))
+                cwd = NULL;
+        }
     }
     std::wstring sfilename2 = utow(s);
     if (lastUNCpath) {
         free(lastUNCpath);
         lastUNCpath = NULL;
     }
-    if (!cwd || !canUseUNC) {
+    if (!cwd) {
         lastUNCpath = (wchar_t*)malloc((lstrlen(sfilename2.c_str()) + 1) * sizeof(wchar_t));
         if (!lastUNCpath) throw std::bad_alloc();
         lstrcpy(lastUNCpath, sfilename2.c_str());
