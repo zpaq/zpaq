@@ -1696,6 +1696,44 @@ string path(const string& fn) {
   return fn.substr(0, n);
 }
 
+
+// Global for performance sake. TODO: Move to static class or similar
+wchar_t* lastUNCpath = NULL;
+wchar_t* cwd = NULL;    // last Current Working Directory (constant while application is running)
+int lcwd=0;     // length cache
+bool cwdInit = false;
+
+// In Windows, when dealing with deep folder structures and/or long file names, MAX_PATH gets
+// too small to contain them. In these cases UNC paths are used. This function checks if a
+// relative path can be turned into absolute and then into UNC
+wchar_t* Get_UNC_IfPossible(const char* s) {
+    if (!cwdInit) {
+        cwdInit = true;
+        cwd = _wgetcwd(NULL, 1);
+        if (cwd) {
+            lcwd = lstrlenW(cwd);
+            if ((lcwd < 2) || (cwd[1] != ':'))
+                cwd = NULL;
+        }
+    }
+    std::wstring sfilename2 = utow(s);
+    if (lastUNCpath) {
+        free(lastUNCpath);
+        lastUNCpath = NULL;
+    }
+    if (!cwd) {
+        lastUNCpath = (wchar_t*)malloc((lstrlen(sfilename2.c_str()) + 1) * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        lstrcpy(lastUNCpath, sfilename2.c_str());
+    }
+    else {
+        lastUNCpath = (wchar_t*)malloc((4 + lcwd + 1 + lstrlen(sfilename2.c_str()) + 1) * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        wsprintf(lastUNCpath, L"\\\\?\\%s\\%s", cwd, sfilename2.c_str());
+        }
+    return lastUNCpath;
+}
+
 // Insert external filename (UTF-8 with "/") into dt if selected
 // by files, onlyfiles, and notfiles. If filename
 // is a directory then also insert its contents.
@@ -1747,7 +1785,7 @@ void Jidac::scandir(string filename) {
   WIN32_FIND_DATA ffd;
   string t=filename;
   if (t.size()>0 && t[t.size()-1]=='/') t+="*";
-  HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
+  HANDLE h=FindFirstFile(Get_UNC_IfPossible(t.c_str()), &ffd);
   if (h==INVALID_HANDLE_VALUE
       && GetLastError()!=ERROR_FILE_NOT_FOUND
       && GetLastError()!=ERROR_PATH_NOT_FOUND)
@@ -2371,7 +2409,7 @@ int Jidac::add() {
 
       // Open input file
       bufptr=buflen=0;
-      in=fopen(p->first.c_str(), RB);
+      in=fopen(wtou(Get_UNC_IfPossible(p->first.c_str())).c_str(), RB);
       if (in==FPNULL) {  // skip if not found
         p->second.date=0;
         total_size-=p->second.size;
