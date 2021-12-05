@@ -1696,6 +1696,71 @@ string path(const string& fn) {
   return fn.substr(0, n);
 }
 
+
+// Global for performance sake. TODO: Move to static class or similar:
+wchar_t* lastUNCpath = NULL;
+std::wstring cwd;    // last Current Working Directory (constant in application scope)
+bool cwdInit = false;
+
+// Lazy testing whether a local path / network path are absolute ("X:\" or "\\server\share")
+bool PathIsAbsolute(const wchar_t* path) {
+    return ((lstrlenW(path) >= 2) &&
+        ((path[1] == ':') ||  // local path
+        ((path[0] == '\\') && (path[1] == '\\'))  // network path
+        ));
+}
+
+std::wstring ConvertToUNC(const std::wstring path, bool &isAbsolute) {
+    bool isUNC;
+    std::wstring uncPrefix, sfilename2 = path;
+    isUNC = sfilename2.substr(0, 2).compare(L"\\\\?\\") == 0;
+    if (!isUNC) {
+        bool isNetwork = sfilename2.length() > 2 && sfilename2.substr(0, 2).compare(L"\\\\") == 0;
+        isAbsolute = isNetwork || PathIsAbsolute(sfilename2.c_str());
+        uncPrefix = isNetwork ? L"\\\\?\\UNC" : isAbsolute ? L"\\\\?\\" : L"";
+        if (isNetwork)
+            sfilename2 = sfilename2.substr(1, sfilename2.length() - 1);
+    }
+    if (isUNC || uncPrefix.length()==0)
+        return sfilename2;
+    return uncPrefix + sfilename2;
+}
+
+// In Windows, when dealing with deep folder structures and/or long file names, MAX_PATH gets
+// too small to contain them. In these cases UNC paths are used. This function checks if a
+// relative path can be turned into absolute and then into UNC
+wchar_t* Get_UNC_IfPossible(const char* path) {
+    if (!cwdInit) {
+        cwdInit = true;
+        wchar_t *_cwd = _wgetcwd(NULL, 1);
+        if (_cwd) {
+            std::wstring s = _cwd;
+            bool isAbsolute;
+            cwd = ConvertToUNC(s, isAbsolute);
+        }
+    }
+
+    bool pathIsAbsolute;
+    std::wstring sfilename2 = ConvertToUNC(utow(path), pathIsAbsolute);
+  
+    if (lastUNCpath) {
+        free(lastUNCpath);
+        lastUNCpath = NULL;
+    }
+
+    if (pathIsAbsolute || cwd.empty()) { // file is ready, or nothing to do but returning as is:
+        lastUNCpath = (wchar_t*)malloc((sfilename2.length() + 1) * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        lstrcpy(lastUNCpath, sfilename2.c_str());
+    }
+    else {  // we have a valid cwd, but file is relative to it. We combine them:
+        lastUNCpath = (wchar_t*)malloc((4 + cwd.length() + 1 + sfilename2.length() + 1) * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        wsprintf(lastUNCpath, L"%s\\%s", cwd.c_str(), sfilename2.c_str());
+    }
+    return lastUNCpath;
+}
+
 // Insert external filename (UTF-8 with "/") into dt if selected
 // by files, onlyfiles, and notfiles. If filename
 // is a directory then also insert its contents.
@@ -1747,7 +1812,7 @@ void Jidac::scandir(string filename) {
   WIN32_FIND_DATA ffd;
   string t=filename;
   if (t.size()>0 && t[t.size()-1]=='/') t+="*";
-  HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
+  HANDLE h=FindFirstFile(Get_UNC_IfPossible(t.c_str()), &ffd);
   if (h==INVALID_HANDLE_VALUE
       && GetLastError()!=ERROR_FILE_NOT_FOUND
       && GetLastError()!=ERROR_PATH_NOT_FOUND)
@@ -2371,7 +2436,7 @@ int Jidac::add() {
 
       // Open input file
       bufptr=buflen=0;
-      in=fopen(p->first.c_str(), RB);
+      in=fopen(wtou(Get_UNC_IfPossible(p->first.c_str())).c_str(), RB);
       if (in==FPNULL) {  // skip if not found
         p->second.date=0;
         total_size-=p->second.size;
