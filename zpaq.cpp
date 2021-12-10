@@ -1718,12 +1718,20 @@ std::wstring ConvertToUNC(const std::wstring path, bool &isAbsolute) {
         bool isNetwork = sfilename2.length() > 2 && sfilename2.substr(0, 2).compare(L"\\\\") == 0;
         isAbsolute = isNetwork || PathIsAbsolute(sfilename2.c_str());
         uncPrefix = isNetwork ? L"\\\\?\\UNC" : isAbsolute ? L"\\\\?\\" : L"";
+        isUNC = uncPrefix.length() > 0;
         if (isNetwork)
             sfilename2 = sfilename2.substr(1, sfilename2.length() - 1);
+        if (isUNC)
+            sfilename2 = uncPrefix + sfilename2;
     }
-    if (isUNC || uncPrefix.length()==0)
-        return sfilename2;
-    return uncPrefix + sfilename2;
+    if (isUNC) { // UNC paths don't accept "/" instead of "\\"
+        while (true) {
+            size_t p = sfilename2.find(L"/");
+            if (p == string::npos) break;
+            sfilename2.replace(p, 2, L"\\");
+        }
+    }
+    return sfilename2;
 }
 
 // In Windows, when dealing with deep folder structures and/or long file names, MAX_PATH gets
@@ -1737,6 +1745,9 @@ wchar_t* Get_UNC_IfPossible(const char* path) {
             std::wstring s = _cwd;
             bool isAbsolute;
             cwd = ConvertToUNC(s, isAbsolute);
+            int l;
+            if ((l = cwd.length())>0 && (cwd.substr(l - 1, 1).compare(L"\\")!=0))
+                cwd += L"\\";
         }
     }
 
@@ -1754,9 +1765,10 @@ wchar_t* Get_UNC_IfPossible(const char* path) {
         lstrcpy(lastUNCpath, sfilename2.c_str());
     }
     else {  // we have a valid cwd, but file is relative to it. We combine them:
-        lastUNCpath = (wchar_t*)malloc((4 + cwd.length() + 1 + sfilename2.length() + 1) * sizeof(wchar_t));
+        int l = (cwd.length() + sfilename2.length() + 1);
+        lastUNCpath = (wchar_t*)malloc(l * sizeof(wchar_t));
         if (!lastUNCpath) throw std::bad_alloc();
-        wsprintf(lastUNCpath, L"%s\\%s", cwd.c_str(), sfilename2.c_str());
+        swprintf(lastUNCpath, l, L"%s%s", cwd.c_str(), sfilename2.c_str());
     }
     return lastUNCpath;
 }
@@ -1812,11 +1824,12 @@ void Jidac::scandir(string filename) {
   WIN32_FIND_DATA ffd;
   string t=filename;
   if (t.size()>0 && t[t.size()-1]=='/') t+="*";
-  HANDLE h=FindFirstFile(Get_UNC_IfPossible(t.c_str()), &ffd);
+  wchar_t* tUnc = Get_UNC_IfPossible(t.c_str());
+  HANDLE h=FindFirstFile(tUnc, &ffd);
   if (h==INVALID_HANDLE_VALUE
       && GetLastError()!=ERROR_FILE_NOT_FOUND
       && GetLastError()!=ERROR_PATH_NOT_FOUND)
-    printerr(t.c_str());
+    printerr(wtou(tUnc).c_str());
   while (h!=INVALID_HANDLE_VALUE) {
 
     // For each file, get name, date, size, attributes
