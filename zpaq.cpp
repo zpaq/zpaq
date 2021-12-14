@@ -1037,6 +1037,7 @@ private:
   vector<string> onlyfiles; // list of prefixes to include
   const char* repack;       // -repack output file
   char new_password_string[32]; // -repack hashed password
+  bool reparseCopy;         // reparse files will be copied
   const char* new_password; // points to new_password_string or NULL
   int summary;              // summary option if > 0, detailed if -1
   bool dotest;              // -test option
@@ -1096,6 +1097,7 @@ void Jidac::usage() {
 "       =[+-#^?]   List: exclude by comparison result.\n"
 "  -only files...  Include only matches (default: *).\n"
 "  -repack F [X]   Extract to new archive F with key X (default: none).\n"
+"  -reparseCopy    Reparse files will be COPIED (default: they are discarded).\n"
 "  -sN -summary N  List: show top N sorted by size. -1: show frag IDs.\n"
 "                  Add/Extract: if N > 0 show brief progress.\n"
 "  -test           Extract: verify but do not write files.\n"
@@ -1174,6 +1176,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   method="";  // 0..5
   noattributes=false;
   repack=0;
+  reparseCopy = false;
   new_password=0;
   summary=0; // detailed: -1
   dotest=false;  // -test
@@ -1249,6 +1252,8 @@ int Jidac::doCommand(int argc, const char** argv) {
         new_password=new_password_string;
       }
     }
+    else if (opt == "-reparseCopy")
+      reparseCopy = true;
     else if (opt=="-summary" && i<argc-1) summary=atoi(argv[++i]);
     else if (opt[1]=='s') summary=atoi(argv[i]+2);
     else if (opt=="-test") dotest=true;
@@ -1696,6 +1701,83 @@ string path(const string& fn) {
   return fn.substr(0, n);
 }
 
+
+// Global for performance sake. TODO: Move to static class or similar:
+wchar_t* lastUNCpath = NULL;
+std::wstring cwd;    // last Current Working Directory (constant in application scope)
+bool cwdInit = false;
+
+// Lazy testing whether a local path / network path are absolute ("X:\" or "\\server\share")
+bool PathIsAbsolute(const wchar_t* path) {
+    return ((lstrlenW(path) >= 2) &&
+        ((path[1] == ':') ||  // local path
+        ((path[0] == '\\') && (path[1] == '\\'))  // network path
+        ));
+}
+
+std::wstring ConvertToUNC(const std::wstring path, bool &isAbsolute) {
+    bool isUNC;
+    std::wstring uncPrefix, sfilename2 = path;
+    isUNC = sfilename2.substr(0, 2).compare(L"\\\\?\\") == 0;
+    if (!isUNC) {
+        bool isNetwork = sfilename2.length() > 2 && sfilename2.substr(0, 2).compare(L"\\\\") == 0;
+        isAbsolute = isNetwork || PathIsAbsolute(sfilename2.c_str());
+        uncPrefix = isNetwork ? L"\\\\?\\UNC" : isAbsolute ? L"\\\\?\\" : L"";
+        isUNC = uncPrefix.length() > 0;
+        if (isNetwork)
+            sfilename2 = sfilename2.substr(1, sfilename2.length() - 1);
+        if (isUNC)
+            sfilename2 = uncPrefix + sfilename2;
+    }
+    if (isUNC) { // UNC paths don't accept "/" instead of "\\"
+        while (true) {
+            size_t p = sfilename2.find(L"/");
+            if (p == string::npos) break;
+            sfilename2.replace(p, 2, L"\\");
+        }
+    }
+    return sfilename2;
+}
+
+// In Windows, when dealing with deep folder structures and/or long file names, MAX_PATH gets
+// too small to contain them. In these cases UNC paths are used. This function checks if a
+// relative path can be turned into absolute and then into UNC
+wchar_t* Get_UNC_IfPossible(const char* path) {
+    if (!cwdInit) {
+        cwdInit = true;
+        wchar_t *_cwd = _wgetcwd(NULL, 1);
+        if (_cwd) {
+            std::wstring s = _cwd;
+            bool isAbsolute;
+            cwd = ConvertToUNC(s, isAbsolute);
+            int l;
+            if ((l = cwd.length())>0 && (cwd.substr(l - 1, 1).compare(L"\\")!=0))
+                cwd += L"\\";
+        }
+    }
+
+    bool pathIsAbsolute;
+    std::wstring sfilename2 = ConvertToUNC(utow(path), pathIsAbsolute);
+  
+    if (lastUNCpath) {
+        free(lastUNCpath);
+        lastUNCpath = NULL;
+    }
+
+    if (pathIsAbsolute || cwd.empty()) { // file is ready, or nothing to do but returning as is:
+        lastUNCpath = (wchar_t*)malloc((sfilename2.length() + 1) * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        lstrcpy(lastUNCpath, sfilename2.c_str());
+    }
+    else {  // we have a valid cwd, but file is relative to it. We combine them:
+        int l = (cwd.length() + sfilename2.length() + 1);
+        lastUNCpath = (wchar_t*)malloc(l * sizeof(wchar_t));
+        if (!lastUNCpath) throw std::bad_alloc();
+        swprintf(lastUNCpath, l, L"%s%s", cwd.c_str(), sfilename2.c_str());
+    }
+    return lastUNCpath;
+}
+
 // Insert external filename (UTF-8 with "/") into dt if selected
 // by files, onlyfiles, and notfiles. If filename
 // is a directory then also insert its contents.
@@ -1747,11 +1829,12 @@ void Jidac::scandir(string filename) {
   WIN32_FIND_DATA ffd;
   string t=filename;
   if (t.size()>0 && t[t.size()-1]=='/') t+="*";
-  HANDLE h=FindFirstFile(utow(t.c_str()).c_str(), &ffd);
+  wchar_t* tUnc = Get_UNC_IfPossible(t.c_str());
+  HANDLE h=FindFirstFile(tUnc, &ffd);
   if (h==INVALID_HANDLE_VALUE
       && GetLastError()!=ERROR_FILE_NOT_FOUND
       && GetLastError()!=ERROR_PATH_NOT_FOUND)
-    printerr(t.c_str());
+    printerr(wtou(tUnc).c_str());
   while (h!=INVALID_HANDLE_VALUE) {
 
     // For each file, get name, date, size, attributes
@@ -1765,7 +1848,7 @@ void Jidac::scandir(string filename) {
 
     // Ignore links, the names "." and ".." or any unselected file
     t=wtou(ffd.cFileName);
-    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
+    if ((!reparseCopy && (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
         || t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
 
@@ -2371,7 +2454,7 @@ int Jidac::add() {
 
       // Open input file
       bufptr=buflen=0;
-      in=fopen(p->first.c_str(), RB);
+      in=fopen(wtou(Get_UNC_IfPossible(p->first.c_str())).c_str(), RB);
       if (in==FPNULL) {  // skip if not found
         p->second.date=0;
         total_size-=p->second.size;
