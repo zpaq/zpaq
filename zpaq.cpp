@@ -1037,6 +1037,7 @@ private:
   vector<string> onlyfiles; // list of prefixes to include
   const char* repack;       // -repack output file
   char new_password_string[32]; // -repack hashed password
+  bool reparseCopy;         // reparse files will be copied
   const char* new_password; // points to new_password_string or NULL
   int summary;              // summary option if > 0, detailed if -1
   bool dotest;              // -test option
@@ -1096,6 +1097,7 @@ void Jidac::usage() {
 "       =[+-#^?]   List: exclude by comparison result.\n"
 "  -only files...  Include only matches (default: *).\n"
 "  -repack F [X]   Extract to new archive F with key X (default: none).\n"
+"  -reparseCopy    Reparse files will be COPIED (default: they are discarded).\n"
 "  -sN -summary N  List: show top N sorted by size. -1: show frag IDs.\n"
 "                  Add/Extract: if N > 0 show brief progress.\n"
 "  -test           Extract: verify but do not write files.\n"
@@ -1174,6 +1176,7 @@ int Jidac::doCommand(int argc, const char** argv) {
   method="";  // 0..5
   noattributes=false;
   repack=0;
+  reparseCopy = false;
   new_password=0;
   summary=0; // detailed: -1
   dotest=false;  // -test
@@ -1249,6 +1252,8 @@ int Jidac::doCommand(int argc, const char** argv) {
         new_password=new_password_string;
       }
     }
+    else if (opt == "-reparseCopy")
+      reparseCopy = true;
     else if (opt=="-summary" && i<argc-1) summary=atoi(argv[++i]);
     else if (opt[1]=='s') summary=atoi(argv[i]+2);
     else if (opt=="-test") dotest=true;
@@ -1843,7 +1848,7 @@ void Jidac::scandir(string filename) {
 
     // Ignore links, the names "." and ".." or any unselected file
     t=wtou(ffd.cFileName);
-    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT
+    if ((!reparseCopy && (ffd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
         || t=="." || t=="..") edate=0;  // don't add
     string fn=path(filename)+t;
 
