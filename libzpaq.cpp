@@ -32,6 +32,7 @@ See libzpaq.h for additional documentation.
 #include <windows.h>
 #include <wincrypt.h>
 #else
+#define unix
 #ifndef NOJIT
 #include <sys/mman.h>
 #endif
