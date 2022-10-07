@@ -29,13 +29,15 @@ See libzpaq.h for additional documentation.
 #include <stdio.h>
 
 #ifdef _WIN32
-#include <windows.h>
-#include <wincrypt.h>
+  #include <windows.h>
+  #include <wincrypt.h>
 #else
-#define unix
-#ifndef NOJIT
-#include <sys/mman.h>
-#endif
+  #ifndef unix
+    #define unix
+  #endif
+  #ifndef NOJIT
+    #include <sys/mman.h>
+  #endif
 #endif
 
 namespace libzpaq {
