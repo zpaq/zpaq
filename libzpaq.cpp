@@ -28,7 +28,7 @@ See libzpaq.h for additional documentation.
 #include <vector>
 #include <stdio.h>
 
-#ifdef unix
+#ifdef __unix__
 #ifndef NOJIT
 #include <sys/mman.h>
 #endif
