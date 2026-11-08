@@ -370,7 +370,7 @@ time_t unix_time(int64_t date) {
   const int min=date/100%100;
   const int sec=date%100;
   return (day-1+days[month]+(year%4==0 && month>1)+((year-1970)*1461+1)/4)
-    *86400+hour*3600+min*60+sec;
+    *86400LL+hour*3600+min*60+sec;
 }
 
 /////////////////////////////// File //////////////////////////////////
